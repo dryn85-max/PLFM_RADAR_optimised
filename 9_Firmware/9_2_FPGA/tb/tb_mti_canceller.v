@@ -521,6 +521,61 @@ initial begin
     check(12, "T12.2: back-to-back diff exact", all_match);
 
     // ================================================================
+    // T13: Saturation corners, both signs, both channels, exact boundary
+    // Eight (prev, cur) pairs in bins 0..7; Q uses the pair of bin (b+1)%8,
+    // so I and Q exercise different corners at once.  Removing either clamp
+    // (positive or negative), the Q clamp, or an off-by-one at +-32767/-32768
+    // makes one of these fail.
+    // ================================================================
+    do_reset;
+    mti_enable = 1'b1;
+    begin : t13_block
+        reg signed [DATA_W-1:0] t13_prev [0:7];
+        reg signed [DATA_W-1:0] t13_cur  [0:7];
+        reg signed [DATA_W-1:0] t13_exp  [0:7];
+        integer b, bad_i, bad_q;
+        t13_prev[0] = -16'sd32000; t13_cur[0] =  16'sd32000; t13_exp[0] =  16'sd32767; // +64000
+        t13_prev[1] =  16'sd32000; t13_cur[1] = -16'sd32000; t13_exp[1] = -16'sd32768; // -64000
+        t13_prev[2] = -16'sd1;     t13_cur[2] =  16'sd32766; t13_exp[2] =  16'sd32767; // exactly MAX
+        t13_prev[3] = -16'sd1;     t13_cur[3] =  16'sd32767; t13_exp[3] =  16'sd32767; // MAX+1
+        t13_prev[4] =  16'sd1;     t13_cur[4] = -16'sd32767; t13_exp[4] = -16'sd32768; // exactly MIN
+        t13_prev[5] =  16'sd2;     t13_cur[5] = -16'sd32767; t13_exp[5] = -16'sd32768; // MIN-1
+        t13_prev[6] = -16'sd32768; t13_cur[6] =  16'sd32767; t13_exp[6] =  16'sd32767; // +65535
+        t13_prev[7] =  16'sd32767; t13_cur[7] = -16'sd32768; t13_exp[7] = -16'sd32768; // -65535
+        // chirp 1 (history)
+        fork
+            begin
+                for (b = 0; b < NUM_BINS; b = b + 1)
+                    feed_sample(b[5:0], (b < 8) ? t13_prev[b] : 16'sd0,
+                                        (b < 8) ? t13_prev[(b+1)%8] : 16'sd0);
+            end
+            capture_chirp;
+        join
+        // chirp 2
+        fork
+            begin
+                for (b = 0; b < NUM_BINS; b = b + 1)
+                    feed_sample(b[5:0], (b < 8) ? t13_cur[b] : 16'sd0,
+                                        (b < 8) ? t13_cur[(b+1)%8] : 16'sd0);
+            end
+            capture_chirp;
+        join
+        bad_i = 0; bad_q = 0;
+        for (b = 0; b < 8; b = b + 1) begin
+            if (cap_i[b] !== t13_exp[b]) begin
+                bad_i = bad_i + 1;
+                $display("  T13 I bin %0d: got %0d expected %0d", b, cap_i[b], t13_exp[b]);
+            end
+            if (cap_q[b] !== t13_exp[(b+1)%8]) begin
+                bad_q = bad_q + 1;
+                $display("  T13 Q bin %0d: got %0d expected %0d", b, cap_q[b], t13_exp[(b+1)%8]);
+            end
+        end
+        check(13, "T13.1: I sat corners", bad_i == 0);
+        check(13, "T13.2: Q sat corners", bad_q == 0);
+    end
+
+    // ================================================================
     // SUMMARY
     // ================================================================
     $display("");
