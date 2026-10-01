@@ -50,7 +50,8 @@ def ref_segment_spectra():
     scale_long = Q15_PEAK / max(np.abs(S).max() for S in long_specs)
     scale_short = Q15_PEAK / np.abs(short_spec).max()
     out = [np.rint(S * scale_long) for S in long_specs] + [np.rint(short_spec * scale_short)]
-    return [np.clip(S.real, -32768, 32767).astype(int) + 1j * np.clip(S.imag, -32768, 32767).astype(int)
+    return [np.clip(S.real, -32768, 32767).astype(int)
+            + 1j * np.clip(S.imag, -32768, 32767).astype(int)
             for S in out]
 
 
@@ -63,8 +64,9 @@ def main():
     write_hex(os.path.join(root, "ref_spectrum_i.mem"), rom_i, 16)
     write_hex(os.path.join(root, "ref_spectrum_q.mem"), rom_q, 16)
     for s, S in enumerate(specs):
-        print(f"seg {s}: peak |S| = {int(np.abs(S).max())}, nonzero bins = {int(np.sum(np.abs(S) > 0))}")
-    print(f"wrote {N_SEG * N_FFT} entries to ref_spectrum_i.mem / ref_spectrum_q.mem")
+        print(f"seg {s}: peak |S| = {int(np.abs(S).max())}, "  # noqa: T201
+              f"nonzero bins = {int(np.sum(np.abs(S) > 0))}")
+    print(f"wrote {N_SEG * N_FFT} entries to ref_spectrum_i.mem / ref_spectrum_q.mem")  # noqa: T201
 
 
 if __name__ == "__main__":

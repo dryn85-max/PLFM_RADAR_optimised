@@ -167,6 +167,8 @@ reg signed [DATA_W-1:0] expected;
 
 // T12 monitor: latency and value check (expected diff for chirp 1 and 2 = 100, -50)
 reg vin_d1, vin_d2;
+reg dut_t12_active;
+initial dut_t12_active = 0;
 reg lat_ok;
 integer lat_cnt, c, mon_chirp, mon_n;
 always @(posedge clk) begin
@@ -190,8 +192,6 @@ always @(posedge clk) begin
         end
     end
 end
-reg dut_t12_active;
-initial dut_t12_active = 0;
 
 
 initial begin

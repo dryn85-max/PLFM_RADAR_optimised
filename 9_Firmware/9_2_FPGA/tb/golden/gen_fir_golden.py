@@ -12,7 +12,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from radar_params import FIR_COEFFS, write_hex  # noqa: E402
+from radar_params import FIR_COEFFS, write_hex
 
 N = 2048
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,7 +32,8 @@ def main():
     write_hex(os.path.join(HERE, "fir_in.hex"), x, 16)
     write_hex(os.path.join(HERE, "fir_golden.hex"), y, 16)
     sat = int(np.sum((acc >> 17) != y))
-    print(f"wrote {N} samples; {sat} outputs saturated; max|y| = {int(np.max(np.abs(y)))}")
+    print(f"wrote {N} samples; {sat} outputs saturated; "  # noqa: T201
+          f"max|y| = {int(np.max(np.abs(y)))}")
 
 
 if __name__ == "__main__":

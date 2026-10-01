@@ -95,14 +95,15 @@ def main():
     write_hex(os.path.join(HERE, "ddc_adc_in.hex"), adc, 12)
     write_hex(os.path.join(HERE, "ddc_golden_i.hex"), out_i, DDC_OUT_W)
     write_hex(os.path.join(HERE, "ddc_golden_q.hex"), out_q, DDC_OUT_W)
-    print(f"wrote {N_IN} ADC samples, {len(out_i)} baseband samples "
+    print(f"wrote {N_IN} ADC samples, {len(out_i)} baseband samples "  # noqa: T201
           f"(out width {DDC_OUT_W}), peak |I| = {max(abs(v) for v in out_i)}")
     fs = full_scale_adc(N_IN)
     fi, fq = ddc_model(fs)
     write_hex(os.path.join(HERE, "ddc_adc_fs_in.hex"), fs, 12)
     write_hex(os.path.join(HERE, "ddc_fs_golden_i.hex"), fi, DDC_OUT_W)
     write_hex(os.path.join(HERE, "ddc_fs_golden_q.hex"), fq, DDC_OUT_W)
-    print(f"full-scale: peak |I| = {max(abs(v) for v in fi)}, peak |Q| = {max(abs(v) for v in fq)}")
+    print(f"full-scale: peak |I| = {max(abs(v) for v in fi)}, "  # noqa: T201
+          f"peak |Q| = {max(abs(v) for v in fq)}")
 
 
 if __name__ == "__main__":

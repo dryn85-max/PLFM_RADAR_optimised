@@ -1,7 +1,7 @@
 #!/bin/bash
 # ===========================================================================
 # FPGA Regression Test Runner for AERIS-10 Radar
-# Phase 0: Vivado-style lint (catches issues iverilog silently accepts)
+# Phase 0: lint + vendor-neutrality + resource gates (catches issues iverilog silently accepts)
 # Phase 1+: Compile and run all verified iverilog testbenches
 #
 # Usage:  ./run_regression.sh [--quick] [--skip-lint]
@@ -360,10 +360,10 @@ echo "iverilog: $(iverilog -V 2>&1 | head -1)"
 echo ""
 
 # ===========================================================================
-# PHASE 0: LINT (Vivado-class error detection)
+# PHASE 0: LINT, vendor-neutrality and resource gates
 # ===========================================================================
 if [[ "$SKIP_LINT" -eq 0 ]]; then
-    echo "--- PHASE 0: LINT (Vivado-class checks) ---"
+    echo "--- PHASE 0: LINT, vendor-neutrality and resource gates ---"
 
     # Layer A: iverilog -Wall on full production design
     run_lint_iverilog "production" "${PROD_RTL[@]}"
@@ -371,6 +371,41 @@ if [[ "$SKIP_LINT" -eq 0 ]]; then
     # Layer B: custom static regex checks
     ALL_RTL=("${PROD_RTL[@]}")
     run_lint_static "${ALL_RTL[@]}"
+
+    # Layer C: vendor primitives / synthesis attributes must not appear in pipeline files
+    printf "  %-45s " "Vendor primitive / attribute grep gate"
+    VENDOR_HITS=$(grep -nE "DSP48E1|xpm_memory|IBUFDS|IDDR|ODDR|MMCME2|PLLE2|BUFG|BUFIO|ASYNC_REG|USE_DSP|use_dsp|ram_style|rom_style|DONT_TOUCH|dont_touch|max_fanout|keep *=|\(\*[[:space:]]*[A-Za-z]" "${PROD_RTL[@]}" || true)
+    if [[ -n "$VENDOR_HITS" ]]; then
+        echo -e "${RED}FAIL${NC}"
+        echo "$VENDOR_HITS" | sed 's/^/    /'
+        LINT_ERR=$((LINT_ERR + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+
+    # Layer D: the pipeline must also compile WITHOUT -DSIMULATION (synthesizable branches)
+    printf "  %-45s " "iverilog -Wall (production, no SIMULATION)"
+    NOSIM_LOG="/tmp/iverilog_nosim_$$.log"
+    if iverilog -g2001 -Wall -o /dev/null "${PROD_RTL[@]}" 2>"$NOSIM_LOG"; then
+        echo -e "${GREEN}PASS${NC} ($(grep -c . "$NOSIM_LOG" || true) info warnings)"
+    else
+        echo -e "${RED}COMPILE ERROR${NC}"
+        sed 's/^/    /' "$NOSIM_LOG"
+        LINT_ERR=$((LINT_ERR + 1))
+    fi
+    rm -f "$NOSIM_LOG"
+
+    # Layer E: static multiplier / RAM budget (<=55 multipliers 18x18-equivalent, <=1 Mbit)
+    printf "  %-45s " "Resource budget (<=55 mult, <=1 Mbit RAM)"
+    RES_LOG="/tmp/resource_$$.log"
+    if python3 tb/golden/count_multipliers.py "${PROD_RTL[@]}" >"$RES_LOG" 2>&1; then
+        echo -e "${GREEN}PASS${NC} ($(grep 'TOTAL multipliers' "$RES_LOG" | sed 's/.*equivalents: //'); $(grep -o 'TOTAL RAM+ROM bits: [0-9]*' "$RES_LOG"))"
+    else
+        echo -e "${RED}FAIL${NC}"
+        sed 's/^/    /' "$RES_LOG"
+        LINT_ERR=$((LINT_ERR + 1))
+    fi
+    rm -f "$RES_LOG"
 
     echo ""
     if [[ "$LINT_ERR" -gt 0 ]]; then
@@ -406,7 +441,7 @@ run_test "Chirp Contract" \
     tb/tb_chirp_ctr_reg.vvp \
     tb/tb_chirp_contract.v plfm_chirp_controller.v
 
-run_test "Doppler Processor (DSP48)" \
+run_test "Doppler Processor" \
     tb/tb_doppler_reg.vvp \
     tb/tb_doppler_cosim.v doppler_processor.v xfft_16.v fft_engine.v
 

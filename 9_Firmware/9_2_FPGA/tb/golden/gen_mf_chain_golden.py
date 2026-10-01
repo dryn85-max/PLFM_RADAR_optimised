@@ -57,7 +57,8 @@ def main():
 
 def multiseg_vectors():
     """Whole receive window (928 samples = 4 overlap-save segments; chirp delayed
-    by d, so its tail lies in the later segments) for the segmenter test.  Segment s sees chirp samples [224s, 224s+256) in its
+    by d, so its tail lies in the later segments) for the segmenter test.
+    Segment s sees chirp samples [224s, 224s+256) in its
     window and the ROM holds the same window of the chirp, so for d <= 178
     (= 928 - 750, the echo tail stays inside the window) the peak of every
     segment is at bin d.  Checked here with the ideal float

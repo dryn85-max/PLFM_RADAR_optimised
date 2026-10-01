@@ -17,8 +17,8 @@ N_FFT    = 256            # matched_filter_processing_chain N_FFT
 LOG2N    = 8
 OVERLAP  = 32             # matched_filter_multi_segment OVERLAP
 ADVANCE  = N_FFT - OVERLAP
-LONG_CHIRP_SAMPLES  = int(round(T_LONG * FS_BB))        # 750
-SHORT_CHIRP_SAMPLES = int(math.ceil(T_SHORT * FS_BB))   # 13
+LONG_CHIRP_SAMPLES  = round(T_LONG * FS_BB)        # 750
+SHORT_CHIRP_SAMPLES = math.ceil(T_SHORT * FS_BB)   # 13
 LONG_SEGMENTS = 4           # 256 + 224*3 = 928 >= 750 (3 segments cover only 704)
 PHASE_INC = 0x33333333      # nco.v: round(0.2 * 2^32) truncated to 0x33333333
 DDC_OUT_W = 16              # ddc.v OUT_W (16-bit folded FIR output)
@@ -50,7 +50,7 @@ def sext(value, bits):
 
 
 FIR_COEFFS = [sext(c, 18) for c in _FIR_HEX]
-assert FIR_COEFFS == FIR_COEFFS[::-1], "FIR coefficients must be symmetric"
+assert FIR_COEFFS[::-1] == FIR_COEFFS, "FIR coefficients must be symmetric"
 
 
 def write_hex(path, values, width):

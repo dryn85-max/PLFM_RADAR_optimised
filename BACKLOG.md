@@ -42,4 +42,58 @@ Follow-up work that is out of scope for the current plans.
 
 ## RTL track
 
-(Reserved: the RTL track adds its items here.)
+Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-f).
+
+- [ ] **One range-bin set per chirp for the Doppler/MTI path (decision needed).**
+  `range_bin_decimator` now emits 4 x 64 bins per long chirp (one set per
+  matched-filter segment) and `doppler_processor_optimized` /
+  `mti_canceller` count every 64-bin set as one chirp (`doppler_processor.v`
+  lines 264-268). The four sets of one chirp therefore fill four slow-time
+  slots. Options: merge the segments (peak / max-magnitude per bin), keep only
+  the segment that matches the expected delay window, or gate the decimator to
+  one set per chirp. Write a multi-segment test first (a moving target over
+  8 long chirps must produce a Doppler peak at the right bin).
+- [ ] **Partitioned convolution for range beyond 1.5 km.** The matched filter
+  correlates segment `s` only with reference segment `s`, so the detectable
+  delay is < 256 samples (10.24 us, about 1.5 km at 25 MSPS). A longer window
+  needs uniformly-partitioned convolution: each input segment against every
+  reference segment, with the partial products accumulated in the frequency
+  domain (more ROM reads and one more RAM, no more multipliers).
+- [ ] **Expose `mf_overrun` and the ADC `overrange` flag to the host.** Both are
+  sticky flags that exist in the RTL but have no status-word bit (the USB
+  protocol was kept unchanged). Needs an owner decision on the status-word
+  layout, then the same change in the GUI parser, the cross-layer contract
+  test and the STM32 side if relevant.
+- [ ] **Check the matched-filter busy time against the real PRI.** One long
+  chirp occupies the segmenter for about 43 800 clk (0.44 ms at 100 MHz); the
+  CFAR header quotes a 1932 Hz PRF (0.52 ms). Confirm the long-chirp PRI
+  configured by the mode controller leaves margin, otherwise chirp starts are
+  dropped (and `mf_overrun` is set). A pipelined butterfly would halve the time.
+- [ ] **Quartus project, pin assignments and SDC** once the Cyclone board is
+  chosen: top wrapper (ADC data clock as `clk_100m`, PLL for the 120 MHz DAC
+  clock, FT232H clock forwarding), I/O standards, input delays, `.mem`
+  initialisation files in the project. Then compare the real DSP / RAM / Fmax
+  report with the static budget in the README (38 / 46 multipliers, 236 kbit).
+- [ ] **Run the formal proofs.** `sby` was not installed where the port was
+  made, so `formal/*.sby` (`cdc_handshake`, `cdc_single_bit`,
+  `doppler_processor`, `radar_mode_controller`, `range_bin_decimator`) were not
+  re-run; only the stale twiddle-file entry in `fv_doppler_processor.sby` was
+  fixed. Run them and add a CI job (OSS CAD Suite) if they pass.
+- [ ] **Stale Xilinx flows.** Delete or port `constraints/`, `scripts/50t`,
+  `scripts/200t`, `scripts/te0712`, `scripts/te0713` and
+  `radar_system_top_te07*_dev.v` (they reference removed tops/ports); deleting
+  hardware flow files needs the owner's go-ahead.
+- [ ] **Stale comments in untouched RTL.** `cfar_ca.v` header quotes the old
+  resource numbers (8 x 21 multiplier, 1 BRAM) and `range_bin_decimator.v`
+  header still describes 1024 -> 64 bins; `doppler_processor.v:247` has a case
+  without `default` (advisory SYNTH-6 warning in the regression lint).
+- [ ] **Doppler window multiplier sharing.** The three window multiplies in
+  `doppler_processor.v` have identical operands in exclusive branches; the
+  budget assumes the tools share them (2 multipliers). Restructure to one
+  explicit multiplier pair if a synthesis report shows 6.
+- [ ] **FFT scaling.** `fft_engine` has no per-stage scaling; forward outputs
+  saturate when the input exceeds about 1/16 full scale. Consider block-floating
+  or per-stage scaling together with the AGC target.
+- [ ] **Real-data validation of the overlap-save alignment** (reference segment
+  vs signal segment) with the new 12-bit / 100 MSPS front end; all current
+  checks use synthetic chirps.
