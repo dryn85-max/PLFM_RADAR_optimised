@@ -70,7 +70,7 @@ static void test_gap3_iwdg_window(void)
 /* 4. Over-temperature (75.0 C) -> emergency stop, latched. */
 static void test_gap3_overtemp_estops(void)
 {
-    uint8_t raw = 153;                               /* 750 deci-C */
+    uint8_t raw = 154;                               /* 752 deci-C */
     fresh();
     gpio_write(PIN_EN_PA, 1);
     gpio_write(PIN_EN_FPGA, 1);

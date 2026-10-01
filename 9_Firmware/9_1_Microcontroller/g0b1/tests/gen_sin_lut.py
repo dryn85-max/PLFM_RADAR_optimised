@@ -23,7 +23,7 @@ def main():
     out.append("};")
     out.append("")
     out.append("#endif")
-    print("\n".join(out))
+    print("\n".join(out))  # noqa: T201
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@
 #define THERMAL_ADS_ADDR   0x48
 #define THERMAL_ADS_CH     0
 #define THERMAL_VREF_MV    2500
-#define THERMAL_FULL_SCALE 255
+#define THERMAL_FULL_SCALE 256   /* ADS7830 LSB = Vref / 256 (8-bit, ADS7830 DS) */
 
 static uint32_t g_last_ms;
 static int16_t  g_deci_c;

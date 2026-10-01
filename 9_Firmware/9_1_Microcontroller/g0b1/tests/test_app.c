@@ -308,7 +308,7 @@ static void test_pll_lock_loss_in_run(void)
 
 static void test_overtemp_in_run_latches_and_stops_work(void)
 {
-    uint8_t raw = 153;                                  /* 75.0 C */
+    uint8_t raw = 154;                                  /* 75.2 C: first count >= 75.0 */
     healthy();
     app_init();
     mock_time_advance_us(5000u * 1000u);

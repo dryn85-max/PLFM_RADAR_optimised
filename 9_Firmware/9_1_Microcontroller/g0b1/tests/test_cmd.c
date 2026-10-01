@@ -330,14 +330,14 @@ static void test_status_exact(void)
     mock_gpio_set_input(PIN_PLL_LD, 1);
     mock_time_advance_us(5000u * 1000u);
     mock_i2c_set_rx(&raw, 1);
-    thermal_tick();                                   /* 76 -> 37.3 C */
+    thermal_tick();                                   /* 76 -> 37.1 C */
     expect("tx", "OK");
     expect("beam 10 -20", "OK");
     expect("gain 2 45", "OK");
     g_agc.enabled = 1;
     g_agc.base = 25;
     gains[2] = 45;
-    build_status(want, "STATUS lock=1 temp=373 temp_err=0 fault=0 latched=0 mode=tx az=10 el=-20 agc=1 base=25", gains);
+    build_status(want, "STATUS lock=1 temp=371 temp_err=0 fault=0 latched=0 mode=tx az=10 el=-20 agc=1 base=25", gains);
     expect("status", want);
 }
 

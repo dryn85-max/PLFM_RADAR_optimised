@@ -33,8 +33,10 @@ static void queue_raw(uint8_t raw) { mock_i2c_set_rx(&raw, 1); }
 static void test_conversion_table(void)
 {
     static const struct { uint8_t raw; int16_t deci; } T[] = {
-        { 0, 0 }, { 1, 5 }, { 76, 373 }, { 100, 490 }, { 153, 750 }, { 152, 745 },
-        { 254, 1245 }, { 255, 1250 },
+        /* LSB = Vref/256 (ADS7830 DS: 2.5 V / 256 = 9.766 mV): mv = raw*2500/256,
+         * deci = (mv*10+10)/20, all integer. */
+        { 0, 0 }, { 1, 5 }, { 76, 371 }, { 100, 488 }, { 153, 747 }, { 152, 742 },
+        { 154, 752 }, { 254, 1240 }, { 255, 1245 },
     };
     unsigned i;
     for (i = 0; i < sizeof T / sizeof T[0]; i++) {
@@ -79,7 +81,7 @@ static void test_not_before_5s_after_boot(void)
     mock_time_advance_us(1000u);
     thermal_tick();                              /* t = 5000 ms */
     TT_ASSERT_EQ(1, count_kind(MOCK_EV_I2C_WRITE));
-    TT_ASSERT_EQ(373, thermal_last());
+    TT_ASSERT_EQ(371, thermal_last());
     TT_ASSERT_EQ(0, thermal_last_err());
     TT_ASSERT_EQ(0, g_estop);
 }
@@ -120,15 +122,17 @@ static void test_first_tick_late_boot(void)
 static void test_overtemp_raises_latched_fault(void)
 {
     fresh();
-    queue_raw(152);                              /* 74.5 C: below threshold */
+    /* No raw count maps to exactly 750 (raw 153.6): 153 -> 747 is the last value
+     * below the threshold, 154 -> 752 the first at/above it. */
+    queue_raw(153);                              /* 74.7 C: below threshold */
     mock_time_advance_us(5000u * 1000u);
     thermal_tick();
-    TT_ASSERT_EQ(745, thermal_last());
+    TT_ASSERT_EQ(747, thermal_last());
     TT_ASSERT_EQ(0, fault_is_latched());
-    queue_raw(153);                              /* 75.0 C: at threshold */
+    queue_raw(154);                              /* 75.2 C: first count over threshold */
     mock_time_advance_us(5000u * 1000u);
     thermal_tick();
-    TT_ASSERT_EQ(750, thermal_last());
+    TT_ASSERT_EQ(752, thermal_last());
     TT_ASSERT_EQ(1, fault_is_latched());
     TT_ASSERT_EQ(FAULT_OVERTEMP, fault_latched_code());
     TT_ASSERT_EQ(1, g_estop);
@@ -140,12 +144,12 @@ static void test_sensor_error_is_not_a_fault(void)
     queue_raw(76);
     mock_time_advance_us(5000u * 1000u);
     thermal_tick();
-    TT_ASSERT_EQ(373, thermal_last());
+    TT_ASSERT_EQ(371, thermal_last());
     mock_time_advance_us(5000u * 1000u);
     mock_i2c_fail_next(-ETIMEDOUT);
     thermal_tick();
     TT_ASSERT_EQ(-ETIMEDOUT, thermal_last_err());
-    TT_ASSERT_EQ(373, thermal_last());           /* last good value kept */
+    TT_ASSERT_EQ(371, thermal_last());           /* last good value kept */
     TT_ASSERT_EQ(0, fault_is_latched());
     TT_ASSERT_EQ(FAULT_NONE, fault_active());
     TT_ASSERT_EQ(0, g_estop + g_rfoff);
@@ -153,7 +157,7 @@ static void test_sensor_error_is_not_a_fault(void)
     mock_time_advance_us(5000u * 1000u);
     thermal_tick();
     TT_ASSERT_EQ(0, thermal_last_err());
-    TT_ASSERT_EQ(392, thermal_last());           /* 80*2500/255=784 mV -> 392 */
+    TT_ASSERT_EQ(391, thermal_last());           /* 80*2500/256=781 mV -> 391 */
 }
 
 int main(void)

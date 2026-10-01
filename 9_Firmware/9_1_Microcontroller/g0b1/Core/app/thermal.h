@@ -4,7 +4,7 @@
 #define THERMAL_H
 #include <stdint.h>
 
-/* mv = raw*2500/255 (max 637500, fits int32); deci_c = mv*10/20 rounded to
+/* mv = raw*2500/256 (LSB = Vref/256; max 637500, fits int32); deci_c = mv*10/20 rounded to
  * nearest (= (mv+1)/2). *deci_c is untouched on error. Returns 0 or negative
  * errno (-EINVAL for a NULL pointer). */
 int thermal_read_deci_c(int16_t *deci_c);

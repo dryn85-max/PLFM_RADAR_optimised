@@ -21,7 +21,7 @@ def table(el_deg):
 def main(argv):
     angles = [int(a) for a in argv] or [-45, -20, 10, 30, 60]
     for a in angles:
-        print(a, *table(a))
+        print(a, *table(a))  # noqa: T201
 
 
 if __name__ == "__main__":
