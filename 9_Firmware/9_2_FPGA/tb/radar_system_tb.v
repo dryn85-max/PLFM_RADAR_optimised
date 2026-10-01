@@ -537,6 +537,12 @@ always @(posedge clk_100m) begin
     end
 end
 
+// Count of ERROR-level [ASSERT] messages (see ASSERTIONS AND CHECKS),
+// reported as [PASS]/[FAIL] at the end. The chirp-counter WARNING stays
+// informational: it also fires on the first new_chirp_frame, where
+// current_chirp legitimately equals the previous value (0).
+integer assert_fail_count = 0;
+
 // ============================================================================
 // TEST COMPLETION
 // ============================================================================
@@ -556,6 +562,17 @@ initial begin
     $display("DAC samples: %0d", dac_sample_count);
     $display("========================================");
     
+    // Minimal liveness checks so the regression harness has explicit
+    // [PASS]/[FAIL] markers (this TB is otherwise monitoring-only).
+    if (dac_sample_count > 0)
+        $display("[PASS] DAC produced non-idle samples (%0d)", dac_sample_count);
+    else
+        $display("[FAIL] DAC produced no non-idle samples");
+    if (assert_fail_count == 0)
+        $display("[PASS] No ERROR-level procedural assertion fired");
+    else
+        $display("[FAIL] %0d ERROR-level procedural assertion(s) fired", assert_fail_count);
+
     // Verify USB data format
     if (usb_packet_count > 0) begin
         $display("");
@@ -590,6 +607,7 @@ always @(negedge reset_n) begin
     if (system_status != 4'b0000) begin
         $display("[ASSERT @%0t] ERROR: Reset failed to clear status (status=%b)", 
                  $time, system_status);
+        assert_fail_count = assert_fail_count + 1;
     end
 end
 

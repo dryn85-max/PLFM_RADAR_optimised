@@ -264,6 +264,44 @@ run_lint_static() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: classify a testbench's simulation output
+#   evaluate_output <name> <output>
+# Rules (no "it reached \$finish" fallback -- vvp always prints that):
+#   * [PASS...] / [FAIL...] markers are counted at any indentation.
+#   * Any [FAIL...] marker, or a failure summary such as "SOME TESTS FAILED",
+#     "3 TESTS FAILED", "2 TEST(S) FAILED", "1 PASSED, 2 FAILED", fails the test.
+#     (Per-count lines like "FAILED: 0 / 32" are not failure summaries.)
+#   * Otherwise the test passes only if it printed at least one [PASS...]
+#     marker or an explicit "ALL [N] TESTS PASSED" line; anything else is
+#     reported as UNKNOWN and counted as a failure.
+# ---------------------------------------------------------------------------
+evaluate_output() {
+    local name="$1"
+    local output="$2"
+    local test_pass test_fail fail_text success_text
+    test_pass=$(echo "$output" | grep -Ec '^[[:space:]]*\[PASS[^]]*\]' || true)
+    test_fail=$(echo "$output" | grep -Ec '^[[:space:]]*\[FAIL[^]]*\]' || true)
+    fail_text=$(echo "$output" | grep -Ec 'SOME TESTS FAILED|TESTS FAILED|TEST\(S\) FAILED|[1-9][0-9]* FAILED' || true)
+    success_text=$(echo "$output" | grep -Ec 'ALL ([0-9]+ )?TESTS PASSED' || true)
+
+    if [[ "$test_fail" -gt 0 || "$fail_text" -gt 0 ]]; then
+        echo -e "${RED}FAIL${NC} (pass=$test_pass, fail=$test_fail, failure summary lines=$fail_text)"
+        ERRORS="$ERRORS\n  $name: $test_fail [FAIL] marker(s), $fail_text failure summary line(s)"
+        FAIL=$((FAIL + 1))
+    elif [[ "$test_pass" -gt 0 ]]; then
+        echo -e "${GREEN}PASS${NC} ($test_pass checks)"
+        PASS=$((PASS + 1))
+    elif [[ "$success_text" -gt 0 ]]; then
+        echo -e "${GREEN}PASS${NC} (explicit ALL TESTS PASSED)"
+        PASS=$((PASS + 1))
+    else
+        echo -e "${YELLOW}UNKNOWN${NC} (no PASS/FAIL markers, no ALL TESTS PASSED line)"
+        ERRORS="$ERRORS\n  $name: no pass/fail markers in output"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Helper: compile and run a single testbench
 #   run_test <name> <vvp_path> <iverilog_args...>
 # ---------------------------------------------------------------------------
@@ -287,30 +325,7 @@ run_test() {
     local output
     output=$(${TIMEOUT_CMD:+$TIMEOUT_CMD 120} vvp "$vvp" 2>&1) || true
 
-    # Count PASS/FAIL in output (testbenches use explicit [PASS]/[FAIL] markers)
-    local test_pass test_fail
-    test_pass=$(echo "$output" | grep -Ec '^\[PASS([^]]*)\]' || true)
-    test_fail=$(echo "$output" | grep -Ec '^\[FAIL([^]]*)\]' || true)
-
-    if [[ "$test_fail" -gt 0 ]]; then
-        echo -e "${RED}FAIL${NC} (pass=$test_pass, fail=$test_fail)"
-        ERRORS="$ERRORS\n  $name: $test_fail failure(s)"
-        FAIL=$((FAIL + 1))
-    elif [[ "$test_pass" -gt 0 ]]; then
-        echo -e "${GREEN}PASS${NC} ($test_pass checks)"
-        PASS=$((PASS + 1))
-    else
-        # No PASS/FAIL markers — check for clean completion
-        if echo "$output" | grep -qi 'finish\|complete\|done'; then
-            echo -e "${GREEN}PASS${NC} (completed)"
-            PASS=$((PASS + 1))
-        else
-            echo -e "${YELLOW}UNKNOWN${NC} (no PASS/FAIL markers)"
-            ERRORS="$ERRORS\n  $name: no pass/fail markers in output"
-            FAIL=$((FAIL + 1))
-        fi
-    fi
-
+    evaluate_output "$name" "$output"
     rm -f "$vvp"
 }
 
@@ -332,21 +347,7 @@ run_test_nosim() {
     fi
     local output
     output=$(${TIMEOUT_CMD:+$TIMEOUT_CMD 300} vvp "$vvp" 2>&1) || true
-    local test_pass test_fail
-    test_pass=$(echo "$output" | grep -Ec '^\[PASS([^]]*)\]' || true)
-    test_fail=$(echo "$output" | grep -Ec '^\[FAIL([^]]*)\]' || true)
-    if [[ "$test_fail" -gt 0 ]]; then
-        echo -e "${RED}FAIL${NC} (pass=$test_pass, fail=$test_fail)"
-        ERRORS="$ERRORS\n  $name: $test_fail failure(s)"
-        FAIL=$((FAIL + 1))
-    elif [[ "$test_pass" -gt 0 ]]; then
-        echo -e "${GREEN}PASS${NC} ($test_pass checks)"
-        PASS=$((PASS + 1))
-    else
-        echo -e "${YELLOW}UNKNOWN${NC} (no PASS/FAIL markers)"
-        ERRORS="$ERRORS\n  $name: no pass/fail markers in output"
-        FAIL=$((FAIL + 1))
-    fi
+    evaluate_output "$name" "$output"
     rm -f "$vvp"
 }
 
