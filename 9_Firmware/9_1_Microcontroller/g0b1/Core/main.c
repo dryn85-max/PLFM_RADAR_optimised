@@ -1,7 +1,17 @@
-/* Temporary bring-up: 64 MHz clock, USART2 boot banner, LD4 blink. */
+/* Bring-up main: 64 MHz clock, HAL init, boot banner, LD4 blink at 1 Hz.
+ * The application sequencer replaces the loop in a later task. */
 #include "stm32g0xx_hal.h"
+#include "hal_gpio.h"
+#include "hal_init.h"
+#include "hal_time.h"
+#include "hal_uart.h"
+#include "fault.h"
 
-UART_HandleTypeDef huart2;
+void Error_Handler(void)
+{
+    fault_panic();   /* e-stop, latch, spin without IWDG refresh */
+    for (;;) { }     /* fault_panic() does not return on target */
+}
 
 static void SystemClock_Config(void)
 {
@@ -21,55 +31,36 @@ static void SystemClock_Config(void)
     osc.PLL.PLLQ = RCC_PLLQ_DIV2;
     osc.PLL.PLLR = RCC_PLLR_DIV2;
     if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
-        for (;;) { }
+        Error_Handler();
     }
     clk.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1;
     clk.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
     clk.AHBCLKDivider = RCC_SYSCLK_DIV1;
     clk.APB1CLKDivider = RCC_HCLK_DIV1;
     if (HAL_RCC_ClockConfig(&clk, FLASH_LATENCY_2) != HAL_OK) {
-        for (;;) { }
-    }
-}
-
-static void Usart2_Init(void)
-{
-    huart2.Instance = USART2;
-    huart2.Init.BaudRate = 115200;
-    huart2.Init.WordLength = UART_WORDLENGTH_8B;
-    huart2.Init.StopBits = UART_STOPBITS_1;
-    huart2.Init.Parity = UART_PARITY_NONE;
-    huart2.Init.Mode = UART_MODE_TX_RX;
-    huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-    huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-    huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-    huart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-    huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-    if (HAL_UART_Init(&huart2) != HAL_OK) {
-        for (;;) { }
+        Error_Handler();
     }
 }
 
 int main(void)
 {
-    static const uint8_t banner[] = "AERIS-10 G0B1 boot\r\n";
-    GPIO_InitTypeDef g = {0};
+    static const char banner[] = "AERIS-10 G0B1 boot\r\n";
 
+    hal_gpio_init();            /* all rails/enables/resets low before anything else */
     HAL_Init();
     SystemClock_Config();
+    hal_time_init();
+    hal_uart_init();
+    hal_spi_init();
+    hal_i2c_init();
 
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    g.Pin = GPIO_PIN_5;          /* LD4 */
-    g.Mode = GPIO_MODE_OUTPUT_PP;
-    g.Pull = GPIO_NOPULL;
-    g.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOA, &g);
+    (void)uart_write(banner, sizeof banner - 1u);
 
-    Usart2_Init();
-    (void)HAL_UART_Transmit(&huart2, banner, sizeof banner - 1, 50);
-
+    uint32_t last = millis();
     for (;;) {
-        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-        HAL_Delay(500);
+        if ((uint32_t)(millis() - last) >= 500u) {
+            last += 500u;
+            gpio_toggle(PIN_LED);
+        }
     }
 }

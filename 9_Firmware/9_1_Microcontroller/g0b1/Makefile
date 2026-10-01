@@ -4,7 +4,8 @@ DIAG       ?= 1
 PROGRAMMER ?= stlink
 
 TARGET := aeris_g0b1
-BUILD  := build
+# per-config build dir: changing ADAR_COUNT/DIAG never reuses stale objects
+BUILD  := build/n$(ADAR_COUNT)_d$(DIAG)
 CC     := arm-none-eabi-gcc
 OBJCOPY:= arm-none-eabi-objcopy
 SIZE   := arm-none-eabi-size
@@ -84,5 +85,5 @@ test:
 	$(MAKE) -C tests ADAR_COUNT=4
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf build
 	$(MAKE) -C tests clean
