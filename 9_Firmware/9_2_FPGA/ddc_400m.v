@@ -563,24 +563,26 @@ end
 // ============================================================================
 wire cic_valid_i, cic_valid_q;
 
-cic_decimator_4x_enhanced cic_i_inst (
+cic_decimator_4x_enhanced #(.DATA_W(16)) cic_i_inst (
     .clk(clk_400m),
     .reset_n(reset_n_400m),
-    .data_in(mixed_i[33:16]),
+    .data_in(mixed_i[33:18]),
     .data_valid(mixed_valid),
-    .data_out(cic_i_out),
+    .data_out(cic_i_out[15:0]),
     .data_out_valid(cic_valid_i)
 );
 
-cic_decimator_4x_enhanced cic_q_inst (
+cic_decimator_4x_enhanced #(.DATA_W(16)) cic_q_inst (
     .clk(clk_400m),
     .reset_n(reset_n_400m),
-    .data_in(mixed_q[33:16]),
+    .data_in(mixed_q[33:18]),
     .data_valid(mixed_valid),
-    .data_out(cic_q_out),
+    .data_out(cic_q_out[15:0]),
     .data_out_valid(cic_valid_q)
 );
 
+assign cic_i_out[17:16] = {2{cic_i_out[15]}};
+assign cic_q_out[17:16] = {2{cic_q_out[15]}};
 assign cic_valid = cic_valid_i & cic_valid_q;
 
 // ============================================================================
