@@ -264,7 +264,8 @@ matched_filter_multi_segment #(
 range_bin_decimator #(
     .INPUT_BINS(256),
     .OUTPUT_BINS(64),
-    .DECIMATION_FACTOR(4)
+    .DECIMATION_FACTOR(4),
+    .LOG2_DECIMATION(2)
 ) range_decim (
     .clk(clk),
     .reset_n(reset_n),
