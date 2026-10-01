@@ -23,9 +23,15 @@ test: check $(addprefix $(BUILD)/,$(TESTS))
 	    echo "== $$t (ADAR_COUNT=$(ADAR_COUNT))"; ./$(BUILD)/$$t; \
 	done
 
+# Per-test module exclusions: a test that supplies its own spy for a module
+# entry point must not link the real module that defines it (nothing is weakened:
+# test_fault/test_thermal keep their spies, test_sequencer links the real sequencer).
+EXCL_test_fault   := ../Core/app/sequencer.c
+EXCL_test_thermal := ../Core/app/sequencer.c
+.SECONDEXPANSION:
 $(BUILD)/%: %.c $(MOCKS) $(MODULES) $(wildcard *.h mocks/*.h ../Core/hal/*.h ../Core/drivers/*.h ../Core/app/*.h)
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $< $(MOCKS) $(MODULES)
+	$(CC) $(CFLAGS) -o $@ $< $(MOCKS) $(filter-out $(EXCL_$*),$(MODULES))
 
 clean:
 	rm -rf build_n*
