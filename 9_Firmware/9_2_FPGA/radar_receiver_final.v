@@ -186,11 +186,11 @@ adc_cmos_interface #(.DATA_W(12)) adc_if (
 );
 
 // 2. DDC: NCO (20 MHz) + mixer + CIC (R=4) + FIR -> 25 MSPS complex baseband
-wire signed [17:0] ddc_out_i;
-wire signed [17:0] ddc_out_q;
+wire signed [15:0] ddc_out_i;
+wire signed [15:0] ddc_out_q;
 wire ddc_valid;
 
-ddc #(.ADC_W(12), .OUT_W(18)) ddc_inst (
+ddc #(.ADC_W(12), .OUT_W(16)) ddc_inst (
     .clk(clk),
     .reset_n(reset_n),
     .mixers_enable(1'b1),
@@ -201,18 +201,10 @@ ddc #(.ADC_W(12), .OUT_W(18)) ddc_inst (
     .baseband_valid(ddc_valid)
 );
 
-ddc_input_interface ddc_if (
-    .clk(clk),
-    .reset_n(reset_n),
-    .ddc_i(ddc_out_i),
-    .ddc_q(ddc_out_q),
-    .valid_i(ddc_valid),
-    .valid_q(ddc_valid),
-    .adc_i(adc_i_scaled),
-    .adc_q(adc_q_scaled),
-    .adc_valid(adc_valid_sync),
-    .data_sync_error()
-);
+// DDC output is already 16-bit at 25 MSPS - no rescaling stage
+assign adc_i_scaled   = ddc_out_i;
+assign adc_q_scaled   = ddc_out_q;
+assign adc_valid_sync = ddc_valid;
 
 // 2b. Digital Gain Control with AGC
 // Host-configurable power-of-2 shift between DDC output and matched filter.

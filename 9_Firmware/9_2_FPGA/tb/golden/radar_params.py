@@ -21,7 +21,7 @@ LONG_CHIRP_SAMPLES  = int(round(T_LONG * FS_BB))        # 750
 SHORT_CHIRP_SAMPLES = int(math.ceil(T_SHORT * FS_BB))   # 13
 LONG_SEGMENTS = 4           # 256 + 224*3 = 928 >= 750 (3 segments cover only 704)
 PHASE_INC = 0x33333333      # nco.v: round(0.2 * 2^32) truncated to 0x33333333
-DDC_OUT_W = 18              # ddc.v OUT_W (Task 7 sets 16)
+DDC_OUT_W = 16              # ddc.v OUT_W (16-bit folded FIR output)
 
 # nco.v quarter-wave LUT: round(32767*sin(pi/2*k/64))
 NCO_SINE_LUT = [

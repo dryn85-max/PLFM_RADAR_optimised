@@ -31,7 +31,7 @@
  *     radar_transmitter.v dac_interface_single.v plfm_chirp_controller.v \
  *     radar_receiver_final.v adc_cmos_interface.v \
  *     ddc.v nco.v cic_decimator_4x_enhanced.v \
- *     cdc_modules.v fir_lowpass.v ddc_input_interface.v \
+ *     cdc_modules.v fir_lowpass.v \
  *     chirp_memory_loader_param.v latency_buffer.v \
  *     matched_filter_multi_segment.v matched_filter_processing_chain.v \
  *     range_bin_decimator.v doppler_processor.v xfft_16.v fft_engine.v \

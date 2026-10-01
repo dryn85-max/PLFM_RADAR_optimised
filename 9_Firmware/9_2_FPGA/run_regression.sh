@@ -69,7 +69,6 @@ PROD_RTL=(
     cic_decimator_4x_enhanced.v
     cdc_modules.v
     fir_lowpass.v
-    ddc_input_interface.v
     chirp_memory_loader_param.v
     latency_buffer.v
     matched_filter_multi_segment.v
@@ -103,7 +102,7 @@ RECEIVER_RTL=(
     radar_receiver_final.v
     radar_mode_controller.v
     adc_cmos_interface.v ddc.v nco.v cic_decimator_4x_enhanced.v
-    cdc_modules.v fir_lowpass.v ddc_input_interface.v
+    cdc_modules.v fir_lowpass.v
     chirp_memory_loader_param.v latency_buffer.v
     matched_filter_multi_segment.v matched_filter_processing_chain.v
     range_bin_decimator.v doppler_processor.v xfft_16.v fft_engine.v
@@ -482,9 +481,13 @@ run_test "NCO (20 MHz IF, inferred accumulator)" \
     tb/tb_nco_reg.vvp \
     tb/tb_nco.v nco.v
 
-run_test "FIR Lowpass" \
+run_test "FIR Lowpass (folded, 4-phase)" \
     tb/tb_fir_reg.vvp \
     tb/tb_fir_lowpass.v fir_lowpass.v
+
+run_test "FIR golden (b): folded == direct form" \
+    tb/tb_fir_golden_reg.vvp \
+    tb/golden/tb_fir_golden.v fir_lowpass.v
 
 run_test "Matched Filter Chain" \
     tb/tb_mf_reg.vvp \

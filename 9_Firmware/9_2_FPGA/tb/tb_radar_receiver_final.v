@@ -3,7 +3,7 @@
 // tb_radar_receiver_final.v -- P0 Integration Test for radar_receiver_final
 //
 // Tests the full RX pipeline from ADC input to Doppler output:
-//   adc_cmos_interface -> DDC -> ddc_input_interface
+//   adc_cmos_interface -> DDC
 //     -> matched_filter_multi_segment -> range_bin_decimator
 //     -> doppler_processor_optimized -> doppler_output
 //

@@ -8,7 +8,7 @@
 //     -> mixer  I = adc * cos, Q = adc * sin           12 x 16 -> 28 bit
 //     -> truncate [27:12]                               16 bit  (|.| <= 2^14)
 //     -> CIC N=5, R=4                                   16 bit @ 25 MSPS
-//     -> FIR 32 taps (symmetric)                        OUT_W @ 25 MSPS
+//     -> FIR 32 taps (symmetric)                        16 bit @ 25 MSPS
 //
 // Mixer truncation: adc_signed is an integer in [-2048, 2047]; the NCO is Q15
 // (+-32767).  The 28-bit product has 15 fractional bits; keeping bits [27:12]
@@ -23,13 +23,13 @@
 // Latency (clk edges, sample presented -> baseband_valid):
 //   NCO/delay 4 + mixer 3 + CIC 6 (per decimated output) + FIR + 1.
 //
-// Resources: 2 multipliers (12x16), 0 RAM.  Sub-blocks: nco (0 mult),
-// 2 x cic_decimator_4x_enhanced (0 mult), 2 x FIR.
+// Resources: 2 (mixer) + 2 x 4 (FIR) = 10 multipliers, 0 RAM.  Sub-blocks:
+// nco (0 mult), 2 x cic_decimator_4x_enhanced (0 mult), 2 x fir_lowpass (4 mult).
 // ============================================================================
 module ddc #(
     parameter ADC_W     = 12,
     parameter NCO_W     = 16,
-    parameter OUT_W     = 18,
+    parameter OUT_W     = 16,
     parameter PHASE_INC = 32'h3333_3333,
     parameter DITHER_EN = 1
 )(
@@ -135,15 +135,15 @@ cic_decimator_4x_enhanced #(.DATA_W(CIC_W)) cic_q_inst (
 wire signed [OUT_W-1:0] fir_i_out, fir_q_out;
 wire fir_valid_i, fir_valid_q;
 
-fir_lowpass_parallel_enhanced fir_i_inst (
+fir_lowpass #(.DATA_W(OUT_W)) fir_i_inst (
     .clk(clk), .reset_n(reset_n),
-    .data_in({{(OUT_W-CIC_W){cic_i_out[CIC_W-1]}}, cic_i_out}), .data_valid(cic_valid_i),
+    .data_in(cic_i_out), .data_valid(cic_valid_i),
     .data_out(fir_i_out), .data_out_valid(fir_valid_i),
     .fir_ready(), .filter_overflow());
 
-fir_lowpass_parallel_enhanced fir_q_inst (
+fir_lowpass #(.DATA_W(OUT_W)) fir_q_inst (
     .clk(clk), .reset_n(reset_n),
-    .data_in({{(OUT_W-CIC_W){cic_q_out[CIC_W-1]}}, cic_q_out}), .data_valid(cic_valid_q),
+    .data_in(cic_q_out), .data_valid(cic_valid_q),
     .data_out(fir_q_out), .data_out_valid(fir_valid_q),
     .fir_ready(), .filter_overflow());
 

@@ -8,7 +8,7 @@ module tb_ddc_golden;
     localparam CLK_PERIOD = 10.0;
     localparam N_IN   = 4096;
     localparam N_OUT  = N_IN / 4;
-    localparam OUT_W  = 18;       // Task 7 -> 16
+    localparam OUT_W  = 16;
 
     reg clk, reset_n, adc_valid;
     reg  [11:0] adc_data;
@@ -67,7 +67,7 @@ module tb_ddc_golden;
             @(posedge clk); #1;
         end
         adc_valid = 1'b0; adc_data = 12'h800;
-        repeat (60) @(posedge clk); #1;        // drain NCO(4)+mixer(3)+CIC(6)+FIR(9)+out(1)
+        repeat (60) @(posedge clk); #1;        // drain NCO(4)+mixer(3)+CIC(6)+FIR(7)+out(1)
         $display("outputs=%0d mismatches=%0d first_bad=%0d", out_count, mismatches, first_bad);
         check(out_count == N_OUT, "exactly N_IN/4 baseband samples");
         check(mismatches == 0, "all baseband samples match the integer model exactly");
