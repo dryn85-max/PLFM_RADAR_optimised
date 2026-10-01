@@ -1,7 +1,7 @@
 # AERIS-10 STM32G0B1 firmware (NUCLEO-G0B1RE prototype)
 
 Bare-metal C port of the radar MCU control firmware to an STM32G0B1RET6
-(Cortex-M0+, 64 MHz, 128 KB flash, 36 KB RAM; the build budget uses 32 KB RAM).
+(Cortex-M0+, 64 MHz; the device has 512 KB flash / 144 KB RAM, the build budget is 128 KB flash / 32 KB RAM).
 The old STM32F746 tree (`9_1_1_*`, `9_1_2_*`, `9_1_3_*`, `../tests`) is untouched.
 Design: `docs/superpowers/specs/2026-10-01-firmware-g0b1-port.md`; plan:
 `docs/superpowers/plans/2026-10-01-firmware-g0b1-port.md`.
@@ -92,6 +92,21 @@ verified against the datasheet AF table**.
 | FPGA DIG6 | PC6 | in | `agc_enable` | verify vs UM2324 |
 | FPGA DIG7 | PC7 | in | reserved | verify vs UM2324 |
 
+**Hardware requirements.**
+
+- **External pull-downs on all `EN_*` lines (EN_FPGA, EN_LO, EN_ADAR,
+  EN_ADTR_VDD_SW, EN_ADTR_VSS_SW, EN_LNA, EN_PA) and on DIG0..DIG4.** The MCU
+  pins are high-Z during reset and flashing, and the FPGA `reset_n` (DIG4) has
+  an internal `PULLUP` (`9_Firmware/9_2_FPGA/constraints/xc7a50t_ftg256.xdc:121`),
+  so without a pull-down the FPGA would be released from reset and the rails could
+  float on at power-up or while flashing.
+- **ADAR1000 `PA_ON` pin (B3)** is not driven by the MCU (no GPIO assigned). It
+  has an internal 100 kohm pull-up to the 1.8 V LDO. In TR-pin mode with
+  `BIAS_CTRL=1` it must be high (or left floating) for the PA bias to use the
+  `PA_BIAS_ON` values on TR=1; low forces the `OFF` values (ADAR1000 DS p. 39,
+  Table 16). Do not pull it low on the board. At present ON = OFF = `0x5D`, so it
+  has no effect until the Idq calibration gives the two values different numbers.
+
 Hardware notes: DIG0..DIG7 are PC0..PC7 so a single IDR read gives the whole
 bus. All outputs idle low except the chip selects, which idle high. The I2C
 `TIMINGR` `0x10B17DB5` (I2CCLK 64 MHz, just under 100 kHz) was computed from the
@@ -107,8 +122,8 @@ CRLF. Source: `Core/app/cmd.c`.
 
 | Command | Effect | Replies |
 |---|---|---|
-| `beam <az> <el>` | `az` -180..180, `el` -60..60 (integer degrees). Applies the integer beam table (`beam_apply(el)`; the array is steered electronically in elevation, azimuth is mechanical/stored only). Toggles DIG1 `new_elevation` if `el` changed and DIG2 `new_azimuth` if `az` changed. | `OK`, `ERR args`, `ERR range`, `ERR spi` |
-| `gain <ch> <val>` | Direct write of RX VGA register of global channel `ch` (0..`ADAR_COUNT*4-1`, 0-based), `val` 0..127. The AGC cache is updated; the AGC overwrites it on its next change when FPGA AGC is enabled. | `OK`, `ERR args`, `ERR range`, `ERR spi` |
+| `beam <az> <el>` | `az` -180..180, `el` -60..60 (integer degrees). Applies the integer beam table (`beam_apply(el)`; the array is steered electronically in elevation, azimuth is mechanical/stored only). Toggles DIG1 `new_elevation` if `el` changed and DIG2 `new_azimuth` if `az` changed. If an SPI write fails part-way the reply is `ERR spi`, `az`/`el` keep their old values and DIG1/DIG2 are not toggled; some elements may already have the new phases, so the firmware best-effort re-applies the previous elevation (retry the command if the bus recovered). | `OK`, `ERR args`, `ERR range`, `ERR spi` |
+| `gain <ch> <val>` | Direct write of RX VGA register of global channel `ch` (0..`ADAR_COUNT*4-1`, 0-based), `val` 0..127. The AGC cache is updated. While the FPGA AGC is enabled (DIG6 high) the value is overwritten on the next AGC tick (within `AGC_PERIOD_MS` = 250 ms) with the AGC's effective gain, so a manual `gain` only sticks while the AGC is disabled. | `OK`, `ERR args`, `ERR range`, `ERR spi` |
 | `tx` | All ADAR1000 devices to SPI-controlled TX (`TR_SOURCE=0`) for bench tests | `OK`, `ERR spi` |
 | `rx` | All devices to SPI-controlled RX | `OK`, `ERR spi` |
 | `auto` | Return to TR-pin mode (FPGA owns TX/RX switching); the default after init | `OK`, `ERR spi` |
@@ -123,13 +138,13 @@ tokens), `ERR latched` (any command except `status` while a fault is latched),
 Status line format:
 
 ```
-STATUS lock=<0|1> temp=<deci-degC> temp_err=<0|1> fault=<code> latched=<0|1> mode=<auto|tx|rx> az=<deg> el=<deg> agc=<0|1> base=<n> gains=<g0,g1,...>
+STATUS lock=<0|1> temp=<deci-degC> temp_err=<0|1> fault=<code> latched=<0|1> mode=<none|auto|tx|rx|mixed> az=<deg> el=<deg> agc=<0|1> base=<n> gains=<g0,g1,...>
 ```
 
-`temp` is in 0.1 degC (750 = 75.0 degC); `gains` lists the last value written
+`mode` is the ADAR1000 mode last applied successfully (`none` before the first successful mode write after init, `mixed` if a failed all-device switch left the devices different). `temp` is in 0.1 degC (750 = 75.0 degC); `gains` lists the last value written
 per channel (`-1` = not written since init or since a failed write).
 Fault codes: 0 none, 1 `PLL_LOCK`, 2 `ADAR_COMM` (non-latched); 10 `OVERTEMP`,
-11 `ESTOP_CMD`, 12 `PANIC` (latched).
+11 `ESTOP_CMD`, 12 `PANIC`, 13 `WATCHDOG` (latched).
 
 ## Memory report
 
@@ -139,19 +154,24 @@ data+bss+noinit + 4 KB stack + 1 KB heap reserve):
 
 | Configuration | Flash (of 131072) | RAM (of 32768) |
 |---|---|---|
-| default (`ADAR_COUNT=1`, `DIAG=1`) | 23916 | 6320 |
-| `DIAG=0` | 17116 | 5896 |
-| `ADAR_COUNT=4` | 24028 | 6356 |
+| default (`ADAR_COUNT=1`, `DIAG=1`) | 24232 | 6320 |
+| `DIAG=0` | 16896 | 5896 |
+| `ADAR_COUNT=4` | 24412 | 6360 |
 
 ## Fault model
 
 - **Latched faults** (emergency stop, then latch): `stop` command, over-temperature
   at or above 75.0 degC (checked every 5 s), `Error_Handler()` / `HardFault_Handler()`
-  (`FAULT_PANIC`).
+  / `NMI_Handler()` / any unexpected interrupt (`Default_Handler`) (`FAULT_PANIC`),
+  and a watchdog reset with no earlier latch (`FAULT_WATCHDOG`, below). The first
+  latched code is kept; later causes never overwrite it, and the latch is stored
+  before the e-stop runs.
 - **Non-latched faults** (RF rails off, base rails stay on, retried on next
   boot): PLL lock failure at init or lock loss while running (`FAULT_PLL_LOCK`),
   ADAR1000 scratchpad failure (`FAULT_ADAR_COMM`). Thermal sensor read errors
-  are only reported (`temp_err=1`); they are not a fault (no PA on the prototype).
+  are only reported (`temp_err=1`); they are not a fault. The PA is inside the
+  ADTR1107, so while the sensor is unreadable there is no over-temperature
+  protection.
 - **The latch lives in RAM `.noinit`** as `{magic 0x4641554C, code, ~code}`; any
   mismatch means "not latched". It survives IWDG, software and NRST resets and
   is **cleared only by a power cycle**. On boot with a valid latch the RF rails
@@ -159,17 +179,42 @@ data+bss+noinit + 4 KB stack + 1 KB heap reserve):
   other command answers `ERR latched`. Sequencer power-up returns `-EPERM`.
 - **Emergency-stop order** (GPIO only, no SPI, no delays, so it works with a hung
   bus): DIG3 `mixers_enable` low, PA 5 V, LNA 3V3, ADTR VSS_SW, ADTR VDD_SW,
-  ADAR supply, LO enable, then DIG0, DIG1, DIG2, DIG4 low, and `EN_FPGA` last.
-  The DIG lines go low before the FPGA loses power so a high MCU output cannot
-  back-power an unpowered FPGA through its input protection.
-- **`Error_Handler()` and `HardFault_Handler()`** run the e-stop, set the latch
-  (`FAULT_PANIC`) and spin **without** refreshing the IWDG; the reset after
-  about 4 s boots into the latched, safe state. (Upstream's `Error_Handler`
-  reset and re-energised the rails.)
-- **IWDG** 4 s (LSI 32 kHz / 256, reload 500), refreshed from the main loop only.
+  ADAR supply, ADAR CS0..3 low, LO enable, PLL CE and CS low, then DIG0, DIG1,
+  DIG2, DIG4 low, and `EN_FPGA` last. The DIG lines go low before the FPGA loses
+  power so a high MCU output cannot back-power an unpowered FPGA through its
+  input protection. Chip selects and CE go low only *after* their chip's supply
+  is off: a high output into an unpowered ADAR1000/PLL would back-power it
+  through its input protection (inputs must stay at or below supply + 0.3 V),
+  while a low level is always within the absolute maximum ratings and selecting
+  an unpowered chip does nothing. (The orderly `SEQ_DOWN` has the same order,
+  with delays.) Known gap: `hal_gpio_init()` still idles the CS lines high
+  before the rails come up (BACKLOG).
+- **`Error_Handler()`, `HardFault_Handler()`, `NMI_Handler()` and
+  `Default_Handler`** (unexpected interrupts) run the e-stop, set the latch
+  (`FAULT_PANIC`) and spin **without** refreshing the IWDG; once the IWDG is
+  running, the reset after about 4 s boots into the latched, safe state.
+  `Error_Handler()` is also reachable before the IWDG is started (clock
+  configuration failure in `main()`): then there is no watchdog reset, the rails
+  stay off (e-stop applied) and the MCU spins until a manual reset or power
+  cycle. (Upstream's `Error_Handler` reset and re-energised the rails.)
+- **Reset cause at boot** (spec R4): `main()` reads `RCC->CSR` before the IWDG
+  starts; if the IWDG or WWDG flag is set and no valid latch exists,
+  `fault_on_boot()` latches `FAULT_WATCHDOG` (13, cleared only by a power cycle)
+  and the boot takes the latched path (rails off). With an existing latch the
+  first cause is kept. `RMVF` then clears the flags. The G0 has no separate
+  LOCKUP reset flag; a lockup ends in the IWDG reset.
+- **IWDG** 4 s (LSI 32 kHz / 256, reload 500), refreshed in the main loop and
+  between the long `app_init()` stages; `delay_ms()` does not refresh it.
 - Power-up is split: base rails (FPGA, LO, ADAR, VDD_SW, VSS_SW) -> ADAR init and
-  safe PA bias -> RF rails (LNA 3V3, then PA 5 V), because the ADTR1107 needs a
-  negative `VGG_PA` before `VDD_PA`.
+  safe PA bias and `CTRL_SW` driven to receive (`TR_SW_POS` floats after reset,
+  ADAR1000 DS p. 38/44) -> RF rails (LNA 3V3, then PA 5 V) -> operational bias,
+  TR-pin mode, beam 0, boot gains (TX VGA `0x7F`, RX VGA = AGC base 30), because
+  the ADTR1107 needs a negative `VGG_PA` before `VDD_PA`.
+- **PA/LNA gate bias is deliberately conservative**: PA ON = PA OFF = `0x5D`
+  (-1.75 V, PA pinched), LNA ON `0x00` (0 V), LNA OFF `0x68` (-1.96 V); every
+  PA/LNA bias constant is limited to `0x6A` (-2.0 V; DAC is linear, `0xFF` =
+  -4.8 V, ADAR1000 DS p. 31) by `_Static_assert`. The real quiescent-current
+  (Idq) setting must be calibrated on hardware (BACKLOG).
 
 ## Upstream defects fixed
 
@@ -185,7 +230,7 @@ Items from `BOM_OPTIMIZATION_REPORT.md` section 2.4 (code state):
 | `RadarSettings` parsed from USB but never read | Not ported (no USB in this track); runtime settings are the text commands above |
 | `Error_Handler()` = `__disable_irq(); while(1)` with no IWDG refresh, so the reset re-energised the power rails | `Error_Handler`/HardFault run the e-stop, latch in `.noinit`, spin; boot with a latch keeps rails off |
 | ADS7830 returns `0xFF` on I2C error, indistinguishable from full scale, causing false Idq/165 degC e-stops | Driver returns negative errno; the value is separate from the status; read errors are not faults |
-| `HAL_MAX_DELAY` I2C timeouts everywhere | None anywhere: I2C 100 ms, SPI 10 ms, UART TX 50 ms (grep gate) |
+| `HAL_MAX_DELAY` I2C timeouts everywhere | No `HAL_MAX_DELAY` in `Core/` (checked by grep, not enforced by a test): I2C 100 ms, SPI 10 ms, UART TX 50 ms |
 | 4 delay implementations | Exactly one: `delay_us()` / `delay_ms()` in `hal_time` |
 | 3 SPI paths, 3 copies of beam phase math, 3 GPS stacks, duplicated Idq loops | One `hal_spi`, one integer beam table (`beam.c`, with a Python reference), one GPS file, no Idq loop |
 
@@ -197,7 +242,8 @@ Additional defects found during this port:
   `auto` restores pin mode.
 - **`SW_DRV_TR_STATE` (reg 0x031 bit 7) must be set** for correct ADTR1107
   `CTRL_SW` polarity: with `SW_DRV_TR_MODE_SEL=0`, `TR_SW_POS` is 3.3 V in
-  receive and 0 V in transmit when the bit is 1 (ADAR1000 Table 24 p. 42), and
+  receive and 0 V in transmit when the bit is 1 (ADAR1000 Table 14 p. 38 gives
+  the output levels; Table 24 p. 42 lists the register 0x31 bits of the setup), and
   ADTR1107 `CTRL_SW` is low = transmit, high = receive (ADTR1107 Table 8 p. 6).
   It is set in every mode. Assumes `TR_SW_POS` drives `CTRL_SW` (BACKLOG: confirm
   on the schematic).
