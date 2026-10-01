@@ -36,6 +36,12 @@ const seq_step_t SEQ_ESTOP[SEQ_ESTOP_N] = {
     { PIN_EN_ADTR_VDD_SW, 0, 0 },
     { PIN_EN_ADAR,        0, 0 },
     { PIN_EN_LO,          0, 0 },
+    /* FPGA inputs low before the FPGA loses power: a high MCU output into an
+     * unpowered FPGA would back-power it through its input protection. */
+    { PIN_FPGA_DIG0,      0, 0 },
+    { PIN_FPGA_DIG1,      0, 0 },
+    { PIN_FPGA_DIG2,      0, 0 },
+    { PIN_FPGA_DIG4,      0, 0 },
     { PIN_EN_FPGA,        0, 0 },
 };
 
