@@ -64,3 +64,14 @@ outside `PROD_RTL` — allowed by the spec, but the README should say so.
   the file as test-only.
 - `fft_engine.v` `INTERNAL_W` default is 25 (spec says 24; commit `a5a524a` marks it
   owner-approved). Record the reason in the FPGA README so the deviation is not "fixed" later.
+
+## Resolution (on `claude/eloquent-mendel-dqv36n`)
+
+- 1 (MTI tb declaration after use): fixed in `bde7b29`; regression 38/38 (Icarus 12 locally).
+- 2 (Task 12): done in `bde7b29` — `9_2_FPGA/README.md`, `tb/golden/count_multipliers.py`,
+  vendor-primitive / resource / no-SIMULATION-lint gates in Phase 0 of `run_regression.sh`.
+- 3 minor: `fft_twiddle_1024.mem` (test-only) and the `INTERNAL_W = 25` rationale are recorded in
+  the FPGA README (`0eaa4eb`). The RWX linker warning appears only with binutils ≥ 2.39 and
+  `--no-warn-rwx-segments` breaks older ld, so it is left as is.
+- The three G0B1 extras from `g0b1-extras-from-alt-plan.md` were ported to the branch's pin layout
+  in `8aba250`, `c59e6d6`, `d0a243c` (EN_PA moved PA9 → PC8).
