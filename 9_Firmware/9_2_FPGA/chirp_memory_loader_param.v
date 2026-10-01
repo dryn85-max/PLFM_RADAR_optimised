@@ -24,10 +24,10 @@ module chirp_memory_loader_param #(
 );
 
 // Memory declarations - now 4096 samples for 4 segments
-(* ram_style = "block" *) reg [15:0] long_chirp_i [0:4095];
-(* ram_style = "block" *) reg [15:0] long_chirp_q [0:4095];
-(* ram_style = "block" *) reg [15:0] short_chirp_i [0:1023];
-(* ram_style = "block" *) reg [15:0] short_chirp_q [0:1023];
+reg [15:0] long_chirp_i [0:4095];
+reg [15:0] long_chirp_q [0:4095];
+reg [15:0] short_chirp_i [0:1023];
+reg [15:0] short_chirp_q [0:1023];
 
 // Initialize memory
 integer i;

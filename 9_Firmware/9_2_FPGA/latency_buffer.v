@@ -19,7 +19,7 @@ module latency_buffer #(
 localparam ADDR_WIDTH = 12;  // Enough for 4096 entries (>2159)
 
 // ========== FIXED LOGIC ==========
-(* ram_style = "block" *) reg [DATA_WIDTH-1:0] bram [0:4095];
+reg [DATA_WIDTH-1:0] bram [0:4095];
 reg [ADDR_WIDTH-1:0] write_ptr;
 reg [ADDR_WIDTH-1:0] read_ptr;
 reg valid_out_reg;

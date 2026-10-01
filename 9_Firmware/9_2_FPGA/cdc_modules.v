@@ -1,10 +1,9 @@
 `timescale 1ns / 1ps
 
 // ============================================================================
-// CDC FOR MULTI-BIT DATA (ADVANCED)
-// Uses Gray-code encoding with synchronous reset on sync chain to avoid
-// latch inference. ASYNC_REG attributes ensure Vivado places synchronizer
-// FFs in the same slice for optimal MTBF.
+// CDC FOR MULTI-BIT DATA — Gray-coded, ONLY valid for values that change by
+// +-1 per source cycle.  Last user: ddc_400m.v (removed in the vendor-neutral
+// port; this module is deleted together with it).
 // ============================================================================
 module cdc_adc_to_processing #(
     parameter WIDTH = 8,
@@ -49,9 +48,9 @@ module cdc_adc_to_processing #(
     reg [1:0] src_toggle = 2'b00;
     
     // Destination domain synchronizer registers
-    // ASYNC_REG on memory arrays applies to all elements
-    (* ASYNC_REG = "TRUE" *) reg [WIDTH-1:0] dst_data_gray [0:STAGES-1];
-    (* ASYNC_REG = "TRUE" *) reg [1:0] dst_toggle_sync [0:STAGES-1];
+    // (no vendor attributes on synchronizer arrays)
+    reg [WIDTH-1:0] dst_data_gray [0:STAGES-1];
+    reg [1:0] dst_toggle_sync [0:STAGES-1];
     reg [WIDTH-1:0] dst_data_reg;
     reg dst_valid_reg = 0;
     reg [1:0] prev_dst_toggle = 2'b00;
@@ -139,8 +138,8 @@ endmodule
 
 // ============================================================================
 // CDC FOR SINGLE BIT SIGNALS
-// Uses synchronous reset on sync chain to avoid metastability on reset
-// deassertion. Matches cdc_adc_to_processing best practice.
+// Plain multi-stage synchronizer with synchronous reset.  Multi-bit data must
+// use cdc_handshake below — never a per-bit synchronizer.
 // ============================================================================
 module cdc_single_bit #(
     parameter STAGES = 3
@@ -152,7 +151,7 @@ module cdc_single_bit #(
     output wire dst_signal
 );
 
-    (* ASYNC_REG = "TRUE" *) reg [STAGES-1:0] sync_chain;
+    reg [STAGES-1:0] sync_chain;
     
     always @(posedge dst_clk) begin
         if (!reset_n) begin
@@ -196,13 +195,13 @@ module cdc_handshake #(
     reg [WIDTH-1:0] src_data_reg;
     reg src_busy = 0;
     reg src_ack_sync = 0;
-    (* ASYNC_REG = "TRUE" *) reg [1:0] src_ack_sync_chain = 2'b00;
+    reg [1:0] src_ack_sync_chain = 2'b00;
     
     // Destination domain
     reg [WIDTH-1:0] dst_data_reg;
     reg dst_valid_reg = 0;
     reg dst_req_sync = 0;
-    (* ASYNC_REG = "TRUE" *) reg [1:0] dst_req_sync_chain = 2'b00;
+    reg [1:0] dst_req_sync_chain = 2'b00;
     reg dst_ack = 0;
 
 `ifdef FORMAL

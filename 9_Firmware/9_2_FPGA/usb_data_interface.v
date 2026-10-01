@@ -51,7 +51,7 @@ module usb_data_interface (
     input wire [1:0] ft601_swb,       // Selected write buffer
     
     // Clock
-    output wire ft601_clk_out,        // Output clock to FT601 (forwarded via ODDR)
+    output wire ft601_clk_out,        // Output clock to FT601 (plain forward)
     input wire ft601_clk_in,          // Clock from FT601 (60/100MHz)
     
     // ========== HOST COMMAND OUTPUTS (Gap 4: USB Read Path) ==========
@@ -163,9 +163,9 @@ reg [31:0] rx_data_captured;  // Data word read from host
 // Even though both are 100 MHz, they are asynchronous clocks and need synchronization.
 
 // 2-stage synchronizers for valid signals
-(* ASYNC_REG = "TRUE" *) reg [1:0] range_valid_sync;
-(* ASYNC_REG = "TRUE" *) reg [1:0] doppler_valid_sync;
-(* ASYNC_REG = "TRUE" *) reg [1:0] cfar_valid_sync;
+reg [1:0] range_valid_sync;
+reg [1:0] doppler_valid_sync;
+reg [1:0] cfar_valid_sync;
 
 // Delayed versions of sync[1] for proper edge detection
 reg range_valid_sync_d;
@@ -226,7 +226,7 @@ always @(posedge ft601_clk_in or negedge ft601_reset_n) begin
 end
 
 // Synchronize heartbeat into clk domain (2-stage)
-(* ASYNC_REG = "TRUE" *) reg [1:0] ft601_hb_sync;
+reg [1:0] ft601_hb_sync;
 reg ft601_hb_prev;
 reg [15:0] ft601_clk_timeout;
 reg ft601_clk_lost;
@@ -257,7 +257,7 @@ end
 // Effective FT601-domain reset: asserted by global reset OR clock loss.
 // Deassertion synchronized to ft601_clk via 2-stage sync to avoid
 // metastability on the recovery edge.
-(* ASYNC_REG = "TRUE" *) reg [1:0] ft601_reset_sync;
+reg [1:0] ft601_reset_sync;
 wire ft601_reset_raw_n = ft601_reset_n & ~ft601_clk_lost;
 
 always @(posedge ft601_clk_in or negedge ft601_reset_raw_n) begin
@@ -302,8 +302,8 @@ reg [11:0] sample_counter;
 // deadlock before host configures streams. With all streams enabled on
 // reset, the first range_valid triggers the write FSM which then blocks
 // forever on SEND_DOPPLER_DATA (Doppler hasn't produced data yet).
-(* ASYNC_REG = "TRUE" *) reg [2:0] stream_ctrl_sync_0;
-(* ASYNC_REG = "TRUE" *) reg [2:0] stream_ctrl_sync_1;
+reg [2:0] stream_ctrl_sync_0;
+reg [2:0] stream_ctrl_sync_1;
 wire stream_range_en   = stream_ctrl_sync_1[0];
 wire stream_doppler_en = stream_ctrl_sync_1[1];
 wire stream_cfar_en    = stream_ctrl_sync_1[2];
@@ -311,7 +311,7 @@ wire stream_cfar_en    = stream_ctrl_sync_1[2];
 // Gap 2: Status request CDC (toggle CDC, same pattern as cmd_valid)
 // status_request is a 1-cycle pulse in clk_100m. Toggle→sync→edge-detect.
 // NOTE: status_req_toggle_100m declared above (before source-domain always block)
-(* ASYNC_REG = "TRUE" *) reg [1:0] status_req_sync;
+reg [1:0] status_req_sync;
 reg status_req_sync_prev;
 wire status_req_ft601 = status_req_sync[1] ^ status_req_sync_prev;
 
@@ -648,36 +648,8 @@ end
 // ============================================================================
 // FT601 clock output forwarding
 // ============================================================================
-// Forward ft601_clk_in back out via ODDR so that the forwarded clock at the
-// pin has the same insertion delay as the data outputs (both go through the
-// same BUFG). This makes the output delay analysis relative to the generated
-// clock at the pin, where insertion delays cancel.
-
-`ifndef SIMULATION
-ODDR #(
-    .DDR_CLK_EDGE("OPPOSITE_EDGE"),
-    .INIT(1'b0),
-    .SRTYPE("SYNC")
-) oddr_ft601_clk (
-    .Q(ft601_clk_out),
-    .C(ft601_clk_in),
-    .CE(1'b1),
-    .D1(1'b1),
-    .D2(1'b0),
-    .R(1'b0),
-    .S(1'b0)
-);
-`else
-// Simulation: behavioral clock forwarding
-reg ft601_clk_out_sim;
-always @(posedge ft601_clk_in or negedge ft601_effective_reset_n) begin
-    if (!ft601_effective_reset_n)
-        ft601_clk_out_sim <= 1'b0;
-    else
-        ft601_clk_out_sim <= 1'b1;
-end
-// In simulation, just pass the clock through
+// The forwarded clock is a plain signal here; a board wrapper that needs
+// IOB-aligned clock forwarding adds the vendor clock-output primitive there.
 assign ft601_clk_out = ft601_clk_in;
-`endif
 
 endmodule

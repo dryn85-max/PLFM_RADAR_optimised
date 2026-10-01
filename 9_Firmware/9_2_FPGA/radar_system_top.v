@@ -292,33 +292,16 @@ wire [15:0] self_test_capture_data;
 wire       self_test_capture_valid;
 
 // ============================================================================
-// CLOCK BUFFERING
+// CLOCKS
 // ============================================================================
-
-`ifdef SIMULATION
-// In simulation (iverilog), BUFG is not available — pass-through assigns
+// Global clock buffering is inserted automatically by the synthesis tool
+// (Quartus and Vivado both promote clock nets).  Nothing vendor-specific here.
 assign clk_100m_buf     = clk_100m;
 assign clk_120m_dac_buf = clk_120m_dac;
 assign ft601_clk_buf    = ft601_clk_in;
-`else
-BUFG bufg_100m (
-    .I(clk_100m),
-    .O(clk_100m_buf)
-);
-
-BUFG bufg_120m (
-    .I(clk_120m_dac),
-    .O(clk_120m_dac_buf)
-);
-
-BUFG bufg_ft601 (
-    .I(ft601_clk_in),
-    .O(ft601_clk_buf)
-);
-`endif
 
 // Reset synchronization (clk_100m domain)
-(* ASYNC_REG = "TRUE" *) reg [1:0] reset_sync;
+reg [1:0] reset_sync;
 always @(posedge clk_100m_buf or negedge reset_n) begin
     if (!reset_n) begin
         reset_sync <= 2'b00;
@@ -331,7 +314,7 @@ assign sys_reset_n = reset_sync[1];
 // Reset synchronization (clk_120m_dac domain)
 // Ensures reset deassertion is synchronous to the DAC clock,
 // preventing recovery/removal timing violations on 120 MHz FFs.
-(* ASYNC_REG = "TRUE" *) reg [1:0] reset_sync_120m;
+reg [1:0] reset_sync_120m;
 always @(posedge clk_120m_dac_buf or negedge reset_n) begin
     if (!reset_n) begin
         reset_sync_120m <= 2'b00;
@@ -344,7 +327,7 @@ assign sys_reset_120m_n = reset_sync_120m[1];
 // Reset synchronization (ft601_clk domain)
 // FT601 has its own asynchronous clock from the USB controller.
 // All FT601-domain registers need a properly synchronized reset.
-(* ASYNC_REG = "TRUE" *) reg [2:0] reset_sync_ft601;  // 3-stage for better MTBF
+reg [2:0] reset_sync_ft601;  // 3-stage for better MTBF
 always @(posedge ft601_clk_buf or negedge reset_n) begin
     if (!reset_n) begin
         reset_sync_ft601 <= 3'b000;
@@ -376,24 +359,21 @@ cdc_single_bit #(.STAGES(2)) cdc_ft601_txe_status (
 // CLOCK DOMAIN CROSSING: TRANSMITTER (120 MHz) -> SYSTEM (100 MHz)
 // ============================================================================
 
-// CDC for chirp_counter: 6-bit multi-bit Gray-code synchronizer
-// Source domain is clk_120m_dac, so reset must be synchronized to that domain.
-// The cdc_adc_to_processing module uses synchronous reset internally, so
-// using sys_reset_120m_n (120m-synchronized) is correct for the source side.
-// The destination side will sample it synchronously on dst_clk, which at worst
-// delays reset deassertion by 1-2 cycles — acceptable for CDC reset.
-cdc_adc_to_processing #(
-    .WIDTH(6),
-    .STAGES(3)
+// CDC for chirp_counter: 6-bit value, four-phase handshake (formally verified
+// in formal/fv_cdc_handshake.sby).  src_valid is held high so the counter is
+// re-sampled continuously; dst_data holds the last transferred value.
+cdc_handshake #(
+    .WIDTH(6)
 ) cdc_chirp_counter (
     .src_clk(clk_120m_dac_buf),
     .dst_clk(clk_100m_buf),
-    .src_reset_n(sys_reset_120m_n),
-    .dst_reset_n(sys_reset_n),
+    .reset_n(sys_reset_n),
     .src_data(tx_current_chirp),
-    .src_valid(1'b1),           // Always valid — counter updates continuously
+    .src_valid(1'b1),
+    .src_ready(),
     .dst_data(tx_current_chirp_sync),
-    .dst_valid(tx_current_chirp_sync_valid)
+    .dst_valid(tx_current_chirp_sync_valid),
+    .dst_ready(1'b1)
 );
 
 // CDC for new_chirp_frame: toggle CDC (pulse on clk_120m -> pulse on clk_100m)
@@ -813,7 +793,7 @@ end else begin : gen_ft2232h
         .ft_wr_n(ft_wr_n),
         .ft_oe_n(ft_oe_n),
         .ft_siwu(ft_siwu),
-        .ft_clk(ft601_clk_buf),   // Reuse BUFG'd USB clock
+        .ft_clk(ft601_clk_buf),   // USB clock
 
         // Host command outputs
         .cmd_data(usb_cmd_data),

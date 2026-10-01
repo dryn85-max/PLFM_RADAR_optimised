@@ -573,12 +573,12 @@ reg [3:0] state;
 // ============================================================================
 // DATA BUFFERS (block RAM) — declared here, accessed in BRAM port blocks
 // ============================================================================
-(* ram_style = "block" *) reg signed [15:0] sig_buf_i [0:FFT_SIZE-1];
-(* ram_style = "block" *) reg signed [15:0] sig_buf_q [0:FFT_SIZE-1];
-(* ram_style = "block" *) reg signed [15:0] ref_buf_i [0:FFT_SIZE-1];
-(* ram_style = "block" *) reg signed [15:0] ref_buf_q [0:FFT_SIZE-1];
-(* ram_style = "block" *) reg signed [15:0] prod_buf_i [0:FFT_SIZE-1];
-(* ram_style = "block" *) reg signed [15:0] prod_buf_q [0:FFT_SIZE-1];
+reg signed [15:0] sig_buf_i [0:FFT_SIZE-1];
+reg signed [15:0] sig_buf_q [0:FFT_SIZE-1];
+reg signed [15:0] ref_buf_i [0:FFT_SIZE-1];
+reg signed [15:0] ref_buf_q [0:FFT_SIZE-1];
+reg signed [15:0] prod_buf_i [0:FFT_SIZE-1];
+reg signed [15:0] prod_buf_q [0:FFT_SIZE-1];
 
 // BRAM read data (registered outputs from port blocks)
 reg signed [15:0] sig_rdata_i, sig_rdata_q;

@@ -57,8 +57,8 @@ reg signed [31:0] pc_i, pc_q;
 reg pc_valid;
 
 // Dual buffer for overlap-save — BRAM inferred for synthesis
-(* ram_style = "block" *) reg signed [15:0] input_buffer_i [0:BUFFER_SIZE-1];
-(* ram_style = "block" *) reg signed [15:0] input_buffer_q [0:BUFFER_SIZE-1];
+reg signed [15:0] input_buffer_i [0:BUFFER_SIZE-1];
+reg signed [15:0] input_buffer_q [0:BUFFER_SIZE-1];
 reg [10:0] buffer_write_ptr;
 reg [10:0] buffer_read_ptr;
 reg buffer_has_data;

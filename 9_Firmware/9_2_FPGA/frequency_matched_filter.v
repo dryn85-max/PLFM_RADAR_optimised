@@ -41,7 +41,7 @@ reg [9:0] addr_counter;
 
 
 // ========== PIPELINE STAGE 1: REGISTER INPUTS ==========
-// Sync reset: enables DSP48E1 absorption (fixes DPOR-1/DPIP-1 DRC)
+// Sync reset: lets the multiplier pipeline registers be absorbed by either vendor
 always @(posedge clk) begin
     if (!reset_n) begin
         a_reg <= 16'd0; b_reg <= 16'd0;
@@ -59,7 +59,7 @@ always @(posedge clk) begin
 end
 
 // ========== PIPELINE STAGE 2: MULTIPLICATIONS ==========
-// Sync reset: enables DSP48E1 absorption (fixes DPOR-1/DPIP-1 DRC)
+// Sync reset: lets the multiplier pipeline registers be absorbed by either vendor
 always @(posedge clk) begin
     if (!reset_n) begin
         ac_reg <= 32'd0; bd_reg <= 32'd0;
@@ -78,7 +78,7 @@ end
 
 // ========== PIPELINE STAGE 3: ADDITIONS ==========
 // For conjugate multiplication: (ac + bd) + j(bc - ad)
-// Sync reset: enables DSP48E1 absorption (fixes DPOR-1/DPIP-1 DRC)
+// Sync reset: lets the multiplier pipeline registers be absorbed by either vendor
 always @(posedge clk) begin
     if (!reset_n) begin
         real_sum <= 32'd0;
@@ -115,7 +115,7 @@ function automatic signed [15:0] saturate_and_scale;
     end
 endfunction
 
-// Sync reset: enables DSP48E1 absorption (fixes DPOR-1/DPIP-1 DRC)
+// Sync reset: lets the multiplier pipeline registers be absorbed by either vendor
 always @(posedge clk) begin
     if (!reset_n) begin
         real_out <= 16'd0;

@@ -70,7 +70,7 @@ module usb_data_interface_ft2232h (
                                     // SIWU could flush the TX FIFO for lower latency
                                     // but is not needed at current data rates. Deferred.
 
-    // Clock from FT2232H (directly used — no ODDR forwarding needed)
+    // Clock from FT2232H (used directly)
     input wire ft_clk,              // 60 MHz from FT2232H CLKOUT
 
     // Host command outputs (ft_clk domain — CDC'd by consumer)
@@ -223,7 +223,7 @@ always @(posedge ft_clk or negedge ft_reset_n) begin
 end
 
 // Synchronize heartbeat into clk domain (2-stage)
-(* ASYNC_REG = "TRUE" *) reg [1:0] ft_hb_sync;
+reg [1:0] ft_hb_sync;
 reg ft_hb_prev;
 reg [15:0] ft_clk_timeout;
 reg ft_clk_lost;
@@ -254,7 +254,7 @@ end
 // Effective FT-domain reset: asserted by global reset OR clock loss.
 // Deassertion synchronized to ft_clk via 2-stage sync to avoid
 // metastability on the recovery edge.
-(* ASYNC_REG = "TRUE" *) reg [1:0] ft_reset_sync;
+reg [1:0] ft_reset_sync;
 wire ft_reset_raw_n = ft_reset_n & ~ft_clk_lost;
 
 always @(posedge ft_clk or negedge ft_reset_raw_n) begin
@@ -269,10 +269,10 @@ wire ft_effective_reset_n = ft_reset_sync[1];
 // --- 3-stage synchronizers (ft_clk domain) ---
 // 3 stages for better MTBF at 60 MHz
 
-(* ASYNC_REG = "TRUE" *) reg [2:0] range_toggle_sync;
-(* ASYNC_REG = "TRUE" *) reg [2:0] doppler_toggle_sync;
-(* ASYNC_REG = "TRUE" *) reg [2:0] cfar_toggle_sync;
-(* ASYNC_REG = "TRUE" *) reg [2:0] status_toggle_sync;
+reg [2:0] range_toggle_sync;
+reg [2:0] doppler_toggle_sync;
+reg [2:0] cfar_toggle_sync;
+reg [2:0] status_toggle_sync;
 
 reg range_toggle_prev;
 reg doppler_toggle_prev;
@@ -286,8 +286,8 @@ wire cfar_valid_ft    = cfar_toggle_sync[2]     ^ cfar_toggle_prev;
 wire status_req_ft    = status_toggle_sync[2]   ^ status_toggle_prev;
 
 // --- Stream control CDC (per-bit 2-stage, changes infrequently) ---
-(* ASYNC_REG = "TRUE" *) reg [2:0] stream_ctrl_sync_0;
-(* ASYNC_REG = "TRUE" *) reg [2:0] stream_ctrl_sync_1;
+reg [2:0] stream_ctrl_sync_0;
+reg [2:0] stream_ctrl_sync_1;
 wire stream_range_en   = stream_ctrl_sync_1[0];
 wire stream_doppler_en = stream_ctrl_sync_1[1];
 wire stream_cfar_en    = stream_ctrl_sync_1[2];
