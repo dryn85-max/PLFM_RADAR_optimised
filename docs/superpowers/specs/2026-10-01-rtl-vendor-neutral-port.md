@@ -70,11 +70,12 @@ bit-exact where the datapath is unchanged, and adding golden-model checks where 
 - FIR (`fir_lowpass.v`): symmetric 32-tap, **folded** — 16 multipliers per channel using
   pre-adders, 32 total. Accumulator width = product width + log2(taps) guard bits (fix the
   existing missing-guard-bit defect). Coefficients unchanged (designed for 25 MSPS).
-- **New second decimation ×4 after the CIC and before the FIR** (`decimator_4x.v`, simple
-  sample-drop with valid gating), so the FIR and everything downstream run at 25 MSPS
-  (one sample every 4 `clk_proc` cycles). FIR may therefore be time-multiplexed: 8 physical
-  multipliers per channel processing 4 phases, if the implementer finds it simpler; either
-  way ≤ 32 multipliers for both channels.
+- With f_s = 100 MSPS the CIC (R = 4) already delivers **25 MSPS** (one sample every 4
+  `clk_proc` cycles), which is the rate the FIR coefficients were designed for — **no further
+  decimator is needed** (an earlier draft of this spec wrongly asked for a second ×4 stage;
+  that would give 6.25 MSPS, below the 20 MHz chirp bandwidth). The FIR shall be
+  time-multiplexed over the 4 idle cycles: 4 physical multipliers per channel processing the
+  folded 16-tap pairs; ≤ 8 multipliers for both channels.
 
 ### R4. Shrink the pulse-compression chain
 
