@@ -359,15 +359,19 @@ cdc_single_bit #(.STAGES(2)) cdc_ft601_txe_status (
 // CLOCK DOMAIN CROSSING: TRANSMITTER (120 MHz) -> SYSTEM (100 MHz)
 // ============================================================================
 
-// CDC for chirp_counter: 6-bit value, four-phase handshake (formally verified
-// in formal/fv_cdc_handshake.sby).  src_valid is held high so the counter is
-// re-sampled continuously; dst_data holds the last transferred value.
+// CDC for chirp_counter: 6-bit value, four-phase req/ack handshake
+// (cdc_handshake).  Verified by the stress test in tb/tb_cdc_modules.v; the
+// formal wrapper formal/fv_cdc_handshake.v carries data-integrity properties
+// but has not been run in this environment (sby not installed).  src_valid is
+// held high so the counter is re-sampled continuously; dst_data holds the last
+// transferred value.  The source side resets from the 120 MHz-domain reset.
 cdc_handshake #(
     .WIDTH(6)
 ) cdc_chirp_counter (
     .src_clk(clk_120m_dac_buf),
     .dst_clk(clk_100m_buf),
-    .reset_n(sys_reset_n),
+    .src_reset_n(sys_reset_120m_n),
+    .dst_reset_n(sys_reset_n),
     .src_data(tx_current_chirp),
     .src_valid(1'b1),
     .src_ready(),

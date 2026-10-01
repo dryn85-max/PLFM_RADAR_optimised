@@ -1,5 +1,125 @@
 `timescale 1ns / 1ps
 
+
+// ============================================================================
+// cdc_handshake stress harness: back-to-back traffic, data-integrity scoreboard.
+//   HOLD_VALID=1 : src_valid held permanently high, src_data changes every
+//                  src_clk; the accepted words (src_valid && src_ready at a
+//                  src_clk edge) are the reference sequence.
+//   HOLD_VALID=0 : valid/ready producer with random gaps, value = running index.
+//   DST_BP=1     : destination applies random back-pressure on dst_ready.
+// Every word delivered at the destination must equal the next accepted word, in
+// order, with no duplicates, no gaps and no tearing.  The two domains are
+// released from reset at different times.
+// ============================================================================
+module hs_stress #(
+    parameter SRC_PERIOD = 8.333,
+    parameter DST_PERIOD = 10.0,
+    parameter HOLD_VALID = 1,
+    parameter DST_BP     = 0,
+    parameter NWORDS     = 300,
+    parameter SEED       = 1
+)(
+    output reg         done,
+    output reg [31:0]  errors,
+    output reg [31:0]  n_sent,
+    output reg [31:0]  n_recv
+);
+    reg src_clk, dst_clk, src_rst_n, dst_rst_n;
+    reg [31:0] src_data;
+    reg        src_valid;
+    wire       src_ready, dst_valid;
+    wire [31:0] dst_data;
+    reg        dst_ready;
+    reg [31:0] sent [0:NWORDS+15];
+    integer    seed_a, seed_b;
+    reg [31:0] ctr;
+    integer    r;
+
+    initial begin
+        src_clk = 0; dst_clk = 0; src_rst_n = 0; dst_rst_n = 0;
+        src_data = 0; src_valid = 0; dst_ready = 0; done = 0;
+        errors = 0; n_sent = 0; n_recv = 0; ctr = 32'h1000;
+        seed_a = SEED; seed_b = SEED + 77;
+    end
+    always #(SRC_PERIOD/2.0) src_clk = ~src_clk;
+    always #(DST_PERIOD/2.0) dst_clk = ~dst_clk;
+
+    cdc_handshake #(.WIDTH(32)) dut (
+        .src_clk(src_clk), .dst_clk(dst_clk),
+        .src_reset_n(src_rst_n), .dst_reset_n(dst_rst_n),
+        .src_data(src_data), .src_valid(src_valid), .src_ready(src_ready),
+        .dst_data(dst_data), .dst_valid(dst_valid), .dst_ready(dst_ready)
+    );
+
+    // Source side producer + accepted-word log
+    always @(posedge src_clk) begin
+        if (!src_rst_n) begin
+            src_valid <= 1'b0;
+            src_data  <= 32'd0;
+            ctr       <= 32'h1000;
+        end else if (HOLD_VALID) begin
+            src_valid <= (n_sent < NWORDS);
+            ctr       <= ctr + 32'd1;
+            src_data  <= ctr;
+            if (src_valid && src_ready) begin
+                sent[n_sent] = src_data;
+                n_sent = n_sent + 1;
+            end
+        end else begin
+            if (src_valid && src_ready) begin
+                sent[n_sent] = src_data;
+                n_sent = n_sent + 1;
+                ctr <= ctr + 32'd1;
+                src_data <= (ctr + 32'd1) * 32'h01010101;
+                r = $random(seed_a);
+                src_valid <= (n_sent < NWORDS) && (r[1:0] != 2'b00);
+            end else if (!src_valid) begin
+                r = $random(seed_a);
+                src_data  <= ctr * 32'h01010101;
+                src_valid <= (n_sent < NWORDS) && (r[1:0] != 2'b00);
+            end
+        end
+    end
+
+    // Destination consumer + scoreboard
+    always @(posedge dst_clk) begin
+        if (!dst_rst_n) begin
+            dst_ready <= 1'b0;
+        end else begin
+            if (DST_BP) begin
+                r = $random(seed_b);
+                dst_ready <= r[0];
+            end else
+                dst_ready <= 1'b1;
+            if (dst_valid && dst_ready) begin
+                if (n_recv >= n_sent) begin
+                    errors = errors + 1;   // word from nowhere (duplicate)
+                end else if (dst_data !== sent[n_recv]) begin
+                    errors = errors + 1;   // tear / gap / reorder
+                end
+                n_recv = n_recv + 1;
+            end
+        end
+    end
+
+    initial begin
+        #100;       src_rst_n = 1;
+        #37;        dst_rst_n = 1;
+        wait (n_sent >= NWORDS);
+        #3000;      // drain + look for late duplicates
+        done = 1;
+    end
+    // timeout so a stuck handshake is reported rather than hanging the run
+    initial begin
+        #2000000;
+        if (!done) begin
+            errors = errors + 1000;
+            done = 1;
+        end
+    end
+endmodule
+
 module tb_cdc_modules;
 
     // ── Clock periods (reflecting real system) ─────────────────
@@ -74,7 +194,8 @@ module tb_cdc_modules;
     ) uut_m3 (
         .src_clk  (m3_src_clk),
         .dst_clk  (m3_dst_clk),
-        .reset_n  (m3_reset_n),
+        .src_reset_n(m3_reset_n),
+        .dst_reset_n(m3_reset_n),
         .src_data (m3_src_data),
         .src_valid(m3_src_valid),
         .src_ready(m3_src_ready),
@@ -82,6 +203,24 @@ module tb_cdc_modules;
         .dst_valid(m3_dst_valid),
         .dst_ready(m3_dst_ready)
     );
+
+    // ── Stress instances (all run concurrently with the directed tests) ──
+    wire st0_done, st1_done, st2_done, st3_done, st4_done, st5_done;
+    wire [31:0] st0_err, st1_err, st2_err, st3_err, st4_err, st5_err;
+    wire [31:0] st0_sent, st1_sent, st2_sent, st3_sent, st4_sent, st5_sent;
+    wire [31:0] st0_recv, st1_recv, st2_recv, st3_recv, st4_recv, st5_recv;
+    hs_stress #(.SRC_PERIOD(8.333), .DST_PERIOD(10.0),  .HOLD_VALID(1), .DST_BP(0), .SEED(1))
+        st0 (.done(st0_done), .errors(st0_err), .n_sent(st0_sent), .n_recv(st0_recv));
+    hs_stress #(.SRC_PERIOD(10.0),  .DST_PERIOD(8.333), .HOLD_VALID(1), .DST_BP(0), .SEED(2))
+        st1 (.done(st1_done), .errors(st1_err), .n_sent(st1_sent), .n_recv(st1_recv));
+    hs_stress #(.SRC_PERIOD(8.333), .DST_PERIOD(10.0),  .HOLD_VALID(0), .DST_BP(0), .SEED(3))
+        st2 (.done(st2_done), .errors(st2_err), .n_sent(st2_sent), .n_recv(st2_recv));
+    hs_stress #(.SRC_PERIOD(10.0),  .DST_PERIOD(8.333), .HOLD_VALID(0), .DST_BP(0), .SEED(4))
+        st3 (.done(st3_done), .errors(st3_err), .n_sent(st3_sent), .n_recv(st3_recv));
+    hs_stress #(.SRC_PERIOD(8.333), .DST_PERIOD(10.0),  .HOLD_VALID(1), .DST_BP(1), .SEED(5))
+        st4 (.done(st4_done), .errors(st4_err), .n_sent(st4_sent), .n_recv(st4_recv));
+    hs_stress #(.SRC_PERIOD(10.0),  .DST_PERIOD(8.333), .HOLD_VALID(0), .DST_BP(1), .SEED(6))
+        st5 (.done(st5_done), .errors(st5_err), .n_sent(st5_sent), .n_recv(st5_recv));
 
     // ── Main test sequence ─────────────────────────────────────
     initial begin
@@ -512,6 +651,24 @@ module tb_cdc_modules;
         end
         check(m3_dst_valid === 1'b1, "M3: dst_valid asserts for post-recovery transfer");
         check(m3_dst_data === 32'hABCD0000, "M3: data 0xABCD0000 correct after reset recovery");
+
+        // ════════════════════════════════════════════════════════
+        // SECTION D: cdc_handshake back-to-back stress (data integrity)
+        // ════════════════════════════════════════════════════════
+        $display("\n=== Section D: cdc_handshake stress ===");
+        wait (st0_done && st1_done && st2_done && st3_done && st4_done && st5_done);
+        check(st0_err == 0 && st0_recv == st0_sent && st0_sent >= 300,
+              "M3 120>100 held valid: ordered, no dup/gap/tear");
+        check(st1_err == 0 && st1_recv == st1_sent && st1_sent >= 300,
+              "M3 100>120 held valid: ordered, no dup/gap/tear");
+        check(st2_err == 0 && st2_recv == st2_sent && st2_sent >= 300,
+              "M3 120>100 valid/ready: every word in order");
+        check(st3_err == 0 && st3_recv == st3_sent && st3_sent >= 300,
+              "M3 100>120 valid/ready: every word in order");
+        check(st4_err == 0 && st4_recv == st4_sent && st4_sent >= 300,
+              "M3 120>100 held valid + dst backpressure");
+        check(st5_err == 0 && st5_recv == st5_sent && st5_sent >= 300,
+              "M3 100>120 valid/ready + dst backpressure");
 
         // ════════════════════════════════════════════════════════
         // Summary
