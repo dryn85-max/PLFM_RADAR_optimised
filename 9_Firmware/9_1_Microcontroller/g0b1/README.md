@@ -82,7 +82,7 @@ verified against the datasheet AF table**.
 | EN_ADTR_VDD_SW | PA6 | out | ADTR1107 VDD_SW enable | verify vs UM2324 |
 | EN_ADTR_VSS_SW | PA7 | out | ADTR1107 VSS_SW enable | verify vs UM2324 |
 | EN_LNA | PA8 | out | ADTR LNA 3V3 rail enable | verify vs UM2324 |
-| EN_PA | PA9 | out | PA 5 V rail enable | verify vs UM2324 |
+| EN_PA | PC8 | out | PA 5 V rail enable | verify vs UM2324 |
 | FPGA DIG0 | PC0 | out | `new_chirp` | verify vs UM2324 |
 | FPGA DIG1 | PC1 | out | `new_elevation` | verify vs UM2324 |
 | FPGA DIG2 | PC2 | out | `new_azimuth` | verify vs UM2324 |

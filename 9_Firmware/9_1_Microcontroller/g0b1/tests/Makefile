@@ -10,7 +10,7 @@ CFLAGS    := -std=c11 -Wall -Wextra -Werror -g -O0 \
 BUILD     := build_n$(ADAR_COUNT)
 
 TESTS     := $(patsubst %.c,%,$(wildcard test_*.c))
-MOCKS     := $(wildcard mocks/*.c) ../Core/hal/hal_spi_common.c
+MOCKS     := $(wildcard mocks/*.c) ../Core/hal/hal_spi_common.c ../Core/hal/pins_table.c
 # Modules under test (empty until the drivers/app tasks add them).
 # um982_gps.c is compiled for the target only (needs the HAL UART handle).
 MODULES   := $(filter-out ../Core/drivers/um982_gps.c,$(wildcard ../Core/drivers/*.c)) $(wildcard ../Core/app/*.c)
