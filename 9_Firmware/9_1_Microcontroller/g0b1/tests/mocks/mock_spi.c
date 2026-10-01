@@ -7,8 +7,10 @@
 static uint8_t rxq_[RXQ_CAP];
 static size_t rxq_head_, rxq_tail_;
 static int fail_;
+static uint8_t default_rx_;
 
-void mock_spi_reset(void) { rxq_head_ = rxq_tail_ = 0; fail_ = 0; }
+void mock_spi_reset(void) { rxq_head_ = rxq_tail_ = 0; fail_ = 0; default_rx_ = 0; }
+void mock_spi_set_default_rx(uint8_t b) { default_rx_ = b; }
 
 void mock_spi_set_rx(const uint8_t *bytes, size_t n)
 {
@@ -38,7 +40,7 @@ int spi_xfer(spi_bus_t bus, gpio_t cs, const uint8_t *tx, uint8_t *rx, size_t n)
     }
     if (rx != NULL) {
         for (i = 0; i < n; i++) {
-            rx[i] = (rxq_head_ < rxq_tail_) ? rxq_[rxq_head_++] : 0;
+            rx[i] = (rxq_head_ < rxq_tail_) ? rxq_[rxq_head_++] : default_rx_;
         }
     } else {
         /* MISO still clocks: consume the queue to stay frame-aligned */

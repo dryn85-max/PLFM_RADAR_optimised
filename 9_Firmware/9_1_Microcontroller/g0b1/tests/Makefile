@@ -10,7 +10,8 @@ BUILD     := build_n$(ADAR_COUNT)
 TESTS     := $(patsubst %.c,%,$(wildcard test_*.c))
 MOCKS     := $(wildcard mocks/*.c) ../Core/hal/hal_spi_common.c
 # Modules under test (empty until the drivers/app tasks add them).
-MODULES   := $(wildcard ../Core/drivers/*.c) $(wildcard ../Core/app/*.c)
+# um982_gps.c is compiled for the target only (needs the HAL UART handle).
+MODULES   := $(filter-out ../Core/drivers/um982_gps.c,$(wildcard ../Core/drivers/*.c)) $(wildcard ../Core/app/*.c)
 
 .PHONY: all test clean check
 all: test
@@ -26,8 +27,9 @@ test: check $(addprefix $(BUILD)/,$(TESTS))
 # Per-test module exclusions: a test that supplies its own spy for a module
 # entry point must not link the real module that defines it (nothing is weakened:
 # test_fault/test_thermal keep their spies, test_sequencer links the real sequencer).
-EXCL_test_fault   := ../Core/app/sequencer.c
-EXCL_test_thermal := ../Core/app/sequencer.c
+# app.c calls the real sequencer, so it goes too.
+EXCL_test_fault   := ../Core/app/sequencer.c ../Core/app/app.c
+EXCL_test_thermal := ../Core/app/sequencer.c ../Core/app/app.c
 .SECONDEXPANSION:
 $(BUILD)/%: %.c $(MOCKS) $(MODULES) $(wildcard *.h mocks/*.h ../Core/hal/*.h ../Core/drivers/*.h ../Core/app/*.h)
 	@mkdir -p $(BUILD)
