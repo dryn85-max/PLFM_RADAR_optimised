@@ -69,11 +69,14 @@ GPT-5.5 is not used.
 
 ## Git workflow
 
-- `main` is for production releases only; topic branches are created from
-  `develop` (see CONTRIBUTING.md). Work on the branch you were assigned and
-  never push to `main` directly.
-- Changes reach `develop`/`main` only through a PR, and only when the owner
-  asks for one.
+- `main` is the only long-lived branch of this fork (CONTRIBUTING.md mentions
+  `develop`, which exists upstream but not here). Topic branches are created
+  from `main`; work on the branch you were assigned and never push to `main`
+  directly.
+- Changes reach `main` only through a PR, and only when the owner asks for
+  one.
+- When two tracks run in parallel, give each its own `git worktree` and merge
+  into the assigned branch; never let two agents commit in one working tree.
 - CI (`.github/workflows/ci-tests.yml`) must be green before merging.
 - Commit messages are descriptive; end them with the attribution lines the
   session provides.
@@ -88,7 +91,11 @@ GPT-5.5 is not used.
   values, bit widths and reset defaults. No SystemVerilog, no `$clog2`.
 - Python (GUI/scripts/tests): `uv run ruff check .`;
   `cd 9_Firmware/9_3_GUI && uv run pytest test_GUI_V65_Tk.py test_v7.py -v`.
-- MCU: `cd 9_Firmware/9_1_Microcontroller/tests && make clean && make`.
+- MCU, legacy F7 tree (reference only, do not modify):
+  `cd 9_Firmware/9_1_Microcontroller/tests && make clean && make`.
+- MCU, STM32G0B1 port: `cd 9_Firmware/9_1_Microcontroller/g0b1 && make test && make`
+  (arm-none-eabi-gcc; `make DIAG=0`, `make ADAR_COUNT=4` must also build).
+  See its README.
 - Cross-layer contracts:
   `uv run pytest 9_Firmware/tests/cross_layer/test_cross_layer_contract.py -v`.
 - Write the failing test first. Testbenches must be adversarial: boundary
@@ -103,3 +110,19 @@ GPT-5.5 is not used.
 - System-level invariants (across module, process and chip boundaries) must
   hold after every change: FPGA ↔ STM32 DIG0–7 GPIO contract, host USB packet
   format, opcode tables shared between RTL, GUI and tests.
+- **Line endings:** several RTL files mix CRLF and LF. Never rewrite a whole
+  file's endings; before committing, `git diff --stat` and
+  `git diff --ignore-cr-at-eol --stat` must report the same line counts.
+- **`run_regression.sh` rewrites tracked files.** Always restore
+  `tb/cosim/rx_final_doppler_out.csv` (and other `tb/cosim/*.csv`).
+  `tb/golden/golden_doppler.mem` is committed only when a change legitimately
+  alters the receiver output, and only after two runs give the same md5.
+- **Plans are not ground truth.** Bit widths, sign conventions, latencies and
+  testbench integer arithmetic in plans have been wrong more than once
+  (quadrant flips, 32-bit overflow, conjugate chirp). Re-derive them, fix
+  minimally, and report every deviation.
+- Delete any `uv.lock` that `uv run` creates; it is not part of this repo.
+- Hardware facts (register bits, pin functions, polarities) are checked
+  against the datasheets in `7_Components Datasheets and Application notes/`
+  and cited by table/page in code comments; anything not verifiable there is
+  marked VERIFY and listed in `BACKLOG.md`.
