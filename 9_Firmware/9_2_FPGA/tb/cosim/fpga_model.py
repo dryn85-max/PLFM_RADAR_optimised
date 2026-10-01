@@ -769,13 +769,20 @@ class FFTEngine:
     Output: saturate 32->16 bits. IFFT also >>>LOG2N before saturate.
     """
 
-    def __init__(self, n=1024, twiddle_file=None):
+    def __init__(self, n=1024, twiddle_file=None, internal_w=None):
         self.N = n
         self.LOG2N = n.bit_length() - 1
+        self.internal_w = internal_w          # None = unbounded (legacy), 24 = fft_engine default
         self.cos_rom = load_twiddle_rom(twiddle_file)
         # Working memory (32-bit signed I/Q pairs)
         self.mem_re = [0] * n
         self.mem_im = [0] * n
+
+    def _wrap(self, v):
+        """Wrap to internal_w bits two's complement (RTL stores INTERNAL_W bits)."""
+        if self.internal_w is None:
+            return v
+        return sign_extend(v & ((1 << self.internal_w) - 1), self.internal_w)
 
     @staticmethod
     def _bit_reverse(val, bits):
@@ -841,10 +848,10 @@ class FFTEngine:
                 t_im = prod_im >> 15
 
                 # Add/subtract
-                self.mem_re[even] = a_re + t_re
-                self.mem_im[even] = a_im + t_im
-                self.mem_re[odd] = a_re - t_re
-                self.mem_im[odd] = a_im - t_im
+                self.mem_re[even] = self._wrap(a_re + t_re)
+                self.mem_im[even] = self._wrap(a_im + t_im)
+                self.mem_re[odd] = self._wrap(a_re - t_re)
+                self.mem_im[odd] = self._wrap(a_im - t_im)
 
         # OUTPUT: read in linear order, saturate to 16 bits
         out_re = []

@@ -24,7 +24,7 @@ module tb_fft_engine;
 localparam N      = 16;
 localparam LOG2N  = 4;
 localparam DATA_W = 16;
-localparam INT_W  = 32;
+localparam INT_W  = 24;
 localparam TW_W   = 16;
 localparam CLK_PERIOD = 10;
 

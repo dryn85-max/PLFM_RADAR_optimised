@@ -477,6 +477,10 @@ run_test "FFT Engine" \
     tb/tb_fft_reg.vvp \
     tb/tb_fft_engine.v fft_engine.v
 
+run_test "FFT golden (c): 256-pt engine vs numpy" \
+    tb/tb_fft256_reg.vvp \
+    tb/golden/tb_fft256_golden.v fft_engine.v
+
 run_test "NCO (20 MHz IF, inferred accumulator)" \
     tb/tb_nco_reg.vvp \
     tb/tb_nco.v nco.v

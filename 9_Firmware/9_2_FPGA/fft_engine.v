@@ -3,38 +3,48 @@
 /**
  * fft_engine.v
  *
- * Synthesizable parameterized radix-2 DIT FFT/IFFT engine.
+ * Synthesizable parameterized radix-2 DIT FFT/IFFT engine, vendor-neutral.
  * Iterative single-butterfly architecture with quarter-wave twiddle ROM.
  *
  * Architecture:
- *   - LOAD:    Accept N input samples, store bit-reversed in BRAM
+ *   - LOAD:    Accept N input samples, store bit-reversed in the data RAM
  *   - COMPUTE: LOG2N stages x N/2 butterflies, 4-cycle pipeline:
- *              BF_READ:  Present BRAM addresses; register twiddle index
- *              BF_TW:    BRAM data valid → capture; twiddle ROM lookup from
- *                        registered index → capture cos/sin
- *              BF_MULT2: DSP multiply from registered data + twiddle → PREG
- *              BF_WRITE: Shift (bit-select from PREG, pure wiring) +
- *                        add/subtract + BRAM writeback
- *   - OUTPUT:  Stream N results (1/N scaling for IFFT)
+ *              BF_READ:  Present RAM addresses; register twiddle index
+ *              BF_TW:    RAM data valid -> capture; twiddle ROM lookup from
+ *                        registered index -> capture cos/sin
+ *              BF_MULT2: 4 real multiplies (INTERNAL_W x TWIDDLE_W) -> registered
+ *              BF_WRITE: >>> (TWIDDLE_W-1), add/subtract, RAM writeback
+ *   - OUTPUT:  Stream N results (1/N scaling for IFFT), saturated to DATA_W
  *
  * Twiddle index computed via barrel shift (idx << (LOG2N-1-stage)) instead
  * of general multiply, since the stride is always a power of 2.
  *
- * Data memory uses xpm_memory_tdpram (Xilinx Parameterized Macros) for
- * guaranteed BRAM mapping in synthesis.  Under `ifdef SIMULATION, a
- * behavioral Verilog-2001 model replaces the XPM so the design compiles
- * with Icarus Verilog or any non-Xilinx simulator.
+ * Widths: INTERNAL_W = 24 holds DATA_W = 16 plus 8 bits of growth for N = 256.
+ * With unity-gain twiddles the complex magnitude grows at most by N, so inputs
+ * with complex magnitude < 2^15 stay below 2^23 and never wrap.  Full-scale
+ * 16-bit I *and* Q (magnitude up to sqrt(2) * 2^15) can exceed 2^23 and wrap
+ * in the 24-bit words (wrap, not saturate: the Python model does the same);
+ * the receiver's gain control keeps the input below that.  Products are
+ * INTERNAL_W + TWIDDLE_W = 40 bits.
  *
- * Clock domain: single clock (clk), active-low async reset (reset_n).
+ * Multipliers: 4 (INTERNAL_W x TWIDDLE_W) -- a 24 x 16 product maps to one
+ * 27 x 27 DSP or two 18 x 18 multipliers depending on the device.
+ *
+ * Data memory: two inferable true-dual-port RAMs (re/im), N x INTERNAL_W,
+ * synchronous read, one write port per always block.  Twiddle ROM: N/4 x 16
+ * from TWIDDLE_FILE via $readmemh (Quartus and Vivado both infer ROM/LUT).
+ *
+ * Clock domain: single clock (clk), active-low async reset (reset_n) on the
+ * FSM only; datapath registers use synchronous reset.
  */
 
 module fft_engine #(
-    parameter N            = 1024,
-    parameter LOG2N        = 10,
+    parameter N            = 256,
+    parameter LOG2N        = 8,
     parameter DATA_W       = 16,
-    parameter INTERNAL_W   = 32,
+    parameter INTERNAL_W   = 24,
     parameter TWIDDLE_W    = 16,
-    parameter TWIDDLE_FILE = "fft_twiddle_1024.mem"
+    parameter TWIDDLE_FILE = "fft_twiddle_256.mem"
 )(
     input wire clk,
     input wire reset_n,
@@ -71,11 +81,11 @@ localparam [LOG2N:0] FFT_N_M1      = N - 1;
 // STATES
 // ============================================================================
 // Butterfly pipeline: READ → TW → MULT2 → WRITE (4 cycles)
-//   READ:  Present BRAM addresses; register twiddle index (bf_tw_idx)
-//   TW:    BRAM data valid → capture rd_a/rd_b; twiddle ROM lookup from
+//   READ:  Present RAM addresses; register twiddle index (bf_tw_idx)
+//   TW:    RAM data valid → capture rd_a/rd_b; twiddle ROM lookup from
 //          registered index → capture cos/sin
-//   MULT2: DSP multiply from registered data + twiddle → products in PREG
-//   WRITE: Shift (bit-select from PREG, pure wiring) + add/sub + BRAM writeback
+//   MULT2: multiply from registered data + twiddle → registered products
+//   WRITE: Shift (bit-select of the registered products) + add/sub + RAM writeback
 localparam [3:0] ST_IDLE     = 4'd0,
                  ST_LOAD     = 4'd1,
                  ST_BF_READ  = 4'd2,
@@ -92,7 +102,7 @@ assign busy = (state != ST_IDLE);
 // DATA MEMORY DECLARATIONS
 // ============================================================================
 
-// BRAM read data (registered outputs from port blocks)
+// RAM read data (registered outputs from port blocks)
 reg signed [INTERNAL_W-1:0] mem_rdata_a_re, mem_rdata_a_im;
 reg signed [INTERNAL_W-1:0] mem_rdata_b_re, mem_rdata_b_im;
 
@@ -102,7 +112,7 @@ reg signed [INTERNAL_W-1:0] mem_rdata_b_re, mem_rdata_b_im;
 localparam TW_QUARTER = N / 4;
 localparam TW_ADDR_W  = LOG2N - 2;
 
-(* rom_style = "block" *) reg signed [TWIDDLE_W-1:0] cos_rom [0:TW_QUARTER-1];
+reg signed [TWIDDLE_W-1:0] cos_rom [0:TW_QUARTER-1];
 
 initial begin
     $readmemh(TWIDDLE_FILE, cos_rom);
@@ -214,25 +224,25 @@ endfunction
 // ============================================================================
 // BUTTERFLY PIPELINE REGISTERS
 // ============================================================================
-// Stage 1 (BF_TW):    Capture BRAM read data into rd_a, rd_b
-// Stage 2 (BF_MULT2): DSP multiply + accumulate → raw products (bf_prod_re/im)
-// Stage 3 (BF_WRITE): Shift (bit-select, pure wiring) + add/subtract + BRAM writeback
+// Stage 1 (BF_TW):    Capture RAM read data into rd_a, rd_b
+// Stage 2 (BF_MULT2): multiply + accumulate → raw products (bf_prod_re/im)
+// Stage 3 (BF_WRITE): Shift (bit-select, pure wiring) + add/subtract + RAM writeback
 // ============================================================================
-reg signed [INTERNAL_W-1:0] rd_a_re, rd_a_im;    // registered BRAM port A data
-reg signed [INTERNAL_W-1:0] rd_b_re, rd_b_im;    // registered BRAM port B data (for twiddle multiply)
+reg signed [INTERNAL_W-1:0] rd_a_re, rd_a_im;    // registered RAM port A data
+reg signed [INTERNAL_W-1:0] rd_b_re, rd_b_im;    // registered RAM port B data (for twiddle multiply)
 
-// Raw DSP products — full precision, registered to break DSP→CARRY4 path
-// Width: 32*16 = 48 bits per multiply, sum of two = 49 bits max
-localparam PROD_W = INTERNAL_W + TWIDDLE_W;  // 48
-reg signed [PROD_W:0] bf_prod_re, bf_prod_im; // 49 bits to hold sum of two products
+// Raw products — full precision, registered to break the multiplier -> adder path
+// Width: INTERNAL_W + TWIDDLE_W per multiply, +1 for the sum of two
+localparam PROD_W = INTERNAL_W + TWIDDLE_W;  // 40
+reg signed [PROD_W:0] bf_prod_re, bf_prod_im; // 41 bits to hold sum of two products
 
 // Combinational add/subtract from registered values (used in BF_WRITE)
 reg signed [INTERNAL_W-1:0] bf_sum_re, bf_sum_im;
 reg signed [INTERNAL_W-1:0] bf_dif_re, bf_dif_im;
 
 always @(*) begin : bf_addsub
-    // Shift is pure bit-selection from DSP PREG (zero logic levels in HW).
-    // Path: PREG → wiring → 32-bit CARRY4 adder → BRAM write (~3 ns total).
+    // Shift is pure bit-selection from the product register (zero logic levels in HW).
+    // Path: product reg → wiring → INTERNAL_W-bit adder → RAM write.
     bf_sum_re = rd_a_re + (bf_prod_re >>> (TWIDDLE_W - 1));
     bf_sum_im = rd_a_im + (bf_prod_im >>> (TWIDDLE_W - 1));
     bf_dif_re = rd_a_re - (bf_prod_re >>> (TWIDDLE_W - 1));
@@ -240,11 +250,11 @@ always @(*) begin : bf_addsub
 end
 
 // ============================================================================
-// BRAM PORT ADDRESS / WE / WDATA — combinational mux (registered signals)
+// RAM PORT ADDRESS / WE / WDATA — combinational mux (registered signals)
 // ============================================================================
 // Drives port A and port B control signals from FSM state.
 // These are registered (via NBA) so they are stable at the next posedge
-// when the BRAM template blocks sample them. This avoids any NBA race.
+// when the RAM template blocks sample them. This avoids any NBA race.
 // ============================================================================
 reg                          bram_we_a;
 reg  [LOG2N-1:0]             bram_addr_a;
@@ -281,12 +291,12 @@ always @(*) begin : bram_port_mux
         bram_addr_b = bf_addr_odd;
     end
     ST_BF_TW: begin
-        // BRAM outputs are being read; addresses were set in BF_READ
+        // RAM outputs are being read; addresses were set in BF_READ
         // Data is being captured into pipeline regs (rd_a, rd_b)
     end
     ST_BF_MULT2: begin
-        // Twiddle multiply from registered BRAM data (rd_b_re/im)
-        // No BRAM access needed this cycle
+        // Twiddle multiply from registered RAM data (rd_b_re/im)
+        // No RAM access needed this cycle
     end
     ST_BF_WRITE: begin
         bram_we_a       = 1'b1;
@@ -309,206 +319,54 @@ always @(*) begin : bram_port_mux
 end
 
 // ============================================================================
-// DATA MEMORY — True Dual-Port BRAM
+// DATA MEMORY — two inferable true-dual-port RAMs (re / im)
 // ============================================================================
-// For synthesis: xpm_memory_tdpram (Xilinx Parameterized Macros)
-// For simulation: behavioral Verilog-2001 model (Icarus-compatible)
+// Port A and port B each live in their own always block with one write and
+// one synchronous read, which both Quartus and Vivado map to block RAM.
+// Read-during-write on the same address never happens: BF_WRITE writes two
+// distinct addresses and no port reads during BF_WRITE.
 // ============================================================================
+reg [INTERNAL_W-1:0] mem_re [0:N-1];
+reg [INTERNAL_W-1:0] mem_im [0:N-1];
 
-// XPM read-data wires (directly assigned to rdata regs below)
-wire [INTERNAL_W-1:0] xpm_douta_re, xpm_doutb_re;
-wire [INTERNAL_W-1:0] xpm_douta_im, xpm_doutb_im;
-
-always @(*) begin
-    mem_rdata_a_re = $signed(xpm_douta_re);
-    mem_rdata_a_im = $signed(xpm_douta_im);
-    mem_rdata_b_re = $signed(xpm_doutb_re);
-    mem_rdata_b_im = $signed(xpm_doutb_im);
-end
-
-`ifndef FFT_XPM_BRAM
-// ----------------------------------------------------------------------------
-// Default: behavioral TDP model (works with Icarus Verilog -g2001)
-// For Vivado synthesis, define FFT_XPM_BRAM to use xpm_memory_tdpram.
-// ----------------------------------------------------------------------------
-reg [INTERNAL_W-1:0] sim_mem_re [0:N-1];
-reg [INTERNAL_W-1:0] sim_mem_im [0:N-1];
+reg [INTERNAL_W-1:0] rdata_a_re, rdata_a_im;
+reg [INTERNAL_W-1:0] rdata_b_re, rdata_b_im;
 
 // Port A
-reg [INTERNAL_W-1:0] sim_douta_re, sim_douta_im;
 always @(posedge clk) begin
     if (bram_we_a) begin
-        sim_mem_re[bram_addr_a] <= bram_wdata_a_re;
-        sim_mem_im[bram_addr_a] <= bram_wdata_a_im;
+        mem_re[bram_addr_a] <= bram_wdata_a_re;
+        mem_im[bram_addr_a] <= bram_wdata_a_im;
     end
-    sim_douta_re <= sim_mem_re[bram_addr_a];
-    sim_douta_im <= sim_mem_im[bram_addr_a];
+    rdata_a_re <= mem_re[bram_addr_a];
+    rdata_a_im <= mem_im[bram_addr_a];
 end
-assign xpm_douta_re = sim_douta_re;
-assign xpm_douta_im = sim_douta_im;
 
 // Port B
-reg [INTERNAL_W-1:0] sim_doutb_re, sim_doutb_im;
 always @(posedge clk) begin
     if (bram_we_b) begin
-        sim_mem_re[bram_addr_b] <= bram_wdata_b_re;
-        sim_mem_im[bram_addr_b] <= bram_wdata_b_im;
+        mem_re[bram_addr_b] <= bram_wdata_b_re;
+        mem_im[bram_addr_b] <= bram_wdata_b_im;
     end
-    sim_doutb_re <= sim_mem_re[bram_addr_b];
-    sim_doutb_im <= sim_mem_im[bram_addr_b];
+    rdata_b_re <= mem_re[bram_addr_b];
+    rdata_b_im <= mem_im[bram_addr_b];
 end
-assign xpm_doutb_re = sim_doutb_re;
-assign xpm_doutb_im = sim_doutb_im;
 
+always @(*) begin
+    mem_rdata_a_re = $signed(rdata_a_re);
+    mem_rdata_a_im = $signed(rdata_a_im);
+    mem_rdata_b_re = $signed(rdata_b_re);
+    mem_rdata_b_im = $signed(rdata_b_im);
+end
+
+`ifdef SIMULATION
 integer init_i;
 initial begin
     for (init_i = 0; init_i < N; init_i = init_i + 1) begin
-        sim_mem_re[init_i] = 0;
-        sim_mem_im[init_i] = 0;
+        mem_re[init_i] = 0;
+        mem_im[init_i] = 0;
     end
 end
-
-`else
-// ----------------------------------------------------------------------------
-// Synthesis: xpm_memory_tdpram — guaranteed BRAM mapping
-// Enabled when FFT_XPM_BRAM is defined (e.g. in Vivado TCL script).
-// ----------------------------------------------------------------------------
-// Note: Vivado auto-finds XPM library; no `include needed.
-// Two instances: one for real, one for imaginary.
-// WRITE_MODE = "write_first" matches the behavioral TDP template.
-// READ_LATENCY = 1 (registered output).
-// ----------------------------------------------------------------------------
-
-xpm_memory_tdpram #(
-    .ADDR_WIDTH_A        (LOG2N),
-    .ADDR_WIDTH_B        (LOG2N),
-    .AUTO_SLEEP_TIME     (0),
-    .BYTE_WRITE_WIDTH_A  (INTERNAL_W),
-    .BYTE_WRITE_WIDTH_B  (INTERNAL_W),
-    .CASCADE_HEIGHT      (0),
-    .CLOCKING_MODE       ("common_clock"),
-    .ECC_BIT_RANGE       ("7:0"),
-    .ECC_MODE            ("no_ecc"),
-    .ECC_TYPE            ("none"),
-    .IGNORE_INIT_SYNTH   (0),
-    .MEMORY_INIT_FILE    ("none"),
-    .MEMORY_INIT_PARAM   ("0"),
-    .MEMORY_OPTIMIZATION ("true"),
-    .MEMORY_PRIMITIVE     ("block"),
-    .MEMORY_SIZE         (N * INTERNAL_W),
-    .MESSAGE_CONTROL     (0),
-    .RAM_DECOMP          ("auto"),
-    .READ_DATA_WIDTH_A   (INTERNAL_W),
-    .READ_DATA_WIDTH_B   (INTERNAL_W),
-    .READ_LATENCY_A      (1),
-    .READ_LATENCY_B      (1),
-    .READ_RESET_VALUE_A  ("0"),
-    .READ_RESET_VALUE_B  ("0"),
-    .RST_MODE_A          ("SYNC"),
-    .RST_MODE_B          ("SYNC"),
-    .SIM_ASSERT_CHK      (0),
-    .USE_EMBEDDED_CONSTRAINT (0),
-    .USE_MEM_INIT        (1),
-    .USE_MEM_INIT_MMI    (0),
-    .WAKEUP_TIME         ("disable_sleep"),
-    .WRITE_DATA_WIDTH_A  (INTERNAL_W),
-    .WRITE_DATA_WIDTH_B  (INTERNAL_W),
-    .WRITE_MODE_A        ("read_first"),
-    .WRITE_MODE_B        ("read_first"),
-    .WRITE_PROTECT       (1)
-) u_bram_re (
-    .clka            (clk),
-    .clkb            (clk),
-    .rsta            (1'b0),
-    .rstb            (1'b0),
-    .ena             (1'b1),
-    .enb             (1'b1),
-    .regcea          (1'b1),
-    .regceb          (1'b1),
-    .addra           (bram_addr_a),
-    .addrb           (bram_addr_b),
-    .dina            (bram_wdata_a_re),
-    .dinb            (bram_wdata_b_re),
-    .wea             (bram_we_a),
-    .web             (bram_we_b),
-    .douta           (xpm_douta_re),
-    .doutb           (xpm_doutb_re),
-    .injectdbiterra  (1'b0),
-    .injectdbiterrb  (1'b0),
-    .injectsbiterra  (1'b0),
-    .injectsbiterrb  (1'b0),
-    .sbiterra        (),
-    .sbiterrb        (),
-    .dbiterra        (),
-    .dbiterrb        (),
-    .sleep           (1'b0)
-);
-
-xpm_memory_tdpram #(
-    .ADDR_WIDTH_A        (LOG2N),
-    .ADDR_WIDTH_B        (LOG2N),
-    .AUTO_SLEEP_TIME     (0),
-    .BYTE_WRITE_WIDTH_A  (INTERNAL_W),
-    .BYTE_WRITE_WIDTH_B  (INTERNAL_W),
-    .CASCADE_HEIGHT      (0),
-    .CLOCKING_MODE       ("common_clock"),
-    .ECC_BIT_RANGE       ("7:0"),
-    .ECC_MODE            ("no_ecc"),
-    .ECC_TYPE            ("none"),
-    .IGNORE_INIT_SYNTH   (0),
-    .MEMORY_INIT_FILE    ("none"),
-    .MEMORY_INIT_PARAM   ("0"),
-    .MEMORY_OPTIMIZATION ("true"),
-    .MEMORY_PRIMITIVE     ("block"),
-    .MEMORY_SIZE         (N * INTERNAL_W),
-    .MESSAGE_CONTROL     (0),
-    .RAM_DECOMP          ("auto"),
-    .READ_DATA_WIDTH_A   (INTERNAL_W),
-    .READ_DATA_WIDTH_B   (INTERNAL_W),
-    .READ_LATENCY_A      (1),
-    .READ_LATENCY_B      (1),
-    .READ_RESET_VALUE_A  ("0"),
-    .READ_RESET_VALUE_B  ("0"),
-    .RST_MODE_A          ("SYNC"),
-    .RST_MODE_B          ("SYNC"),
-    .SIM_ASSERT_CHK      (0),
-    .USE_EMBEDDED_CONSTRAINT (0),
-    .USE_MEM_INIT        (1),
-    .USE_MEM_INIT_MMI    (0),
-    .WAKEUP_TIME         ("disable_sleep"),
-    .WRITE_DATA_WIDTH_A  (INTERNAL_W),
-    .WRITE_DATA_WIDTH_B  (INTERNAL_W),
-    .WRITE_MODE_A        ("read_first"),
-    .WRITE_MODE_B        ("read_first"),
-    .WRITE_PROTECT       (1)
-) u_bram_im (
-    .clka            (clk),
-    .clkb            (clk),
-    .rsta            (1'b0),
-    .rstb            (1'b0),
-    .ena             (1'b1),
-    .enb             (1'b1),
-    .regcea          (1'b1),
-    .regceb          (1'b1),
-    .addra           (bram_addr_a),
-    .addrb           (bram_addr_b),
-    .dina            (bram_wdata_a_im),
-    .dinb            (bram_wdata_b_im),
-    .wea             (bram_we_a),
-    .web             (bram_we_b),
-    .douta           (xpm_douta_im),
-    .doutb           (xpm_doutb_im),
-    .injectdbiterra  (1'b0),
-    .injectdbiterrb  (1'b0),
-    .injectsbiterra  (1'b0),
-    .injectsbiterrb  (1'b0),
-    .sbiterra        (),
-    .sbiterrb        (),
-    .dbiterra        (),
-    .dbiterrb        (),
-    .sleep           (1'b0)
-);
-
 `endif
 
 // ============================================================================
@@ -634,20 +492,23 @@ always @(posedge clk or negedge reset_n) begin
 end
 
 // ============================================================================
-// MAIN FSM — Block 2: DSP/BRAM Datapath Pipeline (sync reset)
+// MAIN FSM — Block 2: datapath pipeline (sync reset)
 // ============================================================================
-// Sync reset enables Vivado to absorb these registers into hard blocks:
-//   - rd_b_re/im     → DSP48E1 AREG (butterfly multiply A-port input)
-//   - rd_tw_cos/sin  → DSP48E1 BREG (butterfly multiply B-port input)
-//   - bf_prod_re/im  → DSP48E1 PREG (multiply output register)
-//   - rd_a_re/im     → BRAM output register (REGCE)
-//   - rd_tw_idx      → pipeline register (twiddle index)
-//   - rd_addr_even/odd, rd_inverse — internal pipeline
-//
-// These registers are only meaningful during COMPUTE states (BF_READ through
-// BF_WRITE). Their values are always overwritten before use after every FSM
-// transition, so sync reset is functionally equivalent to async reset.
+// Synchronous reset keeps these registers eligible for absorption into the
+// multiplier / RAM output registers of either vendor:
+//   - rd_b_re/im, rd_tw_cos/sin -> multiplier input registers
+//   - bf_prod_re/im             -> multiplier output registers
+//   - rd_a_re/im                -> RAM output registers
+// They are only meaningful during COMPUTE states and are always rewritten
+// before use, so sync reset is functionally equivalent to async reset.
 // ============================================================================
+
+// Butterfly products — the only multipliers in the engine (4)
+wire signed [PROD_W-1:0] p_rc = rd_b_re * rd_tw_cos;
+wire signed [PROD_W-1:0] p_is = rd_b_im * rd_tw_sin;
+wire signed [PROD_W-1:0] p_ic = rd_b_im * rd_tw_cos;
+wire signed [PROD_W-1:0] p_rs = rd_b_re * rd_tw_sin;
+
 always @(posedge clk) begin
     if (!reset_n) begin
         rd_tw_cos      <= 0;
@@ -667,7 +528,7 @@ always @(posedge clk) begin
 
         ST_BF_READ: begin
             // Register butterfly addresses and twiddle index.
-            // BRAM read initiated by bram_port_mux (addresses presented
+            // RAM read initiated by bram_port_mux (addresses presented
             // combinationally); data arrives next cycle (ST_BF_TW).
             // Twiddle ROM lookup uses rd_tw_idx next cycle, breaking the
             // address-calc -> ROM -> quarter-wave-mux combinational path.
@@ -678,8 +539,8 @@ always @(posedge clk) begin
         end
 
         ST_BF_TW: begin
-            // BRAM data valid this cycle (1-cycle read latency).
-            // Capture BRAM data into pipeline regs.
+            // RAM data valid this cycle (1-cycle read latency).
+            // Capture RAM data into pipeline regs.
             // Twiddle ROM lookup is combinational from registered rd_tw_idx
             // -- capture the result into rd_tw_cos/sin.
             rd_a_re   <= mem_rdata_a_re;
@@ -691,16 +552,15 @@ always @(posedge clk) begin
         end
 
         ST_BF_MULT2: begin
-            // Compute raw twiddle products from registered BRAM data.
-            // Path: register -> DSP48E1 multiply-accumulate -> PREG
-            // The arithmetic shift and add/subtract are handled combinationally
-            // in BF_WRITE (shift is pure bit-select, zero logic levels).
+            // Four shared products (INTERNAL_W x TWIDDLE_W); forward and inverse
+            // twiddles differ only in the sign of the sin terms.  The arithmetic
+            // shift and add/subtract are done combinationally in BF_WRITE.
             if (!rd_inverse) begin
-                bf_prod_re <= rd_b_re * rd_tw_cos + rd_b_im * rd_tw_sin;
-                bf_prod_im <= rd_b_im * rd_tw_cos - rd_b_re * rd_tw_sin;
+                bf_prod_re <= p_rc + p_is;
+                bf_prod_im <= p_ic - p_rs;
             end else begin
-                bf_prod_re <= rd_b_re * rd_tw_cos - rd_b_im * rd_tw_sin;
-                bf_prod_im <= rd_b_im * rd_tw_cos + rd_b_re * rd_tw_sin;
+                bf_prod_re <= p_rc - p_is;
+                bf_prod_im <= p_ic + p_rs;
             end
         end
 
