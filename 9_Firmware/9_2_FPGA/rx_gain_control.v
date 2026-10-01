@@ -29,14 +29,14 @@
  * Timing: 1-cycle data latency, valid-in/valid-out pipeline.
  *
  * Insertion point in radar_receiver_final.v:
- *   ddc_input_interface → rx_gain_control → matched_filter_multi_segment
+ *   ddc → rx_gain_control → matched_filter_multi_segment
  */
 
 module rx_gain_control (
     input  wire        clk,
     input  wire        reset_n,
 
-    // Data input (from DDC / ddc_input_interface)
+    // Data input (from the DDC)
     input  wire signed [15:0] data_i_in,
     input  wire signed [15:0] data_q_in,
     input  wire               valid_in,

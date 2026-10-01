@@ -663,7 +663,8 @@ class FIRFilter:
 
 class DDCInputInterface:
     """
-    Bit-accurate model of ddc_input_interface.v
+    Bit-accurate model of the 18 -> 16-bit rounding stage (formerly
+    ddc_input_interface.v, removed from the RTL: ddc.v now outputs 16 bit directly)
 
     Converts 18-bit FIR output to 16-bit with rounding:
       adc_i = ddc_i[17:2] + ddc_i[1]
@@ -772,7 +773,8 @@ class FFTEngine:
     def __init__(self, n=1024, twiddle_file=None, internal_w=None):
         self.N = n
         self.LOG2N = n.bit_length() - 1
-        self.internal_w = internal_w          # None = unbounded (legacy), 24 = fft_engine default
+        self.internal_w = internal_w          # None = unbounded (legacy); 25 = fft_engine default
+        # (24 is enough for the 16-pt Doppler engine)
         self.cos_rom = load_twiddle_rom(twiddle_file)
         # Working memory (32-bit signed I/Q pairs)
         self.mem_re = [0] * n

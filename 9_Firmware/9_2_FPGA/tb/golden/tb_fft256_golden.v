@@ -3,8 +3,10 @@
 // tb_fft256_golden.v — golden test (c): 256-point fft_engine vs numpy FFT.
 // Tolerance (see gen_fft_golden.py): forward |err| <= 256 per component and
 // sum of squared errors <= N * 32^2 (RMS <= 32); inverse +-4 per component.
-// Additionally bit-exact vs tb/cosim/fpga_model.py FFTEngine(internal_w=24),
-// after a mid-load reset, and for a full-scale input that wraps internally.
+// Additionally bit-exact vs tb/cosim/fpga_model.py FFTEngine(internal_w=25),
+// after a mid-load reset, and for a full-scale I/Q input whose exact spectrum
+// exceeds 2^23 (it wrapped at 24 bits): the output must equal the exact numpy
+// FFT saturated to 16 bits (no internal wrap), peak bin = +32767.
 // ============================================================================
 module tb_fft256_golden;
     localparam N = 256, LOG2N = 8, CLK_PERIOD = 10;
@@ -18,13 +20,15 @@ module tb_fft256_golden;
     reg [15:0] mdl_i [0:N-1], mdl_q [0:N-1];      // bit-exact model output, nominal vector
     reg [15:0] fs_in_i [0:N-1], fs_in_q [0:N-1];  // full-scale adversarial input
     reg [15:0] fs_mdl_i [0:N-1], fs_mdl_q [0:N-1];
+    reg [15:0] fs_np_i [0:N-1], fs_np_q [0:N-1];  // numpy FFT of the full-scale input, saturated to 16 bit
+    integer fs_peak;
     reg use_fs;
     reg signed [15:0] cap_re [0:N-1], cap_im [0:N-1];
     integer mism, cap_count, i, err_re, err_im, max_err, sq_sum, pass_count, fail_count, test_num;
 
     always #(CLK_PERIOD/2) clk = ~clk;
 
-    fft_engine #(.N(N), .LOG2N(LOG2N), .DATA_W(16), .INTERNAL_W(24), .TWIDDLE_W(16),
+    fft_engine #(.N(N), .LOG2N(LOG2N), .DATA_W(16), .INTERNAL_W(25), .TWIDDLE_W(16),
                  .TWIDDLE_FILE("fft_twiddle_256.mem")) dut (
         .clk(clk), .reset_n(reset_n), .start(start), .inverse(inverse),
         .din_re(din_re), .din_im(din_im), .din_valid(din_valid),
@@ -66,6 +70,7 @@ module tb_fft256_golden;
         $readmemh("tb/golden/fft256_mdl_i.hex", mdl_i); $readmemh("tb/golden/fft256_mdl_q.hex", mdl_q);
         $readmemh("tb/golden/fft256_fs_in_i.hex", fs_in_i); $readmemh("tb/golden/fft256_fs_in_q.hex", fs_in_q);
         $readmemh("tb/golden/fft256_fs_mdl_i.hex", fs_mdl_i); $readmemh("tb/golden/fft256_fs_mdl_q.hex", fs_mdl_q);
+        $readmemh("tb/golden/fft256_fs_np_i.hex", fs_np_i); $readmemh("tb/golden/fft256_fs_np_q.hex", fs_np_q);
         use_fs = 0;
         clk = 0; reset_n = 0; start = 0; inverse = 0; din_valid = 0; din_re = 0; din_im = 0;
         cap_count = 0; pass_count = 0; fail_count = 0; test_num = 0;
@@ -99,12 +104,12 @@ module tb_fft256_golden;
         check(cap_count == N, "inverse: 256 outputs");
         check(max_err <= 4, "inverse: round trip within +-4");
 
-        // ---- bit-exact vs the Python model (24-bit internal width) ----
+        // ---- bit-exact vs the Python model (25-bit internal width) ----
         run_fft(0);
         mism = 0;
         for (i = 0; i < N; i = i + 1)
             if (cap_re[i] !== $signed(mdl_i[i]) || cap_im[i] !== $signed(mdl_q[i])) mism = mism + 1;
-        check(cap_count == N && mism == 0, "forward: bit-exact vs fpga_model (24-bit)");
+        check(cap_count == N && mism == 0, "forward: bit-exact vs fpga_model (25-bit)");
 
         // ---- reset in the middle of a transform, then a clean run ----
         @(posedge clk); #1; start = 1; inverse = 0; @(posedge clk); #1; start = 0;
@@ -119,13 +124,24 @@ module tb_fft256_golden;
             if (cap_re[i] !== $signed(mdl_i[i]) || cap_im[i] !== $signed(mdl_q[i])) mism = mism + 1;
         check(cap_count == N && mism == 0, "forward after mid-load reset: bit-exact");
 
-        // ---- full-scale I/Q: internal words wrap exactly like the model ----
+        // ---- full-scale I/Q: exact spectrum > 2^23 per component, must NOT wrap ----
         use_fs = 1;
         run_fft(0);
         mism = 0;
         for (i = 0; i < N; i = i + 1)
             if (cap_re[i] !== $signed(fs_mdl_i[i]) || cap_im[i] !== $signed(fs_mdl_q[i])) mism = mism + 1;
         check(cap_count == N && mism == 0, "full-scale input: bit-exact vs model");
+        max_err = 0; fs_peak = 0;
+        for (i = 0; i < N; i = i + 1) begin
+            err_re = cap_re[i] - $signed(fs_np_i[i]); if (err_re < 0) err_re = -err_re;
+            err_im = cap_im[i] - $signed(fs_np_q[i]); if (err_im < 0) err_im = -err_im;
+            if (err_re > max_err) max_err = err_re;
+            if (err_im > max_err) max_err = err_im;
+            if (cap_re[i] > fs_peak) fs_peak = cap_re[i];
+        end
+        $display("full-scale: max_err vs saturated numpy = %0d, peak = %0d", max_err, fs_peak);
+        check(max_err <= MAX_ABS, "full-scale input: no internal wrap (equals saturated numpy FFT)");
+        check(fs_peak == 32767 && cap_re[5] == 16'sd32767, "full-scale input: peak bin 5 equals the exact value (+32767)");
         use_fs = 0;
 
         $display("\nResults: %0d/%0d passed", pass_count, pass_count + fail_count);

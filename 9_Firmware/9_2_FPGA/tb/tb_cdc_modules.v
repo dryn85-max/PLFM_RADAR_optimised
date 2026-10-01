@@ -3,7 +3,7 @@
 module tb_cdc_modules;
 
     // ── Clock periods (reflecting real system) ─────────────────
-    localparam SRC_CLK_PERIOD = 2.5;    // 400 MHz (ADC domain)
+    localparam SRC_CLK_PERIOD = 2.5;    // fast source clock (4:1 ratio to the 100 MHz processing domain)
     localparam DST_CLK_PERIOD = 10.0;   // 100 MHz (processing domain)
     // For handshake tests, use different ratio
     localparam HS_SRC_PERIOD  = 10.0;   // 100 MHz
@@ -151,7 +151,7 @@ module tb_cdc_modules;
         @(posedge m2_dst_clk);
 
         // A single src_clk pulse may or may not be captured
-        // At 400:100 ratio, 1 src_clk pulse = 2.5ns, dst_clk period = 10ns
+        // At the 4:1 source:destination ratio, 1 src_clk pulse = 2.5ns, dst_clk period = 10ns
         // A single src_clk pulse might be missed — that's expected behavior
         m2_src_signal = 1;
         @(posedge m2_src_clk); #1;
@@ -165,7 +165,7 @@ module tb_cdc_modules;
                 @(posedge m2_dst_clk); #1;
                 if (m2_dst_signal) saw_pulse = 1;
             end
-            // Single src_clk pulse at 400MHz might be too short for 100MHz dst
+            // A single 2.5 ns src_clk pulse might be too short for the 10 ns dst clock
             // This is a known limitation of single-bit synchronizers
             $display("  Single src_clk pulse captured: %b (may miss — expected for narrow pulse)",
                      saw_pulse);

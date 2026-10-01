@@ -12,8 +12,11 @@
 //
 // Mixer truncation: adc_signed is an integer in [-2048, 2047]; the NCO is Q15
 // (+-32767).  The 28-bit product has 15 fractional bits; keeping bits [27:12]
-// drops 12 of them, so full-scale ADC x full-scale NCO = +-16384 (bit 14) and
-// one bit of headroom is left for the CIC pass-band ripple.
+// drops 12 of them.  The NCO peak is 32757 (LUT[63] of round(32767*sin) over
+// 64 entries; 32767 itself is never reached), so ADC rail (-2048) x NCO peak
+// gives the extremes -16379 / +16378 after the truncation, inside the
+// +16383 / -16384 range of a 15-bit value (|.| <= 2^14); one bit of headroom
+// is left for the CIC pass-band ripple.
 //
 // NCO phase alignment: the NCO advances only on accepted samples and starts
 // at phase 0, so sample n is mixed with phase PHASE_INC*n (DITHER_EN = 0).

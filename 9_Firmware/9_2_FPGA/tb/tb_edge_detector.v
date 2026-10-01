@@ -8,7 +8,7 @@ module tb_edge_detector;
     reg  signal_in;
     wire rising_falling_edge;
 
-    // 400 MHz clock → 2.5 ns period
+    // 2.5 ns test clock period (the module is clock-agnostic; the system runs at 100 MHz)
     localparam CLK_PERIOD = 2.5;
 
     always #(CLK_PERIOD/2) clk = ~clk;

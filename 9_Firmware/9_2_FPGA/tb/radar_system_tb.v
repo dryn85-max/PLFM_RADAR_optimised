@@ -287,7 +287,7 @@ initial begin
         adc_data_pattern = adc_data_pattern + ($random % 16) - 8;
         
         // CMOS output (8-bit pattern in the 12-bit ADC word)
-        adc_data = {adc_data_pattern, 4'h0};
+        adc_data <= {adc_data_pattern, 4'h0};
     end
 end
 

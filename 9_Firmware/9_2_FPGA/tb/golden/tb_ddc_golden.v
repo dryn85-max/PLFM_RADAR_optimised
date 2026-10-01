@@ -3,6 +3,7 @@
 // tb_ddc_golden.v — golden test (a): ddc.v vs the integer model in
 // tb/golden/gen_ddc_golden.py.  Exact match required (tolerance 0).
 // DITHER_EN = 0 so the NCO phase of sample n is PHASE_INC*n.
+// Two vectors: the 10..30 MHz IF chirp, and a full-scale rail-to-rail tone.
 // ============================================================================
 module tb_ddc_golden;
     localparam CLK_PERIOD = 10.0;
@@ -52,25 +53,40 @@ module tb_ddc_golden;
         end
     end
 
+    task run_vector;
+        input [1023:0] adc_file;
+        input [1023:0] gi_file;
+        input [1023:0] gq_file;
+        input [511:0]  tag;
+        begin
+            $readmemh(adc_file, adc_mem);
+            $readmemh(gi_file, gold_i);
+            $readmemh(gq_file, gold_q);
+            reset_n = 0; adc_valid = 0; adc_data = 12'h800;
+            out_count = 0; mismatches = 0; first_bad = -1;
+            repeat (4) @(posedge clk); #1;
+            reset_n = 1;
+            repeat (4) @(posedge clk); #1;          // let the mixers_enable synchronizer settle
+            for (i = 0; i < N_IN; i = i + 1) begin
+                adc_data = adc_mem[i]; adc_valid = 1'b1;
+                @(posedge clk); #1;
+            end
+            adc_valid = 1'b0; adc_data = 12'h800;
+            repeat (60) @(posedge clk); #1;        // drain NCO(4)+mixer(3)+CIC(6)+FIR(7)+out(1)
+            $display("%0s: outputs=%0d mismatches=%0d first_bad=%0d", tag, out_count, mismatches, first_bad);
+            check(out_count == N_OUT, "exactly N_IN/4 baseband samples");
+            check(mismatches == 0, "all baseband samples match the integer model exactly");
+        end
+    endtask
+
     initial begin
-        $readmemh("tb/golden/ddc_adc_in.hex", adc_mem);
-        $readmemh("tb/golden/ddc_golden_i.hex", gold_i);
-        $readmemh("tb/golden/ddc_golden_q.hex", gold_q);
         clk = 0; reset_n = 0; adc_valid = 0; adc_data = 12'h800;
         out_count = 0; mismatches = 0; first_bad = -1;
         pass_count = 0; fail_count = 0; test_num = 0;
-        repeat (4) @(posedge clk); #1;
-        reset_n = 1;
-        repeat (4) @(posedge clk); #1;          // let the mixers_enable synchronizer settle
-        for (i = 0; i < N_IN; i = i + 1) begin
-            adc_data = adc_mem[i]; adc_valid = 1'b1;
-            @(posedge clk); #1;
-        end
-        adc_valid = 1'b0; adc_data = 12'h800;
-        repeat (60) @(posedge clk); #1;        // drain NCO(4)+mixer(3)+CIC(6)+FIR(7)+out(1)
-        $display("outputs=%0d mismatches=%0d first_bad=%0d", out_count, mismatches, first_bad);
-        check(out_count == N_OUT, "exactly N_IN/4 baseband samples");
-        check(mismatches == 0, "all baseband samples match the integer model exactly");
+        // chirp at 1000 LSB amplitude, then a rail-to-rail 20 MHz-IF tone
+        // (-2048..2047) for the mixer / CIC / FIR extremes
+        run_vector("tb/golden/ddc_adc_in.hex", "tb/golden/ddc_golden_i.hex", "tb/golden/ddc_golden_q.hex", "chirp");
+        run_vector("tb/golden/ddc_adc_fs_in.hex", "tb/golden/ddc_fs_golden_i.hex", "tb/golden/ddc_fs_golden_q.hex", "full-scale");
         $display("\nResults: %0d/%0d passed", pass_count, pass_count + fail_count);
         $finish;
     end

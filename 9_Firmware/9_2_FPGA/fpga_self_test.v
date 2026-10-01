@@ -30,7 +30,7 @@ module fpga_self_test (
     output reg  [7:0]  result_detail,   // Diagnostic detail (first failing test ID + info)
 
     // ADC raw capture interface (active during Test 4)
-    input  wire [15:0] adc_data_in,     // Raw ADC sample (from ad9484_interface)
+    input  wire [15:0] adc_data_in,     // Raw ADC sample (from adc_cmos_interface)
     input  wire        adc_valid_in,    // ADC sample valid
     output reg         capture_active,  // High during ADC capture window
     output reg  [15:0] capture_data,    // Captured ADC sample for USB readout

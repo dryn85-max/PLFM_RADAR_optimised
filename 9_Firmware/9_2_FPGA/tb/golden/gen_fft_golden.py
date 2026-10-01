@@ -14,12 +14,12 @@ component per butterfly, 2^(7-s) paths per stage, so RMS ~ sqrt(255/12 * 2)
 low bins) that brings the measured value to ~21.  The test limits (max 256
 per component, RMS 32) are the measured values for this fixed-seed vector
 (max 187, RMS 21) plus ~35 % margin; the script asserts that the bit-accurate
-model (fpga_model.FFTEngine, internal_w=24) satisfies them, so the RTL
+model (fpga_model.FFTEngine, internal_w=25) satisfies them, so the RTL
 (bit-identical to the model) does too.
 Inverse: input = the rounded numpy spectrum, expected = original samples,
 tolerance +-4 per component (1/N scaling truncation).
 Writes fft256_in_i/q.hex, fft256_fwd_i/q.hex (numpy), fft256_mdl_i/q.hex (bit-exact
-model output) and the full-scale fft256_fs_* set (16-bit).
+model output) and the full-scale fft256_fs_* set (16-bit; _np = saturated numpy).
 """
 import os
 import sys
@@ -35,6 +35,7 @@ from radar_params import write_hex  # noqa: E402
 N = 256
 MAX_ABS_ERR = 256
 MAX_RMS_ERR = 32
+INTERNAL_W = 25   # fft_engine default: |X| <= sqrt(2) * 2^23 < 2^24 for N = 256
 
 
 def main():
@@ -48,7 +49,7 @@ def main():
     Xi, Xq = np.rint(X.real).astype(int), np.rint(X.imag).astype(int)
 
     twiddle = os.path.join(HERE, "..", "..", "fft_twiddle_256.mem")
-    model = FFTEngine(n=N, twiddle_file=twiddle, internal_w=24)
+    model = FFTEngine(n=N, twiddle_file=twiddle, internal_w=INTERNAL_W)
     mi, mq = model.compute(list(xi), list(xq), inverse=False)
     err = np.hypot(np.array(mi) - Xi, np.array(mq) - Xq)
     print(f"model vs numpy (forward): max {err.max():.1f}  rms {np.sqrt((err**2).mean()):.1f}")  # noqa: T201
@@ -64,15 +65,32 @@ def main():
     write_hex(os.path.join(HERE, "fft256_mdl_q.hex"), mq, 16)
 
     # Adversarial full-scale vector (square-wave I/Q at the worst phase): the
-    # 24-bit internal words can wrap by up to sqrt(2) over 2^23; the RTL must
-    # wrap exactly like the model (no saturation inside the butterflies).
+    # exact spectrum reaches ~1.27 * 2^23 per component (10.68e6), which wrapped
+    # in 24-bit internal words.  With INTERNAL_W = 25 nothing wraps: the engine
+    # output equals the exact numpy FFT saturated to 16 bits (peak bin =
+    # +32767) up to the documented truncation tolerance.
     fi = np.where(np.cos(2 * np.pi * 5 * n / N) >= 0, 32767, -32768)
     fq = np.where(np.sin(2 * np.pi * 5 * n / N) >= 0, 32767, -32768)
+    FX = np.fft.fft(fi + 1j * fq)
+    assert np.abs(FX.real).max() > 2 ** 23, "vector must exceed the 24-bit range"
+    fnp_i = np.clip(np.rint(FX.real), -32768, 32767).astype(int)
+    fnp_q = np.clip(np.rint(FX.imag), -32768, 32767).astype(int)
     fmi, fmq = model.compute(list(fi), list(fq), inverse=False)
+    fs_err = max(np.abs(np.array(fmi) - fnp_i).max(), np.abs(np.array(fmq) - fnp_q).max())
+    print(f"full-scale: model vs saturated numpy max err {fs_err}")  # noqa: T201
+    assert fs_err <= MAX_ABS_ERR, "no-wrap check failed"
+    pk = int(np.argmax(np.abs(FX)))
+    assert fmi[pk] == fnp_i[pk] == 32767, "peak must equal the exact (saturated) value"
+    # a 24-bit engine must be caught by this vector
+    narrow = FFTEngine(n=N, twiddle_file=twiddle, internal_w=24)
+    wi, _ = narrow.compute(list(fi), list(fq), inverse=False)
+    assert np.abs(np.array(wi) - fnp_i).max() > MAX_ABS_ERR, "vector does not detect a 24-bit wrap"
     write_hex(os.path.join(HERE, "fft256_fs_in_i.hex"), fi, 16)
     write_hex(os.path.join(HERE, "fft256_fs_in_q.hex"), fq, 16)
     write_hex(os.path.join(HERE, "fft256_fs_mdl_i.hex"), fmi, 16)
     write_hex(os.path.join(HERE, "fft256_fs_mdl_q.hex"), fmq, 16)
+    write_hex(os.path.join(HERE, "fft256_fs_np_i.hex"), fnp_i, 16)
+    write_hex(os.path.join(HERE, "fft256_fs_np_q.hex"), fnp_q, 16)
 
     write_hex(os.path.join(HERE, "fft256_in_i.hex"), xi, 16)
     write_hex(os.path.join(HERE, "fft256_in_q.hex"), xq, 16)

@@ -497,10 +497,10 @@ initial begin
         if (reset_n) begin
             // Simple ramp + mid-scale offset to generate non-trivial data
             adc_hi   = 8'h80 + ((adc_phase * 7) & 8'h3F) - 8'h20;
-            adc_data = {adc_hi, 4'h0};
+            adc_data <= {adc_hi, 4'h0};
             adc_phase = adc_phase + 1;
         end else begin
-            adc_data = 12'h800;
+            adc_data <= 12'h800;
         end
     end
 end
@@ -813,7 +813,7 @@ initial begin
     // G7.3: Verify CDC path for TX chirp counter (120MHz→100MHz)
     // In the AERIS-10 architecture, STM32 toggles drive the TX chirp
     // controller (120MHz domain). The chirp counter is CDC'd to 100MHz
-    // via Gray-code synchronizer. Verify the CDC'd counter is non-zero.
+    // via the cdc_handshake module. Verify the CDC'd counter is non-zero.
     // Note: RX mode controller STM32 inputs are hardwired to 0 in
     // radar_receiver_final.v, so RX-side counters don't advance in
     // STM32-driven mode — this is a known architectural decision.

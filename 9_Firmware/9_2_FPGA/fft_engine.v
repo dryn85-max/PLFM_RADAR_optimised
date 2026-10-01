@@ -19,15 +19,17 @@
  * Twiddle index computed via barrel shift (idx << (LOG2N-1-stage)) instead
  * of general multiply, since the stride is always a power of 2.
  *
- * Widths: INTERNAL_W = 24 holds DATA_W = 16 plus 8 bits of growth for N = 256.
- * With unity-gain twiddles the complex magnitude grows at most by N, so inputs
- * with complex magnitude < 2^15 stay below 2^23 and never wrap.  Full-scale
- * 16-bit I *and* Q (magnitude up to sqrt(2) * 2^15) can exceed 2^23 and wrap
- * in the 24-bit words (wrap, not saturate: the Python model does the same);
- * the receiver's gain control keeps the input below that.  Products are
- * INTERNAL_W + TWIDDLE_W = 40 bits.
+ * Widths: INTERNAL_W = 25 (default) holds DATA_W = 16 plus 9 bits of growth
+ * for N = 256.  With unity-gain twiddles every output satisfies
+ * |X| <= N * |x|max, and for full-scale 16-bit I and Q simultaneously
+ * |x| <= sqrt(2) * 2^15, so |X| <= 256 * sqrt(2) * 2^15 = sqrt(2) * 2^23
+ * < 2^24, which a 25-bit signed word holds with no wrap (a 24-bit word
+ * would wrap above 2^23).  The same bound with N = 16 gives < 2^20, so the
+ * 16-point Doppler engine (xfft_16.v) keeps INTERNAL_W = 24.  Words that
+ * would still overflow wrap (not saturate); the Python model does the same.
+ * Products are INTERNAL_W + TWIDDLE_W = 41 bits.
  *
- * Multipliers: 4 (INTERNAL_W x TWIDDLE_W) -- a 24 x 16 product maps to one
+ * Multipliers: 4 (INTERNAL_W x TWIDDLE_W) -- a 25 x 16 product maps to one
  * 27 x 27 DSP or two 18 x 18 multipliers depending on the device.
  *
  * Data memory: two inferable true-dual-port RAMs (re/im), N x INTERNAL_W,
@@ -42,7 +44,7 @@ module fft_engine #(
     parameter N            = 256,
     parameter LOG2N        = 8,
     parameter DATA_W       = 16,
-    parameter INTERNAL_W   = 24,
+    parameter INTERNAL_W   = 25,
     parameter TWIDDLE_W    = 16,
     parameter TWIDDLE_FILE = "fft_twiddle_256.mem"
 )(
@@ -233,8 +235,8 @@ reg signed [INTERNAL_W-1:0] rd_b_re, rd_b_im;    // registered RAM port B data (
 
 // Raw products — full precision, registered to break the multiplier -> adder path
 // Width: INTERNAL_W + TWIDDLE_W per multiply, +1 for the sum of two
-localparam PROD_W = INTERNAL_W + TWIDDLE_W;  // 40
-reg signed [PROD_W:0] bf_prod_re, bf_prod_im; // 41 bits to hold sum of two products
+localparam PROD_W = INTERNAL_W + TWIDDLE_W;  // 41
+reg signed [PROD_W:0] bf_prod_re, bf_prod_im; // 42 bits to hold sum of two products
 
 // Combinational add/subtract from registered values (used in BF_WRITE)
 reg signed [INTERNAL_W-1:0] bf_sum_re, bf_sum_im;
