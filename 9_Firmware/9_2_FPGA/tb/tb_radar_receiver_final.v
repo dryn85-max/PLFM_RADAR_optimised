@@ -3,7 +3,7 @@
 // tb_radar_receiver_final.v -- P0 Integration Test for radar_receiver_final
 //
 // Tests the full RX pipeline from ADC input to Doppler output:
-//   ad9484_interface (stub) -> CDC -> DDC -> ddc_input_interface
+//   adc_cmos_interface -> DDC -> ddc_input_interface
 //     -> matched_filter_multi_segment -> range_bin_decimator
 //     -> doppler_processor_optimized -> doppler_output
 //
@@ -31,7 +31,7 @@
 //
 // TAP POINTS:
 //   Tap 1 (DDC output)     - bounds checking only (CDC jitter -> non-deterministic)
-//     Signals: dut.ddc_out_i [17:0], dut.ddc_out_q [17:0], dut.ddc_valid_i
+//     Signals: dut.ddc_out_i [17:0], dut.ddc_out_q [17:0], dut.ddc_valid
 //   Tap 2 (Doppler output) - golden compared (deterministic after MF buffering)
 //     Signals: doppler_output[31:0], doppler_valid, doppler_bin[4:0],
 //              range_bin_out[5:0]
@@ -40,9 +40,8 @@
 //   2048 entries of 32-bit hex, indexed by range_bin*32 + doppler_bin
 //
 // Strategy:
-//   - Uses behavioral stub for ad9484_interface_400m (no Xilinx primitives)
 //   - Overrides radar_mode_controller timing params for fast simulation
-//   - Feeds 120 MHz tone at ADC input (IF frequency -> DDC passband)
+//   - Feeds 20 MHz tone at ADC input (IF frequency -> DDC passband)
 //   - Verifies structural correctness + golden comparison + bounds checks
 //
 // Convention: check task, VCD dump, CSV output, pass/fail summary
@@ -54,36 +53,28 @@ module tb_radar_receiver_final;
 // CLOCK AND RESET
 // ============================================================================
 reg clk_100m;       // 100 MHz system clock
-reg clk_400m;       // 400 MHz ADC clock
 reg reset_n;
 
 // 100 MHz: period = 10 ns
 initial clk_100m = 0;
 always #5 clk_100m = ~clk_100m;
 
-// 400 MHz: period = 2.5 ns
-initial clk_400m = 0;
-always #1.25 clk_400m = ~clk_400m;
-
 // ============================================================================
 // ADC STIMULUS
 // ============================================================================
-// Feed a 120 MHz tone (IF frequency) sampled at 400 MHz
-// Phase increment per sample: 120/400 * 65536 = 19660.8
-// This produces a strong DC component after DDC downconversion
-reg [7:0] adc_data;
-reg [15:0] phase_acc;  // 16-bit phase accumulator for precision
-localparam [15:0] PHASE_INC = 16'd19661;  // 120/400 * 65536
+// Feed a 20 MHz tone (IF) sampled at 100 MHz: phase step = 0.2 * 65536 = 13107.
+// phase_acc[15:4] is a 12-bit sawtooth with strong energy at the IF.
+reg [11:0] adc_data;
+reg [15:0] phase_acc;
+localparam [15:0] PHASE_INC = 16'd13107;
 
-always @(posedge clk_400m or negedge reset_n) begin
+always @(posedge clk_100m or negedge reset_n) begin
     if (!reset_n) begin
         phase_acc <= 16'd0;
-        adc_data <= 8'd128;  // Mid-scale
+        adc_data  <= 12'd2048;
     end else begin
         phase_acc <= phase_acc + PHASE_INC;
-        // Use phase_acc[15:8] directly as pseudo-sinusoidal data
-        // A sawtooth/triangle wave has energy at IF -- good enough for integration test
-        adc_data <= phase_acc[15:8];
+        adc_data  <= phase_acc[15:4];
     end
 end
 
@@ -136,12 +127,10 @@ radar_receiver_final dut (
     .clk(clk_100m),
     .reset_n(reset_n),
 
-    // ADC "LVDS" -- stub treats adc_d_p as single-ended data
-    .adc_d_p(adc_data),
-    .adc_d_n(~adc_data),       // Complement (ignored by stub)
-    .adc_dco_p(clk_400m),      // 400 MHz clock
-    .adc_dco_n(~clk_400m),     // Complement (ignored by stub)
+    .adc_data(adc_data),
+    .adc_ovr(1'b0),
     .adc_pwdn(),
+    .adc_overrange(),
 
     .chirp_counter(chirp_counter),
     .tx_frame_start(tx_frame_start),
@@ -265,7 +254,7 @@ initial begin
 end
 
 always @(posedge clk_100m) begin
-    if (reset_n && dut.ddc_valid_i) begin
+    if (reset_n && dut.ddc_valid) begin
         ddc_energy_acc <= ddc_energy_acc
             + ($signed(dut.ddc_out_i) * $signed(dut.ddc_out_i))
             + ($signed(dut.ddc_out_q) * $signed(dut.ddc_out_q));
@@ -525,8 +514,8 @@ end
 // 5. 32 chirps of decimated data -> Doppler FFT
 //
 // With shortened mode controller timing (~600 cycles per chirp pair),
-// DDC output rate depends on how many 400MHz samples per chirp period
-// produce valid 100MHz outputs (CIC 4x decimation = ~1 per 4 clk_400m).
+// DDC output rate depends on how many 100MHz samples per chirp period
+// produce valid baseband outputs (CIC 4x decimation = 1 per 4 clk_100m).
 //
 // Conservative estimate: ~500K 100MHz cycles for the full pipeline.
 // ~4050 cycles/chirp x 32 chirps = ~130K, plus latency buffer priming,

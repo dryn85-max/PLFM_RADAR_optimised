@@ -1,15 +1,14 @@
 `timescale 1ns / 1ps
 
 module radar_receiver_final (
-    input wire clk,           // 100MHz    
-	 input wire reset_n,
-    
-	// ADC Physical Interface (LVDS Inputs)
-    input wire [7:0] adc_d_p,        // ADC Data P (LVDS)
-    input wire [7:0] adc_d_n,        // ADC Data N (LVDS)
-    input wire adc_dco_p,            // Data Clock Output P (400MHz LVDS)
-    input wire adc_dco_n,            // Data Clock Output N (400MHz LVDS)
-	 output wire adc_pwdn,
+    input wire clk,           // processing clock = ADC data clock (nominal 100 MHz)
+    input wire reset_n,
+
+    // ADC CMOS parallel interface (12-bit offset binary, one sample per clk)
+    input wire [11:0] adc_data,
+    input wire        adc_ovr,            // ADC over-range pin
+    output wire       adc_pwdn,
+    output wire       adc_overrange,      // sticky, cleared at every Doppler frame end
     
     // Chirp counter from transmitter (for matched filter indexing)
     input wire [5:0] chirp_counter,
@@ -67,9 +66,9 @@ module radar_receiver_final (
     input wire [2:0]  host_dc_notch_width,   // DC notch: zero Doppler bins within ±width of DC
 
     // ADC raw data tap (clk_100m domain, post-DDC, for self-test / debug)
-    output wire [15:0] dbg_adc_i,            // DDC output I (16-bit signed, 100 MHz)
-    output wire [15:0] dbg_adc_q,            // DDC output Q (16-bit signed, 100 MHz)
-    output wire        dbg_adc_valid,        // DDC output valid (100 MHz)
+    output wire [15:0] dbg_adc_i,            // DDC output I (16-bit signed, 25 MSPS)
+    output wire [15:0] dbg_adc_q,            // DDC output Q (16-bit signed, 25 MSPS)
+    output wire        dbg_adc_valid,        // DDC output valid (25 MSPS strobe)
 
     // AGC status outputs (for status readback / STM32 outer loop)
     output wire [7:0]  agc_saturation_count, // Per-frame clipped sample count
@@ -170,59 +169,36 @@ radar_mode_controller rmc (
     .scanning(rmc_scanning),
     .scan_complete(rmc_scan_complete)
 );
-wire clk_400m;
-
-// NOTE: lvds_to_cmos_400m removed — ad9484_interface_400m now provides
-// the buffered 400MHz DCO clock via adc_dco_bufg, avoiding duplicate
-// IBUFDS instantiations on the same LVDS clock pair.
-
-// 1. ADC + CDC + Digital Gain
-
-// CMOS Output Interface (400MHz Domain)
-wire [7:0] adc_data_cmos;  // 8-bit ADC data (CMOS, from ad9484_interface_400m)
-wire adc_valid;            // Data valid signal
-
-// ADC power-down control (directly tie low = ADC always on)
+// 1. ADC capture (single edge, clk = ADC DCO) and power-down (always on)
+wire [11:0] adc_sample;
+wire        adc_sample_valid;
 assign adc_pwdn = 1'b0;
 
-ad9484_interface_400m adc (
-	.adc_d_p(adc_d_p),
-	.adc_d_n(adc_d_n),
-	.adc_dco_p(adc_dco_p),
-	.adc_dco_n(adc_dco_n),
-	.sys_clk(clk),
-	.reset_n(reset_n),
-	.adc_data_400m(adc_data_cmos),
-	.adc_data_valid_400m(adc_valid),
-	.adc_dco_bufg(clk_400m)
+adc_cmos_interface #(.DATA_W(12)) adc_if (
+    .adc_clk(clk),
+    .reset_n(reset_n),
+    .adc_data(adc_data),
+    .adc_ovr(adc_ovr),
+    .overrange_clear(doppler_frame_done),
+    .sample(adc_sample),
+    .sample_valid(adc_sample_valid),
+    .overrange(adc_overrange)
 );
 
-// NOTE: The cdc_adc_to_processing instance that was here used src_clk=dst_clk=clk_400m
-// (same clock domain — no crossing). Gray-code CDC on same-clock with fast-changing
-// ADC data corrupts samples because Gray coding only guarantees safe transfer of
-// values that change by 1 LSB at a time. The real 400MHz→100MHz CDC crossing is
-// handled inside ddc_400m_enhanced via CIC decimation + CDC_FIR instances.
-// Removed: cdc_adc_to_processing instance. ADC data now goes directly to DDC.
-
-// 2. DDC Input Interface
+// 2. DDC: NCO (20 MHz) + mixer + CIC (R=4) + FIR -> 25 MSPS complex baseband
 wire signed [17:0] ddc_out_i;
 wire signed [17:0] ddc_out_q;
+wire ddc_valid;
 
-wire ddc_valid_i;
-wire ddc_valid_q;
-
-ddc_400m_enhanced ddc(
-    .clk_400m(clk_400m),           // 400MHz clock from ADC DCO
-    .clk_100m(clk),           // 100MHz system clock //used by the 2 FIR
+ddc #(.ADC_W(12), .OUT_W(18)) ddc_inst (
+    .clk(clk),
     .reset_n(reset_n),
-    .adc_data(adc_data_cmos),     // ADC data at 400MHz (direct from ADC interface)
-    .adc_data_valid_i(adc_valid),     // Valid at 400MHz
-    .adc_data_valid_q(adc_valid),     // Valid at 400MHz
-    .baseband_i(ddc_out_i), // I output at 100MHz
-    .baseband_q(ddc_out_q), // Q output at 100MHz  
-    .baseband_valid_i(ddc_valid_i),     // Valid at 100MHz
-	 .baseband_valid_q(ddc_valid_q),
- 	 .mixers_enable(1'b1)
+    .mixers_enable(1'b1),
+    .adc_data(adc_sample),
+    .adc_valid(adc_sample_valid),
+    .baseband_i(ddc_out_i),
+    .baseband_q(ddc_out_q),
+    .baseband_valid(ddc_valid)
 );
 
 ddc_input_interface ddc_if (
@@ -230,8 +206,8 @@ ddc_input_interface ddc_if (
     .reset_n(reset_n),
     .ddc_i(ddc_out_i),
     .ddc_q(ddc_out_q),
-    .valid_i(ddc_valid_i),
-    .valid_q(ddc_valid_q),
+    .valid_i(ddc_valid),
+    .valid_q(ddc_valid),
     .adc_i(adc_i_scaled),
     .adc_q(adc_q_scaled),
     .adc_valid(adc_valid_sync),

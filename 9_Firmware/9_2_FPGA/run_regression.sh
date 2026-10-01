@@ -57,16 +57,15 @@ NC='\033[0m' # No Color
 # ===========================================================================
 
 # Production RTL file list (same as system TB minus testbench files)
-# Uses ADC stub for IBUFDS/BUFIO primitives that iverilog can't parse
 PROD_RTL=(
     radar_system_top.v
     radar_transmitter.v
     dac_interface_single.v
     plfm_chirp_controller.v
     radar_receiver_final.v
-    tb/ad9484_interface_400m_stub.v
-    ddc_400m.v
-    nco_400m_enhanced.v
+    adc_cmos_interface.v
+    ddc.v
+    nco.v
     cic_decimator_4x_enhanced.v
     cdc_modules.v
     fir_lowpass.v
@@ -90,9 +89,6 @@ PROD_RTL=(
 )
 
 # Source-only RTL (not instantiated at top level, but should still be lint-clean)
-# Note: ad9484_interface_400m.v is excluded — it uses Xilinx primitives
-# (IBUFDS, BUFIO, BUFG, IDDR) that iverilog cannot compile. The production
-# design uses tb/ad9484_interface_400m_stub.v for simulation instead.
 EXTRA_RTL=(
     frequency_matched_filter.v
 )
@@ -106,8 +102,7 @@ EXTRA_RTL=(
 RECEIVER_RTL=(
     radar_receiver_final.v
     radar_mode_controller.v
-    tb/ad9484_interface_400m_stub.v
-    ddc_400m.v nco_400m_enhanced.v cic_decimator_4x_enhanced.v
+    adc_cmos_interface.v ddc.v nco.v cic_decimator_4x_enhanced.v
     cdc_modules.v fir_lowpass.v ddc_input_interface.v
     chirp_memory_loader_param.v latency_buffer.v
     matched_filter_multi_segment.v matched_filter_processing_chain.v
@@ -419,10 +414,9 @@ echo ""
 # ===========================================================================
 echo "--- PHASE 2: Integration Tests ---"
 
-run_test "DDC Chain (NCO→CIC→FIR)" \
-    tb/tb_ddc_reg.vvp \
-    tb/tb_ddc_cosim.v ddc_400m.v nco_400m_enhanced.v \
-    cic_decimator_4x_enhanced.v fir_lowpass.v cdc_modules.v
+run_test "DDC golden (a): NCO+mixer+CIC+FIR bit-exact" \
+    tb/tb_ddc_golden_reg.vvp \
+    tb/golden/tb_ddc_golden.v ddc.v nco.v cic_decimator_4x_enhanced.v fir_lowpass.v
 
 # Real-data co-simulation: committed golden hex vs RTL (exact match required).
 # These catch architecture mismatches (e.g. 32-pt → dual 16-pt Doppler FFT)
@@ -504,7 +498,7 @@ echo ""
 # ===========================================================================
 echo "--- PHASE 4: Infrastructure ---"
 
-run_test "CDC Modules (3 variants)" \
+run_test "CDC Modules (single-bit + handshake)" \
     tb/tb_cdc_reg.vvp \
     tb/tb_cdc_modules.v cdc_modules.v
 

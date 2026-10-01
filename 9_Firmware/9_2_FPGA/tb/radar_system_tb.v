@@ -21,7 +21,6 @@ module radar_system_tb;
 parameter CLK_100M_PERIOD = 10.0;        // 100MHz = 10ns
 parameter CLK_120M_PERIOD = 8.333;       // 120MHz = 8.333ns
 parameter FT601_CLK_PERIOD = 10.0;       // 100MHz = 10ns
-parameter ADC_DCO_PERIOD = 2.5;          // 400MHz = 2.5ns
 
 // Simulation time
 parameter SIM_TIME = 500_000;            // 500us simulation
@@ -41,14 +40,9 @@ reg clk_120m_dac;
 reg ft601_clk_in;
 reg reset_n;
 
-// ADC clocks
-reg adc_dco_p;
-reg adc_dco_n;
-
 // ADC data
 reg [7:0] adc_data_pattern;
-reg [7:0] adc_d_p;
-reg [7:0] adc_d_n;
+reg [11:0] adc_data;
 
 // FT601 interface
 wire [31:0] ft601_data;
@@ -136,18 +130,6 @@ end
 initial begin
     ft601_clk_in = 0;
     forever #(FT601_CLK_PERIOD/2) ft601_clk_in = ~ft601_clk_in;
-end
-
-// ADC DCO clock (400MHz)
-initial begin
-    adc_dco_p = 0;
-    adc_dco_n = 1;
-    forever begin
-        #(ADC_DCO_PERIOD/2) begin
-            adc_dco_p = ~adc_dco_p;
-            adc_dco_n = ~adc_dco_n;
-        end
-    end
 end
 
 // ============================================================================
@@ -284,15 +266,14 @@ initial begin
         echo_phase[target_idx] = 0;
     end
     
-    adc_d_p = 8'h00;
-    adc_d_n = ~8'h00;
+    adc_data = 12'h800;
     
     // Wait for reset and chirp start
     #500;
     
     // Generate ADC data synchronized with chirps
     forever begin
-        @(posedge adc_dco_p);
+        @(posedge clk_100m);
         sample_count = sample_count + 1;
         
         // Generate echo signal when transmitter is active
@@ -305,9 +286,8 @@ initial begin
         // Add noise
         adc_data_pattern = adc_data_pattern + ($random % 16) - 8;
         
-        // LVDS output
-        adc_d_p = adc_data_pattern;
-        adc_d_n = ~adc_data_pattern;
+        // CMOS output (8-bit pattern in the 12-bit ADC word)
+        adc_data = {adc_data_pattern, 4'h0};
     end
 end
 
@@ -483,11 +463,10 @@ radar_system_top #(
     .stm32_cs_adar4_1v8(stm32_cs_adar4_1v8),
     
     // Receiver Interfaces
-    .adc_d_p(adc_d_p),
-    .adc_d_n(adc_d_n),
-    .adc_dco_p(adc_dco_p),
-    .adc_dco_n(adc_dco_n),
+    .adc_data(adc_data),
+    .adc_ovr(1'b0),
     .adc_pwdn(adc_pwdn),
+    .adc_overrange(),
     
     // STM32 Control
     .stm32_new_chirp(stm32_new_chirp),

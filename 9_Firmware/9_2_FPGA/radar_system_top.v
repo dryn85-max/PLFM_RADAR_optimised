@@ -10,7 +10,8 @@
  * - USB Data Interface (FT601 USB 3.0 or FT2232H USB 2.0, selected by USB_MODE)
  * 
  * Clock domains:
- * - clk_100m: System clock (100MHz)
+ * - clk_100m: processing clock. MUST be driven by the ADC data clock
+ *             (adc_cmos_interface samples on it; nominal 100 MHz)
  * - clk_120m_dac: DAC clock (120MHz)
  * - ft601_clk: USB interface clock (100MHz FT601 or 60MHz FT2232H)
  *
@@ -62,12 +63,11 @@ module radar_system_top (
     
     // ========== RECEIVER INTERFACES ==========
     
-    // ADC Physical Interface (LVDS)
-    input wire [7:0] adc_d_p,            // ADC Data P (LVDS)
-    input wire [7:0] adc_d_n,            // ADC Data N (LVDS)
-    input wire adc_dco_p,                 // Data Clock Output P (400MHz LVDS)
-    input wire adc_dco_n,                 // Data Clock Output N (400MHz LVDS)
-    output wire adc_pwdn,                  // ADC Power Down
+    // ADC CMOS parallel interface (12-bit, sampled on clk_100m = ADC data clock)
+    input wire [11:0] adc_data,
+    input wire adc_ovr,                   // ADC over-range pin
+    output wire adc_pwdn,                 // ADC power down
+    output wire adc_overrange,            // sticky over-range flag (status)
     
     // ========== STM32 CONTROL INTERFACES ==========
     
@@ -489,11 +489,10 @@ radar_receiver_final rx_inst (
     .tx_frame_start(tx_new_chirp_frame_sync),
     
     // ADC Physical Interface
-    .adc_d_p(adc_d_p),
-    .adc_d_n(adc_d_n),
-    .adc_dco_p(adc_dco_p),
-    .adc_dco_n(adc_dco_n),
+    .adc_data(adc_data),
+    .adc_ovr(adc_ovr),
     .adc_pwdn(adc_pwdn),
+    .adc_overrange(adc_overrange),
     
     // Doppler Outputs
     .doppler_output(rx_doppler_output),

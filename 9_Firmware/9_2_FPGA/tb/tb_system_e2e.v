@@ -29,8 +29,8 @@
  *   iverilog -g2001 -DSIMULATION -o tb/tb_system_e2e.vvp \
  *     tb/tb_system_e2e.v radar_system_top.v \
  *     radar_transmitter.v dac_interface_single.v plfm_chirp_controller.v \
- *     radar_receiver_final.v tb/ad9484_interface_400m_stub.v \
- *     ddc_400m.v nco_400m_enhanced.v cic_decimator_4x_enhanced.v \
+ *     radar_receiver_final.v adc_cmos_interface.v \
+ *     ddc.v nco.v cic_decimator_4x_enhanced.v \
  *     cdc_modules.v fir_lowpass.v ddc_input_interface.v \
  *     chirp_memory_loader_param.v latency_buffer.v \
  *     matched_filter_multi_segment.v matched_filter_processing_chain.v \
@@ -49,9 +49,8 @@ module tb_system_e2e;
 parameter CLK_100M_PERIOD  = 10.0;   // 100 MHz = 10 ns
 parameter CLK_120M_PERIOD  = 8.333;  // 120 MHz
 parameter FT601_CLK_PERIOD = 10.0;   // 100 MHz (async to clk_100m)
-parameter ADC_DCO_PERIOD   = 2.5;    // 400 MHz
 
-// Simulation budget: tuned for iverilog performance with 400MHz ADC clock.
+// Simulation budget: tuned for iverilog performance.
 // Keep short — iverilog is ~10x slower than compiled simulators.
 parameter SIM_TIMEOUT_NS = 800_000;
 
@@ -83,16 +82,11 @@ endtask
 reg clk_100m;
 reg clk_120m_dac;
 reg ft601_clk_in;
-reg adc_dco_p, adc_dco_n;
 
 initial begin clk_100m     = 0; forever #(CLK_100M_PERIOD/2)  clk_100m     = ~clk_100m;     end
 initial begin clk_120m_dac = 0; forever #(CLK_120M_PERIOD/2)  clk_120m_dac = ~clk_120m_dac; end
 // FT601 clock: offset by 1.7ns to ensure truly async w.r.t. clk_100m
 initial begin ft601_clk_in = 0; #1.7; forever #(FT601_CLK_PERIOD/2) ft601_clk_in = ~ft601_clk_in; end
-initial begin
-    adc_dco_p = 0; adc_dco_n = 1;
-    forever #(ADC_DCO_PERIOD/2) begin adc_dco_p = ~adc_dco_p; adc_dco_n = ~adc_dco_n; end
-end
 
 // ============================================================================
 // DUT SIGNALS
@@ -100,8 +94,7 @@ end
 reg        reset_n;
 
 // ADC
-reg  [7:0] adc_d_p;
-reg  [7:0] adc_d_n;
+reg  [11:0] adc_data;
 
 // STM32 control
 reg        stm32_new_chirp;
@@ -423,11 +416,10 @@ radar_system_top #(
     .stm32_cs_adar3_1v8(stm32_cs_adar3_1v8),
     .stm32_cs_adar4_1v8(stm32_cs_adar4_1v8),
 
-    .adc_d_p(adc_d_p),
-    .adc_d_n(adc_d_n),
-    .adc_dco_p(adc_dco_p),
-    .adc_dco_n(adc_dco_n),
+    .adc_data(adc_data),
+    .adc_ovr(1'b0),
     .adc_pwdn(adc_pwdn),
+    .adc_overrange(),
 
     .stm32_new_chirp(stm32_new_chirp),
     .stm32_new_elevation(stm32_new_elevation),
@@ -496,20 +488,19 @@ endtask
 
 // Drive ADC with a sinusoid-like pattern (simple ramp for stimulus)
 integer adc_phase;
+reg [7:0] adc_hi;
 initial begin
-    adc_d_p = 8'h80;
-    adc_d_n = 8'h7F;
+    adc_data = 12'h800;
     adc_phase = 0;
     forever begin
-        @(posedge adc_dco_p);
+        @(posedge clk_100m);
         if (reset_n) begin
             // Simple ramp + mid-scale offset to generate non-trivial data
-            adc_d_p = 8'h80 + ((adc_phase * 7) & 8'h3F) - 8'h20;
-            adc_d_n = ~adc_d_p;
+            adc_hi   = 8'h80 + ((adc_phase * 7) & 8'h3F) - 8'h20;
+            adc_data = {adc_hi, 4'h0};
             adc_phase = adc_phase + 1;
         end else begin
-            adc_d_p = 8'h80;
-            adc_d_n = 8'h7F;
+            adc_data = 12'h800;
         end
     end
 end
@@ -524,7 +515,7 @@ integer saved_range_count;
 integer saved_doppler_count;
 
 initial begin
-    // VCD dump disabled by default for performance (400MHz ADC = huge trace).
+    // VCD dump disabled by default for performance (long run = huge trace).
     // Uncomment for debug: $dumpfile("tb/tb_system_e2e.vcd");
     // $dumpvars(0, tb_system_e2e);
 
