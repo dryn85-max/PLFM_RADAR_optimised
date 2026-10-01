@@ -5,8 +5,8 @@
 #include "config.h"
 #include "diag_log.h"
 
-/* Spies for the sequencer entry points used by fault.c (overrides the weak
- * target stub in sequencer_tmp_stub.c). */
+/* Spies for the sequencer entry points used by fault.c (replace the
+ * real sequencer.c, which tests/Makefile leaves out of this test). */
 static int g_estop_calls, g_rfoff_calls;
 void sequencer_emergency_stop(void) { g_estop_calls++; }
 void sequencer_rf_off(void)         { g_rfoff_calls++; }
