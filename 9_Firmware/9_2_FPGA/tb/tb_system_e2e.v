@@ -232,20 +232,43 @@ integer    usb_wr_count;
 integer    usb_wr_header_count;
 integer    usb_wr_footer_count;
 
+// FT601 data packet = 3 x 32-bit writes (usb_data_interface.v write FSM):
+//   word 0: {HEADER 0xAA, range[31:8]}                       BE=1111
+//   word 1: {range[7:0], doppler_real, doppler_imag[15:8]}    BE=1111
+//   word 2: {doppler_imag[7:0], detection, FOOTER 0x55, pad}  BE=1110
+// Status packets (0xBB marker ... 0x55 footer, both BE=0001) are not data
+// packets and are excluded. usb_wr_pkt_pos tracks the word index inside the
+// current data packet so payload bytes equal to 0xAA/0x55 are not counted.
+reg [1:0]  usb_wr_pkt_pos;
+reg        usb_wr_in_status;
+
 always @(posedge ft601_clk_in) begin
     if (!reset_n) begin
         usb_wr_count        <= 0;
         usb_wr_header_count <= 0;
         usb_wr_footer_count <= 0;
+        usb_wr_pkt_pos      <= 2'd0;
+        usb_wr_in_status    <= 1'b0;
     end else if (!ft601_wr_n && !ft601_txe) begin
         if (usb_wr_count < 1024)
             usb_wr_capture[usb_wr_count] <= ft601_data;
         usb_wr_count <= usb_wr_count + 1;
-        // Count headers and footers
-        if (ft601_data[7:0] == 8'hAA && ft601_be == 4'b0001)
-            usb_wr_header_count <= usb_wr_header_count + 1;
-        if (ft601_data[7:0] == 8'h55 && ft601_be == 4'b0001)
-            usb_wr_footer_count <= usb_wr_footer_count + 1;
+        if (ft601_be == 4'b0001 && ft601_data[7:0] == 8'hBB) begin
+            usb_wr_in_status <= 1'b1;
+        end else if (usb_wr_in_status) begin
+            if (ft601_be == 4'b0001 && ft601_data[7:0] == 8'h55)
+                usb_wr_in_status <= 1'b0;
+        end else begin
+            // Count data-packet headers and footers at their word positions
+            if (usb_wr_pkt_pos == 2'd0 && ft601_be == 4'b1111 &&
+                ft601_data[31:24] == 8'hAA)
+                usb_wr_header_count <= usb_wr_header_count + 1;
+            if (usb_wr_pkt_pos == 2'd2 && ft601_be == 4'b1110 &&
+                ft601_data[15:8] == 8'h55)
+                usb_wr_footer_count <= usb_wr_footer_count + 1;
+            usb_wr_pkt_pos <= (usb_wr_pkt_pos == 2'd2) ? 2'd0
+                                                        : usb_wr_pkt_pos + 2'd1;
+        end
     end
 end
 
