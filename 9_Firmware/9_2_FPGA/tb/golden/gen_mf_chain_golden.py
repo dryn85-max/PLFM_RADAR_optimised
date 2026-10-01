@@ -52,7 +52,32 @@ def main():
         write_hex(os.path.join(HERE, f"mf_gold_d{d}_i.hex"), oi, 16)
         write_hex(os.path.join(HERE, f"mf_gold_d{d}_q.hex"), oq, 16)
     print("wrote mf_sig_*/mf_gold_* vectors")  # noqa: T201
+    fullscale_vector(rom_i, rom_q, twiddle)
     multiseg_vectors()
+
+
+def fullscale_vector(rom_i, rom_q, twiddle):
+    """Full-scale chain-level vector; must distinguish INTERNAL_W 25 from 24."""
+    n = np.arange(N_FFT)
+    si = [int(v) for v in np.where(np.cos(2 * np.pi * 5 * n / N_FFT) >= 0, 32767, -32768)]
+    sq = [int(v) for v in np.where(np.sin(2 * np.pi * 5 * n / N_FFT) >= 0, 32767, -32768)]
+
+    def chain(internal_w):
+        eng = FFTEngine(n=N_FFT, twiddle_file=twiddle, internal_w=internal_w)
+        fi, fq = eng.compute(si, sq, inverse=False)
+        pi, pq = FreqMatchedFilter.process_block(fi, fq, rom_i, rom_q)
+        return eng.compute(pi, pq, inverse=True)
+
+    oi, oq = chain(25)
+    wi, wq = chain(24)
+    diff = max(max(abs(a - b) for a, b in zip(oi, wi)), max(abs(a - b) for a, b in zip(oq, wq)))
+    print(f"full-scale chain: 24-bit model differs from 25-bit by up to {diff} LSB")  # noqa: T201
+    assert diff > 0, "full-scale chain vector does not detect a 24-bit internal width"
+    write_hex(os.path.join(HERE, "mf_sig_fs_i.hex"), si, 16)
+    write_hex(os.path.join(HERE, "mf_sig_fs_q.hex"), sq, 16)
+    write_hex(os.path.join(HERE, "mf_gold_fs_i.hex"), oi, 16)
+    write_hex(os.path.join(HERE, "mf_gold_fs_q.hex"), oq, 16)
+    print("wrote mf_sig_fs/mf_gold_fs vectors")  # noqa: T201
 
 
 def multiseg_vectors():

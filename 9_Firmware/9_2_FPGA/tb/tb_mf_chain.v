@@ -110,6 +110,34 @@ module tb_mf_chain;
         end
     endtask
 
+    // Full-scale chain-level vector (square-wave I/Q, spectrum peak ~1.27*2^23):
+    // exact match to the bit-accurate model (INTERNAL_W = 25).  A chain built
+    // with a 24-bit internal width wraps in the forward FFT and fails this.
+    task run_fullscale;
+        integer wait_count, mm;
+        begin
+            $readmemh("tb/golden/mf_sig_fs_i.hex", sig_i);   $readmemh("tb/golden/mf_sig_fs_q.hex", sig_q);
+            $readmemh("tb/golden/mf_gold_fs_i.hex", gold_i); $readmemh("tb/golden/mf_gold_fs_q.hex", gold_q);
+            reset_n = 0; adc_valid = 0; cap_count = 0; ref_segment = 3'd0;
+            repeat (4) @(posedge clk); #1; reset_n = 1; @(posedge clk); #1;
+            for (k = 0; k < N; k = k + 1) begin
+                adc_data_i = sig_i[k]; adc_data_q = sig_q[k]; adc_valid = 1; @(posedge clk); #1;
+            end
+            adc_valid = 0;
+            wait_count = 0;
+            while (!(chain_state == 4'd0 && cap_count == N) && wait_count < FRAME_TIMEOUT) begin
+                @(posedge clk); wait_count = wait_count + 1;
+            end
+            #1;
+            mm = 0;
+            for (i = 0; i < N; i = i + 1)
+                if (cap_i[i] !== $signed(gold_i[i]) || cap_q[i] !== $signed(gold_q[i])) mm = mm + 1;
+            $display("full-scale: outputs=%0d mismatches=%0d", cap_count, mm);
+            check(cap_count == N, "full-scale: 256 range-profile outputs");
+            if (EXACT) check(mm == 0, "full-scale: synth branch bit-exact vs golden (INTERNAL_W=25)");
+        end
+    endtask
+
     initial begin
         clk = 0; reset_n = 0; adc_valid = 0; adc_data_i = 0; adc_data_q = 0; ref_segment = 0;
         pass_count = 0; fail_count = 0; test_num = 0; cap_count = 0;
@@ -117,6 +145,7 @@ module tb_mf_chain;
         run_frame(0);
         run_frame(20);
         run_frame(100);
+        run_fullscale;
         // back-to-back frames without reset: second frame right after the first
         load_vectors(20);
         reset_n = 0; repeat (2) @(posedge clk); #1; reset_n = 1; @(posedge clk); #1;
