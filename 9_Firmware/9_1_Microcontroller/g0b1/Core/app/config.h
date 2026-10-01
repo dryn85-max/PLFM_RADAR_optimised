@@ -26,4 +26,13 @@
 #define IWDG_RELOAD           500    /* 500 / 125 Hz = 4.0 s */
 #define PLL_LOCK_TIMEOUT_MS   100
 
+/* LO PLL part: define exactly one of PLL_PART_LMX2594 / PLL_PART_ADF4372
+ * (default LMX2594). Selects the table returned by pll_default_table(). */
+#if !defined(PLL_PART_LMX2594) && !defined(PLL_PART_ADF4372)
+#define PLL_PART_LMX2594
+#endif
+#if defined(PLL_PART_LMX2594) && defined(PLL_PART_ADF4372)
+#error "define only one of PLL_PART_LMX2594 / PLL_PART_ADF4372"
+#endif
+
 #endif

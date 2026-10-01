@@ -37,6 +37,7 @@ void mock_spi_fail_next(int err);                         /* next spi_xfer retur
 void mock_i2c_set_rx(const uint8_t *bytes, size_t n);     /* queue i2c_read bytes */
 void mock_i2c_fail_next(int err);                         /* next i2c call returns err */
 void mock_time_advance_us(uint32_t us);
+void mock_time_set_hook(void (*fn)(uint32_t now_us));    /* called after every advance */
 void mock_gpio_set_input(int pin, int level);
 void mock_uart_push_rx(const char *s, size_t n);
 
