@@ -37,6 +37,12 @@ void Error_Handler(void)
     for (;;) { }     /* fault_panic() does not return on target */
 }
 
+/* fault.h reset-flag masks must be the RCC_CSR flags. */
+_Static_assert(FAULT_RST_IWDG == RCC_CSR_IWDGRSTF && FAULT_RST_WWDG == RCC_CSR_WWDGRSTF &&
+               FAULT_RST_PIN == RCC_CSR_PINRSTF && FAULT_RST_PWR == RCC_CSR_PWRRSTF &&
+               FAULT_RST_SFT == RCC_CSR_SFTRSTF && FAULT_RST_OBL == RCC_CSR_OBLRSTF &&
+               FAULT_RST_LPWR == RCC_CSR_LPWRRSTF, "fault.h reset flags != RCC_CSR");
+
 static void SystemClock_Config(void)
 {
     RCC_OscInitTypeDef osc = {0};
@@ -85,6 +91,16 @@ int main(void)
          * non-latched FAULT_PLL_LOCK with the RF rails off. */
         (void)uart_write(placeholder, sizeof placeholder - 1u);
     }
+
+    /* Reset cause (spec R4): an IWDG/WWDG reset that fault_panic() did not
+     * explain latches FAULT_WATCHDOG (cleared only by a power cycle). The flags
+     * are read before the IWDG is started and cleared afterwards (RMVF) so a
+     * stale flag cannot latch a later, healthy boot. app_init() applies the
+     * e-stop for a latched boot. (No LOCKUP reset flag exists in RCC_CSR on
+     * the G0; a lockup ends in the IWDG, which is covered here.) */
+    fault_init();
+    (void)fault_on_boot(RCC->CSR);
+    RCC->CSR |= RCC_CSR_RMVF;
 
     iwdg_start();               /* app_init() refreshes it between the long stages */
     app_init();

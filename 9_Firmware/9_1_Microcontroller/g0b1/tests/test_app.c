@@ -190,6 +190,24 @@ static void test_boot_bias_writes_within_limit(void)
     TT_ASSERT(n >= 10 * ADAR_COUNT);
 }
 
+/* C: boot after a watchdog reset (no latch yet): main() calls fault_on_boot()
+ * before app_init(); app_init then takes the latched-boot path (e-stop, no RF). */
+static void test_boot_after_watchdog_reset_is_latched(void)
+{
+    healthy();
+    fault_init();
+    TT_ASSERT_EQ(FAULT_WATCHDOG, fault_on_boot(FAULT_RST_IWDG));
+    gpio_write(PIN_EN_PA, 1);
+    gpio_write(PIN_EN_FPGA, 1);
+    app_init();
+    TT_ASSERT_EQ(FAULT_WATCHDOG, fault_latched_code());
+    TT_ASSERT_EQ(0, gpio_read(PIN_EN_PA));
+    TT_ASSERT_EQ(0, gpio_read(PIN_EN_FPGA));
+    TT_ASSERT_EQ(0, find_gpio(PIN_EN_LNA, 1, 0) >= 0);   /* rails never come up */
+    TT_ASSERT_EQ(0, find_gpio(PIN_EN_LO, 1, 0) >= 0);
+    TT_ASSERT(strstr(mock_uart_tx, "BOOT latched fault=13") != NULL);
+}
+
 static void test_warmup_errors_ignored(void)
 {
     healthy();
@@ -408,6 +426,7 @@ int main(void)
     TT_RUN(test_happy_path_order);
     TT_RUN(test_boot_gains_and_agc_cache);
     TT_RUN(test_boot_bias_writes_within_limit);
+    TT_RUN(test_boot_after_watchdog_reset_is_latched);
     TT_RUN(test_warmup_errors_ignored);
     TT_RUN(test_pll_placeholder_lock_fails);
     TT_RUN(test_pll_spi_error_is_pll_fault);

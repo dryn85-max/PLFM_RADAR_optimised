@@ -4,6 +4,7 @@
 
 void NMI_Handler(void)
 {
+    fault_panic();   /* e-stop, latch, spin without IWDG refresh */
     for (;;) { }
 }
 

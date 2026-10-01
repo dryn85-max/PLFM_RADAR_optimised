@@ -114,6 +114,9 @@ LoopForever:
 */
   .section .text.Default_Handler,"ax",%progbits
 Default_Handler:
+  /* Unexpected interrupt: GPIO e-stop, latch FAULT_PANIC, spin without IWDG
+   * refresh (fault_panic never returns on target). */
+  bl fault_panic
 Infinite_Loop:
   b Infinite_Loop
   .size Default_Handler, .-Default_Handler

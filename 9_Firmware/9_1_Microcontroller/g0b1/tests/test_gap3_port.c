@@ -38,9 +38,15 @@ static void test_gap3_estop_cuts_rails(void)
     mock_log_n = 0;
     sequencer_emergency_stop();
     for (p = PIN_EN_FPGA; p <= PIN_EN_PA; p++) TT_ASSERT_EQ(0, gpio_read((gpio_t)p));
-    for (i = 0; i < (int)(sizeof ORDER / sizeof ORDER[0]); i++) {
-        TT_ASSERT_EQ(ORDER[i], mock_log[i].a);
-        TT_ASSERT_EQ(0, mock_log[i].b);
+    {
+        int prev = -1, k;
+        for (i = 0; i < (int)(sizeof ORDER / sizeof ORDER[0]); i++) {
+            int idx = -1;
+            for (k = 0; k < mock_log_n; k++)
+                if (mock_log[k].a == (int)ORDER[i] && mock_log[k].b == 0) { idx = k; break; }
+            TT_ASSERT(idx > prev);          /* rails drop in the documented order */
+            prev = idx;
+        }
     }
     TT_ASSERT_EQ(PIN_EN_FPGA, mock_log[mock_log_n - 1].a);   /* FPGA enable last */
 }

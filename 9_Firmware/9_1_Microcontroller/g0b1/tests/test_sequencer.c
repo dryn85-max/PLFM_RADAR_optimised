@@ -73,12 +73,15 @@ static void check_sequence(const exp_t *e, int n)
 static void test_base_up_table(void)
 {
     static const exp_t E[] = {
-        { PIN_EN_FPGA, 1, 100 }, { PIN_EN_LO, 1, 10 }, { PIN_EN_ADAR, 1, 500 },
+        { PIN_EN_FPGA, 1, 100 }, { PIN_EN_LO, 1, 10 }, { PIN_PLL_CS, 1, 0 },
+        { PIN_EN_ADAR, 1, 500 },
+        { PIN_ADAR_CS0, 1, 0 }, { PIN_ADAR_CS1, 1, 0 }, { PIN_ADAR_CS2, 1, 0 }, { PIN_ADAR_CS3, 1, 0 },
         { PIN_EN_ADTR_VDD_SW, 1, 1 }, { PIN_EN_ADTR_VSS_SW, 1, 1 },
     };
     fresh();
     TT_ASSERT_EQ(0, sequencer_power_up());
-    check_sequence(E, 5);
+    check_sequence(E, 10);
+    TT_ASSERT_EQ(10, SEQ_BASE_UP_N);
     TT_ASSERT_EQ(0, count_bus());
 }
 
@@ -95,11 +98,17 @@ static void test_down_table(void)
     static const exp_t E[] = {
         { PIN_FPGA_DIG3, 0, 0 }, { PIN_EN_PA, 0, 10 }, { PIN_EN_LNA, 0, 10 },
         { PIN_EN_ADTR_VSS_SW, 0, 1 }, { PIN_EN_ADTR_VDD_SW, 0, 1 }, { PIN_EN_ADAR, 0, 10 },
-        { PIN_EN_LO, 0, 10 }, { PIN_FPGA_DIG4, 0, 0 }, { PIN_EN_FPGA, 0, 0 },
+        /* chip selects low only after the chip's supply is off (no back-powering) */
+        { PIN_ADAR_CS0, 0, 0 }, { PIN_ADAR_CS1, 0, 0 }, { PIN_ADAR_CS2, 0, 0 }, { PIN_ADAR_CS3, 0, 0 },
+        { PIN_EN_LO, 0, 10 }, { PIN_PLL_CE, 0, 0 }, { PIN_PLL_CS, 0, 0 },
+        /* FPGA inputs low before EN_FPGA, as in the e-stop */
+        { PIN_FPGA_DIG0, 0, 0 }, { PIN_FPGA_DIG1, 0, 0 }, { PIN_FPGA_DIG2, 0, 0 },
+        { PIN_FPGA_DIG4, 0, 0 }, { PIN_EN_FPGA, 0, 0 },
     };
     fresh();
     sequencer_power_down();
-    check_sequence(E, 9);
+    check_sequence(E, 18);
+    TT_ASSERT_EQ(18, SEQ_DOWN_N);
 }
 
 static void test_estop_order_no_delay_no_bus(void)
@@ -107,7 +116,13 @@ static void test_estop_order_no_delay_no_bus(void)
     static const exp_t E[] = {
         { PIN_FPGA_DIG3, 0, 0 }, { PIN_EN_PA, 0, 0 }, { PIN_EN_LNA, 0, 0 },
         { PIN_EN_ADTR_VSS_SW, 0, 0 }, { PIN_EN_ADTR_VDD_SW, 0, 0 }, { PIN_EN_ADAR, 0, 0 },
-        { PIN_EN_LO, 0, 0 },
+        /* chip selects / CE low only AFTER the chip's supply is off: a high MCU
+         * output into an unpowered ADAR1000 / PLL would back-power it through its
+         * input protection (inputs must stay <= supply + 0.3 V), while a low level
+         * is always within the abs. max. ratings and selecting an unpowered
+         * device is harmless. */
+        { PIN_ADAR_CS0, 0, 0 }, { PIN_ADAR_CS1, 0, 0 }, { PIN_ADAR_CS2, 0, 0 }, { PIN_ADAR_CS3, 0, 0 },
+        { PIN_EN_LO, 0, 0 }, { PIN_PLL_CE, 0, 0 }, { PIN_PLL_CS, 0, 0 },
         /* FPGA inputs low BEFORE the FPGA loses power: no back-powering through MCU outputs */
         { PIN_FPGA_DIG0, 0, 0 }, { PIN_FPGA_DIG1, 0, 0 }, { PIN_FPGA_DIG2, 0, 0 },
         { PIN_FPGA_DIG4, 0, 0 }, { PIN_EN_FPGA, 0, 0 },
@@ -115,7 +130,7 @@ static void test_estop_order_no_delay_no_bus(void)
     size_t i;
     fresh();
     sequencer_emergency_stop();
-    check_sequence(E, 12);
+    check_sequence(E, 18);
     TT_ASSERT_EQ(0, count_bus());
     TT_ASSERT_EQ(0, count_kind(MOCK_EV_DELAY_US) + count_kind(MOCK_EV_DELAY_MS));
     TT_ASSERT_EQ(0, count_kind(MOCK_EV_UART_WRITE));
@@ -123,7 +138,7 @@ static void test_estop_order_no_delay_no_bus(void)
         TT_ASSERT_EQ(0, SEQ_ESTOP[i].delay_ms);
         TT_ASSERT_EQ(0, SEQ_ESTOP[i].level);
     }
-    TT_ASSERT_EQ(12, SEQ_ESTOP_N);
+    TT_ASSERT_EQ(18, SEQ_ESTOP_N);
 }
 
 static void test_estop_drops_pa_before_everything_but_mixers(void)
@@ -159,12 +174,56 @@ static void test_estop_dig_low_before_fpga_enable(void)
     TT_ASSERT_EQ(fpga_idx, mock_log_n - 1);       /* FPGA enable is the last step */
 }
 
+/* No chip select / CE is ever driven high by the e-stop or the orderly shutdown,
+ * and each goes low only after its chip's supply enable has gone low. */
+static void test_cs_low_only_after_supply_off(void)
+{
+    int pass, i, adar_off, lo_off;
+    for (pass = 0; pass < 2; pass++) {
+        fresh();
+        if (pass == 0) sequencer_emergency_stop(); else sequencer_power_down();
+        adar_off = lo_off = -1;
+        for (i = 0; i < mock_log_n; i++) {
+            const mock_event_t *e = &mock_log[i];
+            if (e->kind != MOCK_EV_GPIO_WRITE) continue;
+            if (e->a == PIN_EN_ADAR && e->b == 0) adar_off = i;
+            if (e->a == PIN_EN_LO && e->b == 0) lo_off = i;
+            if (e->a >= PIN_ADAR_CS0 && e->a <= PIN_ADAR_CS3) {
+                TT_ASSERT_EQ(0, e->b);
+                TT_ASSERT(adar_off >= 0);
+            }
+            if (e->a == PIN_PLL_CS || e->a == PIN_PLL_CE) {
+                TT_ASSERT_EQ(0, e->b);
+                TT_ASSERT(lo_off >= 0);
+            }
+        }
+    }
+}
+
+/* M2: orderly shutdown also drives DIG0-2 low before the FPGA loses power. */
+static void test_down_dig_low_before_fpga_enable(void)
+{
+    int i, fpga_idx = -1, seen = 0;
+    fresh();
+    sequencer_power_down();
+    for (i = 0; i < mock_log_n; i++) if (mock_log[i].kind == MOCK_EV_GPIO_WRITE && mock_log[i].a == PIN_EN_FPGA) fpga_idx = i;
+    TT_ASSERT(fpga_idx > 0);
+    for (i = 0; i < fpga_idx; i++) {
+        const mock_event_t *e = &mock_log[i];
+        if (e->kind == MOCK_EV_GPIO_WRITE && e->a >= PIN_FPGA_DIG0 && e->a <= PIN_FPGA_DIG4) {
+            TT_ASSERT_EQ(0, e->b);
+            seen |= 1 << (e->a - PIN_FPGA_DIG0);
+        }
+    }
+    TT_ASSERT_EQ(0x1F, seen);
+}
+
 static void test_estop_idempotent(void)
 {
     fresh();
     sequencer_emergency_stop();
     sequencer_emergency_stop();
-    TT_ASSERT_EQ(24, mock_log_n);
+    TT_ASSERT_EQ(36, mock_log_n);
     TT_ASSERT_EQ(0, count_bus());
 }
 
@@ -223,7 +282,7 @@ static void test_fault_integration(void)
     fault_raise(FAULT_OVERTEMP);
     TT_ASSERT_EQ(0, gpio_read(PIN_EN_PA));
     TT_ASSERT_EQ(0, gpio_read(PIN_EN_FPGA));
-    TT_ASSERT_EQ(12, mock_log_n);
+    TT_ASSERT_EQ(18, mock_log_n);
     /* PLL lock loss: only RF off */
     fresh();
     gpio_write(PIN_EN_FPGA, 1); gpio_write(PIN_EN_PA, 1);
@@ -256,6 +315,8 @@ int main(void)
     TT_RUN(test_estop_order_no_delay_no_bus);
     TT_RUN(test_estop_drops_pa_before_everything_but_mixers);
     TT_RUN(test_estop_dig_low_before_fpga_enable);
+    TT_RUN(test_cs_low_only_after_supply_off);
+    TT_RUN(test_down_dig_low_before_fpga_enable);
     TT_RUN(test_estop_idempotent);
     TT_RUN(test_latched_refuses_power_up);
     TT_RUN(test_nonlatched_fault_does_not_block_up);
