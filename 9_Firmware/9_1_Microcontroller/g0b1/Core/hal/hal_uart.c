@@ -26,7 +26,7 @@ void hal_uart_init(void)
     huart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
     huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
     if (HAL_UART_Init(&huart2) != HAL_OK) {
-        for (;;) { }   /* fault_panic() hooks in later */
+        Error_Handler();   /* never returns: e-stop + latch + spin */
     }
     SET_BIT(USART2->CR1, USART_CR1_RXNEIE_RXFNEIE);
     HAL_NVIC_SetPriority(USART2_LPUART2_IRQn, 3, 0);

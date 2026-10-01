@@ -27,7 +27,7 @@ void hal_i2c_init(void)
     if (HAL_I2C_Init(&hi2c1) != HAL_OK ||
         HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK ||
         HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK) {
-        for (;;) { }   /* fault_panic() hooks in later */
+        Error_Handler();   /* never returns: e-stop + latch + spin */
     }
 }
 

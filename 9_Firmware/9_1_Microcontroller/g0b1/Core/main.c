@@ -5,6 +5,13 @@
 #include "hal_init.h"
 #include "hal_time.h"
 #include "hal_uart.h"
+#include "fault.h"
+
+void Error_Handler(void)
+{
+    fault_panic();   /* e-stop, latch, spin without IWDG refresh */
+    for (;;) { }     /* fault_panic() does not return on target */
+}
 
 static void SystemClock_Config(void)
 {
@@ -24,14 +31,14 @@ static void SystemClock_Config(void)
     osc.PLL.PLLQ = RCC_PLLQ_DIV2;
     osc.PLL.PLLR = RCC_PLLR_DIV2;
     if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
-        for (;;) { }
+        Error_Handler();
     }
     clk.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1;
     clk.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
     clk.AHBCLKDivider = RCC_SYSCLK_DIV1;
     clk.APB1CLKDivider = RCC_HCLK_DIV1;
     if (HAL_RCC_ClockConfig(&clk, FLASH_LATENCY_2) != HAL_OK) {
-        for (;;) { }
+        Error_Handler();
     }
 }
 

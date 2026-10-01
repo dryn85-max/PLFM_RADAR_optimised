@@ -2,16 +2,10 @@
 #include <errno.h>
 #include "hal_spi.h"
 #include "hal_init.h"
+#include "config.h"
 #include "pins.h"
 #include "stm32g0xx_hal.h"
 
-/* TODO(Task 4): take these from config.h once it exists. */
-#ifndef SPI_ADAR_MAX_HZ
-#define SPI_ADAR_MAX_HZ 20000000u
-#endif
-#ifndef SPI_PLL_MAX_HZ
-#define SPI_PLL_MAX_HZ 10000000u
-#endif
 #define SPI_TIMEOUT_MS 10u
 
 static SPI_HandleTypeDef hspi1;   /* PLL  */
@@ -48,7 +42,7 @@ static void spi_setup(SPI_HandleTypeDef *h, SPI_TypeDef *inst, uint32_t max_hz)
     h->Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
     h->Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
     if (HAL_SPI_Init(h) != HAL_OK) {
-        for (;;) { }   /* fault_panic() hooks in later */
+        Error_Handler();   /* never returns: e-stop + latch + spin */
     }
 }
 
