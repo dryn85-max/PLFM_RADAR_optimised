@@ -25,6 +25,16 @@ for arg in "$@"; do
     esac
 done
 
+# GNU timeout: `timeout` on Linux, `gtimeout` from coreutils on macOS; run unguarded if neither exists
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="gtimeout"
+else
+    TIMEOUT_CMD=""
+    echo "WARNING: no 'timeout'/'gtimeout' found — simulations run without a time limit" >&2
+fi
+
 PASS=0
 FAIL=0
 SKIP=0
@@ -286,7 +296,7 @@ run_test() {
 
     # Run
     local output
-    output=$(timeout 120 vvp "$vvp" 2>&1) || true
+    output=$(${TIMEOUT_CMD:+$TIMEOUT_CMD 120} vvp "$vvp" 2>&1) || true
 
     # Count PASS/FAIL in output (testbenches use explicit [PASS]/[FAIL] markers)
     local test_pass test_fail
