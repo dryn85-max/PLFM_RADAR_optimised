@@ -479,10 +479,10 @@ end
 always @(posedge clk_100m) begin
     // Multi-segment FSM state changes
     if (dut.mf_dual.state != mf_state_prev) begin
-        $display("[MF_DBG t=%0t] multi_seg state: %0d -> %0d (seg=%0d, wr_ptr=%0d, rd_ptr=%0d, samples=%0d)",
+        $display("[MF_DBG t=%0t] multi_seg state: %0d -> %0d (seg=%0d, wr_ptr=%0d, rd_ptr=%0d, window=%0d)",
                  $time, mf_state_prev, dut.mf_dual.state,
                  dut.mf_dual.current_segment, dut.mf_dual.buffer_write_ptr,
-                 dut.mf_dual.buffer_read_ptr, dut.mf_dual.chirp_samples_collected);
+                 dut.mf_dual.buffer_read_ptr, dut.mf_dual.window_len);
         mf_state_prev = dut.mf_dual.state;
     end
     // Processing chain state changes

@@ -23,6 +23,8 @@ from radar_params import N_FFT, write_hex  # noqa: E402
 
 AMP = 400
 DELAYS = (0, 20, 100)
+MS_DELAYS = (20, 100, 150)   # continuous 4-segment stream (tb_mf_multiseg.v)
+MS_LEN = 1024
 
 
 def main():
@@ -50,6 +52,33 @@ def main():
         write_hex(os.path.join(HERE, f"mf_gold_d{d}_i.hex"), oi, 16)
         write_hex(os.path.join(HERE, f"mf_gold_d{d}_q.hex"), oq, 16)
     print("wrote mf_sig_*/mf_gold_* vectors")  # noqa: T201
+    multiseg_vectors()
+
+
+def multiseg_vectors():
+    """Whole receive window (928 samples = 4 overlap-save segments; chirp delayed
+    by d, so its tail lies in the later segments) for the segmenter test.  Segment s sees chirp samples [224s, 224s+256) in its
+    window and the ROM holds the same window of the chirp, so for d <= 178
+    (= 928 - 750, the echo tail stays inside the window) the peak of every
+    segment is at bin d.  Checked here with the ideal float
+    correlation; the testbench checks the same on the RTL."""
+    chirp = long_chirp_padded()
+    for d in MS_DELAYS:
+        x = np.zeros(MS_LEN, dtype=complex)
+        n = np.arange(928)               # whole receive window, echo tail included
+        src = n - d
+        ok = src >= 0
+        x[:928][ok] = chirp[src[ok]]     # chirp[] is zero past sample 749
+        si = [round(AMP * v.real) for v in x]
+        sq = [round(AMP * v.imag) for v in x]
+        for s in range(4):
+            win = x[224 * s: 224 * s + N_FFT]
+            ref = chirp[224 * s: 224 * s + N_FFT]
+            c = np.fft.ifft(np.fft.fft(win) * np.conj(np.fft.fft(ref)))
+            assert int(np.argmax(np.abs(c))) == d, (d, s)
+        write_hex(os.path.join(HERE, f"mf_ms_d{d}_i.hex"), si, 16)
+        write_hex(os.path.join(HERE, f"mf_ms_d{d}_q.hex"), sq, 16)
+    print("wrote mf_ms_* vectors")  # noqa: T201
 
 
 if __name__ == "__main__":

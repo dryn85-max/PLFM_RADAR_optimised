@@ -6,6 +6,10 @@
 // peak of segment 0 must move by (D2 - D1)/4 = 40 bins between the two runs
 // and stand at least 8x above the mean.  Gain shift 1100b (/16) keeps the
 // FFT input below saturation.
+// The ADC stream is continuous (DDC never stalls), so this also checks that the
+// segmenter buffers the whole receive window: the echo shows up in all four
+// overlap-save segments, at the same bin as in segment 0 (+-2), >= 4x the
+// segment mean (segment 3 only overlaps the chirp tail).
 // ============================================================================
 module tb_fullchain_golden;
     localparam CLK_PERIOD = 10;
@@ -18,7 +22,9 @@ module tb_fullchain_golden;
     wire rp_valid;
     wire doppler_frame_done;
     integer i, k, pass_count, fail_count, test_num;
-    integer cap_count, peak_bin, peak_mag, mean_mag, mag, peak1, peak2;
+    integer cap_count, peak_bin, peak_mag, mean_mag, mag, peak1, peak2, sg, ss;
+    integer seg_peak_bin [0:3], seg_peak_mag [0:3], seg_mean [0:3];
+    real seg_peak_m2 [0:3];
     reg capturing;
     reg chirp_toggle0;
     real m2, peak_m2;   // squared L2 magnitude (real: |.|^2 can reach 2^31)
@@ -51,13 +57,16 @@ module tb_fullchain_golden;
         end
     endtask
 
-    // Capture the first N_FFT range-profile outputs after a trigger (segment 0)
+    // Capture all 4 segments (4 x N_FFT outputs) after a trigger
     always @(posedge clk) if (capturing && rp_valid) begin
-        if (cap_count < N_FFT) begin
+        if (cap_count < 4 * N_FFT) begin
+            sg = cap_count / N_FFT;
             mag = (rp_i < 0 ? -rp_i : rp_i) + (rp_q < 0 ? -rp_q : rp_q);
-            mean_mag = mean_mag + mag;
+            seg_mean[sg] = seg_mean[sg] + mag;
             m2 = 1.0 * rp_i * rp_i + 1.0 * rp_q * rp_q;
-            if (m2 > peak_m2) begin peak_m2 = m2; peak_mag = mag; peak_bin = cap_count; end
+            if (m2 > seg_peak_m2[sg]) begin
+                seg_peak_m2[sg] = m2; seg_peak_mag[sg] = mag; seg_peak_bin[sg] = cap_count % N_FFT;
+            end
         end
         cap_count = cap_count + 1;
     end
@@ -67,7 +76,10 @@ module tb_fullchain_golden;
         integer t;
         begin
             $readmemh(hexfile, adc_mem);
-            cap_count = 0; peak_bin = -1; peak_mag = 0; peak_m2 = -1.0; mean_mag = 0; capturing = 1;
+            cap_count = 0; capturing = 1;
+            for (ss = 0; ss < 4; ss = ss + 1) begin
+                seg_peak_bin[ss] = -1; seg_peak_mag[ss] = 0; seg_peak_m2[ss] = -1.0; seg_mean[ss] = 0;
+            end
             // trigger one long chirp; the mode controller toggles mc_new_chirp a few cycles later
             // (the toggle happens at the first clock edge that sees host_trigger = 1, so poll
             //  for it after that edge instead of waiting for an event that already fired)
@@ -81,21 +93,33 @@ module tb_fullchain_golden;
             end
             adc_data = 12'h800;
             t = 0;
-            while (cap_count < N_FFT && t < 200000) begin @(posedge clk); t = t + 1; end
+            while (cap_count < 4 * N_FFT && t < 400000) begin @(posedge clk); t = t + 1; end
             capturing = 0;
-            mean_mag = mean_mag / N_FFT;
-            $display("  segment 0: outputs=%0d peak_bin=%0d peak=%0d mean=%0d", cap_count, peak_bin, peak_mag, mean_mag);
+            for (ss = 0; ss < 4; ss = ss + 1) begin
+                seg_mean[ss] = seg_mean[ss] / N_FFT;
+                $display("  segment %0d: peak_bin=%0d peak=%0d mean=%0d", ss, seg_peak_bin[ss], seg_peak_mag[ss], seg_mean[ss]);
+            end
+            peak_bin = seg_peak_bin[0]; peak_mag = seg_peak_mag[0]; mean_mag = seg_mean[0];
+            check(cap_count == 4 * N_FFT, "4 segments x 256 range bins produced");
             // The mode controller only accepts a trigger in S_IDLE, which it re-enters
-            // long_chirp + long_listen = 16700 cycles after the trigger.  Wait that out
-            // (the 4-segment matched filter finishes well within it).
+            // long_chirp + long_listen = 16700 cycles after the trigger; the segmenter
+            // needs ~44k cycles for 4 segments (budget: PRI = 100000).  Wait for both.
             repeat (17000) @(posedge clk); #1;
+            t = 0;
+            while (dut.mf_dual.state != 4'd0 && t < 100000) begin @(posedge clk); t = t + 1; end
             check(dut.mf_dual.state == 4'd0, "segmenter back in IDLE after the chirp");
+            check(!dut.mf_overrun, "no matched-filter overrun");
+            for (ss = 1; ss < 4; ss = ss + 1) begin
+                check(seg_peak_bin[ss] >= seg_peak_bin[0] - 2 && seg_peak_bin[ss] <= seg_peak_bin[0] + 2,
+                      "segs 1-3: peak bin within +-2 of segment 0");
+                check(seg_peak_mag[ss] > 4 * seg_mean[ss], "segs 1-3: peak >= 4x mean");
+            end
         end
     endtask
 
     // global watchdog: a hang must fail, never run forever
     initial begin
-        #5_000_000;
+        #10_000_000;
         $display("[FAIL] Test 999: simulation watchdog expired");
         $display("\nResults: %0d/%0d passed", pass_count, pass_count + fail_count + 1);
         $finish;

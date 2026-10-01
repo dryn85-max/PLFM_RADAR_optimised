@@ -236,6 +236,7 @@ assign range_profile_i_out = range_profile_i;
 assign range_profile_q_out = range_profile_q;
 assign range_profile_valid_out = range_valid;
 
+wire mf_overrun;
 // 3. Matched filter: 256-point overlap-save segments, reference spectra in ROM
 matched_filter_multi_segment #(
     .N_FFT(256), .LOG2N(8), .OVERLAP(32),
@@ -254,7 +255,8 @@ matched_filter_multi_segment #(
     .pc_i_w(range_profile_i),
     .pc_q_w(range_profile_q),
     .pc_valid_w(range_valid),
-    .status()
+    .status(),
+    .mf_overrun(mf_overrun)   // sticky: chirp arrived while the previous one was processed (not yet host-visible)
 );
 
 // ========== CRITICAL: RANGE BIN DECIMATOR ==========

@@ -470,6 +470,10 @@ if [[ "$QUICK" -eq 0 ]]; then
         tb/tb_fullchain_golden_reg.vvp \
         tb/golden/tb_fullchain_golden.v "${RECEIVER_RTL[@]}"
 
+    run_test_nosim "Full-chain golden (d), synthesizable chain" \
+        tb/tb_fullchain_golden_syn_reg.vvp \
+        tb/golden/tb_fullchain_golden.v "${RECEIVER_RTL[@]}"
+
     # Full system top (monitoring-only, legacy)
     run_test "System Top (radar_system_tb)" \
         tb/tb_system_reg.vvp \
@@ -492,7 +496,7 @@ if [[ "$QUICK" -eq 0 ]]; then
         tb/tb_system_e2e.v "${SYSTEM_RTL[@]}"
 else
     echo "  (skipped receiver golden + system top + E2E — use without --quick)"
-    SKIP=$((SKIP + 7))
+    SKIP=$((SKIP + 8))
 fi
 
 echo ""
@@ -533,6 +537,21 @@ run_test_nosim "Matched Filter Chain (synthesizable, no -DSIMULATION)" \
 run_test "Matched Filter Segmenter (overlap-save stream)" \
     tb/tb_mf_seg_reg.vvp \
     tb/tb_mf_segmenter.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
+    fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test_nosim "Matched Filter Segmenter (synthesizable chain)" \
+    tb/tb_mf_seg_syn_reg.vvp \
+    tb/tb_mf_segmenter.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
+    fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test "Matched Filter 4 segments, continuous stream (behavioral)" \
+    tb/tb_mf_ms_beh_reg.vvp \
+    tb/tb_mf_multiseg.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
+    fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test_nosim "Matched Filter 4 segments, continuous stream (synth)" \
+    tb/tb_mf_ms_syn_reg.vvp \
+    tb/tb_mf_multiseg.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
     fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
 
 run_test "Reference spectrum ROM" \
