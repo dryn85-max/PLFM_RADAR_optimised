@@ -1,6 +1,7 @@
-/* Pin map: NUCLEO-G0B1RE (STM32G0B1RET6). Included only by Core/hal/*.c and main.c.
- * Role -> MCU pin; AFs to be verified against the datasheet before the README
- * wiring table is finalised.
+/* Pin map: NUCLEO-G0B1RE (STM32G0B1RET6). Included only by the target HAL sources and main.c.
+ * Role -> MCU pin. AF numbers exist in the vendored HAL (GPIO_AF0_SPI1/SPI2,
+ * GPIO_AF6_I2C1, GPIO_AF1_USART2); the pin<->AF assignment itself comes from the
+ * G0B1 datasheet alternate-function table (verify before finalising the README).
  *
  *  ADAR1000 SPI2 SCK/MISO/MOSI    PB13 / PB14 / PB15 (AF0), 16 MHz (64/4)
  *  ADAR CS0..CS3                  PB12, PB11, PB10, PB2
@@ -16,7 +17,8 @@
  *                                 new_azimuth, mixers_enable, fpga_reset_n
  *  FPGA DIG5..DIG7 (inputs)       PC5..PC7: agc_saturation, agc_enable, reserved
  *
- * Target mapping table (port, pin, direction) lives in hal_gpio.c (Task 3).
+ * Target mapping table (port, pin, direction, idle level) lives in hal_gpio.c.
+ * Chip selects idle HIGH (active low); every other output idles LOW.
  */
 #ifndef PINS_H
 #define PINS_H
