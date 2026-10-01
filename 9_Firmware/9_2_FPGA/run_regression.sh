@@ -69,10 +69,10 @@ PROD_RTL=(
     cic_decimator_4x_enhanced.v
     cdc_modules.v
     fir_lowpass.v
-    chirp_memory_loader_param.v
-    latency_buffer.v
     matched_filter_multi_segment.v
     matched_filter_processing_chain.v
+    frequency_matched_filter.v
+    ref_spectrum_rom.v
     range_bin_decimator.v
     doppler_processor.v
     xfft_16.v
@@ -87,11 +87,6 @@ PROD_RTL=(
     fpga_self_test.v
 )
 
-# Source-only RTL (not instantiated at top level, but should still be lint-clean)
-EXTRA_RTL=(
-    frequency_matched_filter.v
-)
-
 # ---------------------------------------------------------------------------
 # Shared RTL file lists for integration / system tests
 # Centralised here so a new module only needs adding once.
@@ -103,8 +98,8 @@ RECEIVER_RTL=(
     radar_mode_controller.v
     adc_cmos_interface.v ddc.v nco.v cic_decimator_4x_enhanced.v
     cdc_modules.v fir_lowpass.v
-    chirp_memory_loader_param.v latency_buffer.v
     matched_filter_multi_segment.v matched_filter_processing_chain.v
+    frequency_matched_filter.v ref_spectrum_rom.v
     range_bin_decimator.v doppler_processor.v xfft_16.v fft_engine.v
     rx_gain_control.v mti_canceller.v
 )
@@ -319,6 +314,42 @@ run_test() {
     rm -f "$vvp"
 }
 
+# ---------------------------------------------------------------------------
+# Helper: compile WITHOUT -DSIMULATION (exercises the synthesizable branches)
+# ---------------------------------------------------------------------------
+run_test_nosim() {
+    local name="$1"
+    local vvp="$2"
+    shift 2
+    local args=("$@")
+
+    printf "  %-45s " "$name"
+    if ! iverilog -g2001 -o "$vvp" "${args[@]}" 2>/tmp/iverilog_err_$$; then
+        echo -e "${RED}COMPILE FAIL${NC}"
+        ERRORS="$ERRORS\n  $name: compile error ($(head -1 /tmp/iverilog_err_$$))"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    local output
+    output=$(${TIMEOUT_CMD:+$TIMEOUT_CMD 300} vvp "$vvp" 2>&1) || true
+    local test_pass test_fail
+    test_pass=$(echo "$output" | grep -Ec '^\[PASS([^]]*)\]' || true)
+    test_fail=$(echo "$output" | grep -Ec '^\[FAIL([^]]*)\]' || true)
+    if [[ "$test_fail" -gt 0 ]]; then
+        echo -e "${RED}FAIL${NC} (pass=$test_pass, fail=$test_fail)"
+        ERRORS="$ERRORS\n  $name: $test_fail failure(s)"
+        FAIL=$((FAIL + 1))
+    elif [[ "$test_pass" -gt 0 ]]; then
+        echo -e "${GREEN}PASS${NC} ($test_pass checks)"
+        PASS=$((PASS + 1))
+    else
+        echo -e "${YELLOW}UNKNOWN${NC} (no PASS/FAIL markers)"
+        ERRORS="$ERRORS\n  $name: no pass/fail markers in output"
+        FAIL=$((FAIL + 1))
+    fi
+    rm -f "$vvp"
+}
+
 # ===========================================================================
 echo "============================================"
 echo "  AERIS-10 FPGA Regression Test Suite"
@@ -337,15 +368,8 @@ if [[ "$SKIP_LINT" -eq 0 ]]; then
     # Layer A: iverilog -Wall on full production design
     run_lint_iverilog "production" "${PROD_RTL[@]}"
 
-    # Layer A: standalone modules not in top-level hierarchy
-    for extra in "${EXTRA_RTL[@]}"; do
-        if [[ -f "$extra" ]]; then
-            run_lint_iverilog "$(basename "$extra" .v)" "$extra"
-        fi
-    done
-
     # Layer B: custom static regex checks
-    ALL_RTL=("${PROD_RTL[@]}" "${EXTRA_RTL[@]}")
+    ALL_RTL=("${PROD_RTL[@]}")
     run_lint_static "${ALL_RTL[@]}"
 
     echo ""
@@ -441,6 +465,11 @@ if [[ "$QUICK" -eq 0 ]]; then
         tb/tb_rx_compare_reg.vvp \
         tb/tb_radar_receiver_final.v "${RECEIVER_RTL[@]}"
 
+    # Golden (d): ADC -> DDC -> matched filter, range-peak displacement
+    run_test "Full-chain golden (d): range peak displacement" \
+        tb/tb_fullchain_golden_reg.vvp \
+        tb/golden/tb_fullchain_golden.v "${RECEIVER_RTL[@]}"
+
     # Full system top (monitoring-only, legacy)
     run_test "System Top (radar_system_tb)" \
         tb/tb_system_reg.vvp \
@@ -463,7 +492,7 @@ if [[ "$QUICK" -eq 0 ]]; then
         tb/tb_system_e2e.v "${SYSTEM_RTL[@]}"
 else
     echo "  (skipped receiver golden + system top + E2E — use without --quick)"
-    SKIP=$((SKIP + 6))
+    SKIP=$((SKIP + 7))
 fi
 
 echo ""
@@ -493,10 +522,18 @@ run_test "FIR golden (b): folded == direct form" \
     tb/tb_fir_golden_reg.vvp \
     tb/golden/tb_fir_golden.v fir_lowpass.v
 
-run_test "Matched Filter Chain" \
-    tb/tb_mf_reg.vvp \
-    tb/tb_matched_filter_processing_chain.v matched_filter_processing_chain.v \
-    fft_engine.v chirp_memory_loader_param.v
+run_test "Matched Filter Chain (behavioral branch)" \
+    tb/tb_mf_beh_reg.vvp \
+    tb/tb_mf_chain.v matched_filter_processing_chain.v fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test_nosim "Matched Filter Chain (synthesizable, no -DSIMULATION)" \
+    tb/tb_mf_syn_reg.vvp \
+    tb/tb_mf_chain.v matched_filter_processing_chain.v fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test "Matched Filter Segmenter (overlap-save stream)" \
+    tb/tb_mf_seg_reg.vvp \
+    tb/tb_mf_segmenter.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
+    fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
 
 run_test "Reference spectrum ROM" \
     tb/tb_ref_rom_reg.vvp \

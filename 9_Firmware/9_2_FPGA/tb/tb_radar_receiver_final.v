@@ -169,7 +169,7 @@ radar_receiver_final dut (
 // Reduce radar_mode_controller timing to keep simulation tractable.
 // Real values: LONG_CHIRP=3000, LONG_LISTEN=13700, GUARD=17540,
 //              SHORT_CHIRP=50, SHORT_LISTEN=17450  (total ~51740 per chirp)
-// Need enough DDC samples to fill MF buffer (896) plus latency buffer (3187).
+// Need enough DDC samples to fill the MF segment (256 at 25 MSPS = 1024 clk).
 // At ~1 DDC sample per sys_clk, we need at least ~5000 sys_clk per chirp.
 // Use moderately reduced values: ~5000 cycles per chirp pair
 defparam dut.rmc.LONG_CHIRP_CYCLES   = 500;
@@ -508,9 +508,9 @@ end
 // ============================================================================
 // Simulation timeout calculation:
 // 1. DDC pipeline fill: ~4 sys_clk cycles
-// 2. MF overlap-save buffer fill: 896 valid DDC samples
-// 3. Latency buffer priming: 3187 valid_in assertions
-// 4. 1024 MF outputs -> range_bin_decimator -> 64 decimated outputs
+// 2. MF overlap-save buffer fill: 256 valid DDC samples per segment
+// 3. Reference spectra come from the ROM (no priming)
+// 4. 4 x 256 MF outputs -> range_bin_decimator -> 64 decimated outputs
 // 5. 32 chirps of decimated data -> Doppler FFT
 //
 // With shortened mode controller timing (~600 cycles per chirp pair),
@@ -518,7 +518,7 @@ end
 // produce valid baseband outputs (CIC 4x decimation = 1 per 4 clk_100m).
 //
 // Conservative estimate: ~500K 100MHz cycles for the full pipeline.
-// ~4050 cycles/chirp x 32 chirps = ~130K, plus latency buffer priming,
+// ~4050 cycles/chirp x 32 chirps = ~130K,
 // plus Doppler processing time. Set generous timeout.
 
 localparam SIM_TIMEOUT = 2_000_000;  // 2M cycles -- full pipeline with multi-segment drain

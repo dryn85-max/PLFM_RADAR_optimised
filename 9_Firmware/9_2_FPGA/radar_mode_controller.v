@@ -10,8 +10,8 @@
  *   - mc_new_elevation : toggle signal indicating elevation step
  *   - mc_new_azimuth   : toggle signal indicating azimuth step
  *
- * These signals are consumed by matched_filter_multi_segment and
- * chirp_memory_loader_param in the receiver path.
+ * These signals are consumed by matched_filter_multi_segment in the
+ * receiver path.
  *
  * The controller mirrors the transmitter's chirp sequence defined in
  * plfm_chirp_controller_enhanced:

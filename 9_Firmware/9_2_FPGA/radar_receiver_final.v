@@ -88,11 +88,6 @@ wire mc_new_chirp;
 wire mc_new_elevation;
 wire mc_new_azimuth;
 
-wire [1:0] segment_request;
-wire mem_request;
-wire [15:0] ref_i, ref_q;
-wire mem_ready;
-
 wire [15:0] adc_i_scaled, adc_q_scaled;
 wire adc_valid_sync;
 
@@ -102,10 +97,6 @@ wire gc_valid;
 wire [7:0] gc_saturation_count;  // Diagnostic: per-frame clipped sample counter
 wire [7:0] gc_peak_magnitude;    // Diagnostic: per-frame peak magnitude
 wire [3:0] gc_current_gain;      // Diagnostic: effective gain_shift
-
-// Reference signals for the processing chain
-wire [15:0] long_chirp_real, long_chirp_imag;
-wire [15:0] short_chirp_real, short_chirp_imag;
 
 // ========== DOPPLER PROCESSING SIGNALS ==========
 wire [31:0] range_data_32bit;
@@ -234,57 +225,7 @@ rx_gain_control gain_ctrl (
     .current_gain(gc_current_gain)
 );
 
-// 3. Dual Chirp Memory Loader
-wire [9:0] sample_addr_from_chain;
-
-chirp_memory_loader_param chirp_mem (
-    .clk(clk),
-    .reset_n(reset_n),
-    .segment_select(segment_request),
-    .mem_request(mem_request),
-    .use_long_chirp(use_long_chirp),
-	 .sample_addr(sample_addr_from_chain),
-    .ref_i(ref_i),
-    .ref_q(ref_q),
-    .mem_ready(mem_ready)
-);
-
-// Sample address generator
-reg [9:0] sample_addr_reg;
-always @(posedge clk or negedge reset_n) begin
-    if (!reset_n) begin
-        sample_addr_reg <= 0;
-    end else if (mem_request) begin
-        sample_addr_reg <= sample_addr_reg + 1;
-        if (sample_addr_reg == 1023) sample_addr_reg <= 0;
-    end
-end
-// sample_addr_wire removed — was unused implicit wire (synthesis warning)
-
-// 4. CRITICAL: Reference Chirp Latency Buffer
-// This aligns reference data with FFT output (2159 cycle delay)
-wire [15:0] delayed_ref_i, delayed_ref_q;
-wire mem_ready_delayed;
-
-latency_buffer #(
-    .DATA_WIDTH(32),  // 16-bit I + 16-bit Q
-	.LATENCY(3187)
-) ref_latency_buffer (
-    .clk(clk),
-    .reset_n(reset_n),
-    .data_in({ref_i, ref_q}),
-    .valid_in(mem_request),
-    .data_out({delayed_ref_i, delayed_ref_q}),
-    .valid_out(mem_ready_delayed)
-);
-
-// Assign delayed reference signals
-assign long_chirp_real = delayed_ref_i;
-assign long_chirp_imag = delayed_ref_q;
-assign short_chirp_real = delayed_ref_i;
-assign short_chirp_imag = delayed_ref_q;
-
-// 5. Dual Chirp Matched Filter
+// Matched filter range-profile wires
 
 wire signed [15:0] range_profile_i;
 wire signed [15:0] range_profile_q;
@@ -295,36 +236,33 @@ assign range_profile_i_out = range_profile_i;
 assign range_profile_q_out = range_profile_q;
 assign range_profile_valid_out = range_valid;
 
-matched_filter_multi_segment mf_dual (
+// 3. Matched filter: 256-point overlap-save segments, reference spectra in ROM
+matched_filter_multi_segment #(
+    .N_FFT(256), .LOG2N(8), .OVERLAP(32),
+    .LONG_CHIRP_SAMPLES(750), .SHORT_CHIRP_SAMPLES(13), .LONG_SEGMENTS(4)
+) mf_dual (
     .clk(clk),
     .reset_n(reset_n),
-    .ddc_i({{2{gc_i[15]}}, gc_i}),
-    .ddc_q({{2{gc_q[15]}}, gc_q}),
+    .ddc_i(gc_i),
+    .ddc_q(gc_q),
     .ddc_valid(gc_valid),
     .use_long_chirp(use_long_chirp),
     .chirp_counter(chirp_counter),
     .mc_new_chirp(mc_new_chirp),
     .mc_new_elevation(mc_new_elevation),
     .mc_new_azimuth(mc_new_azimuth),
-	 .long_chirp_real(delayed_ref_i),      // From latency buffer
-    .long_chirp_imag(delayed_ref_q),
-    .short_chirp_real(delayed_ref_i),     // Same for short chirp
-    .short_chirp_imag(delayed_ref_q),
-    .segment_request(segment_request),
-    .mem_request(mem_request),
-	 .sample_addr_out(sample_addr_from_chain),
-    .mem_ready(mem_ready),
     .pc_i_w(range_profile_i),
     .pc_q_w(range_profile_q),
-    .pc_valid_w(range_valid)
+    .pc_valid_w(range_valid),
+    .status()
 );
 
 // ========== CRITICAL: RANGE BIN DECIMATOR ==========
-// Convert 1024 range bins to 64 bins for Doppler
+// Convert 256 range bins to 64 bins for Doppler
 range_bin_decimator #(
-    .INPUT_BINS(1024),
+    .INPUT_BINS(256),
     .OUTPUT_BINS(64),
-    .DECIMATION_FACTOR(16)
+    .DECIMATION_FACTOR(4)
 ) range_decim (
     .clk(clk),
     .reset_n(reset_n),

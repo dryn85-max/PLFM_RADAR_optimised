@@ -2,7 +2,7 @@
 // ============================================================================
 // ref_spectrum_rom.v — precomputed reference-chirp spectra for the matched
 // filter.  Replaces the per-segment "reference FFT" pass, the time-domain
-// chirp_memory_loader_param ROMs and the latency_buffer.
+// chirp ROMs and the reference latency buffer.
 //
 //   addr = {segment[2:0], k[LOG2N-1:0]}
 //   segment 0..3 : long chirp, FFT_256 of samples [224*seg, 224*seg + 256)
