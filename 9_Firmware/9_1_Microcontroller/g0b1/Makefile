@@ -83,6 +83,8 @@ endif
 test:
 	$(MAKE) -C tests ADAR_COUNT=1
 	$(MAKE) -C tests ADAR_COUNT=4
+	@if command -v python3 >/dev/null 2>&1; then python3 tests/test_regtable_to_h.py; \
+	else echo "SKIP tests/test_regtable_to_h.py (python3 not found)"; fi
 
 clean:
 	rm -rf build

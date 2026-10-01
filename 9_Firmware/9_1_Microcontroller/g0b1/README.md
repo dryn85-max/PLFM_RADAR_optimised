@@ -125,6 +125,31 @@ bus. All outputs idle low except the chip selects, which idle high. The I2C
 RM0444 formulae, not measured. The ADTR1107 `CTRL_SW` polarity is assumed to be
 driven by the ADAR1000 `TR_SW_POS` output; confirm on the schematic (BACKLOG).
 
+## PLL register tables from vendor exports
+
+`tools/regtable_to_h.py` turns a vendor export into a `pll_tables/*.h` header
+that matches `pll_regs_t` (`{words, count, settle_ms, name}`) and defines
+`PLL_TABLE_PLACEHOLDER` as 0 (the checked-in placeholder headers leave it at the
+default 1). Input, one register per line (blank lines and `#` / `//` comments
+are skipped, anything else malformed is an error, empty input is an error):
+
+- LMX2594, TICS Pro "Hex Registers": `R<n><tab>0x<6 hex>` (R0..R112). The
+  24-bit frame is used as is; its address byte must equal `<n>`, R/W bit 0.
+- ADF4372, ADI software: `0x<4 hex> 0x<2 hex>` (address, data); word =
+  `addr15 << 8 | data8`.
+
+Words keep the file order. Example (the symbol must stay
+`LMX2594_10500MHZ` / `ADF4372_10500MHZ`, which `pll_lo.c` selects):
+
+```
+tools/regtable_to_h.py --chip lmx2594 --name LMX2594_10500MHZ --settle-ms 10 \
+    -o Core/drivers/pll_tables/lmx2594_10500MHz.h tics_export.txt
+```
+
+`tests/test_regtable_to_h.py` (run by `make test`; prints SKIP if `python3` is
+missing) checks word packing, ordering, rejection of empty/malformed input and
+that the generated headers compile (`gcc -fsyntax-only`).
+
 ## Serial command interface
 
 USART2 via the ST-LINK VCP, 115200 8N1, one command per line (CR or LF
