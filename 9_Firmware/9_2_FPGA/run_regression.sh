@@ -484,9 +484,9 @@ run_test "FFT Engine" \
     tb/tb_fft_reg.vvp \
     tb/tb_fft_engine.v fft_engine.v
 
-run_test "NCO 400MHz" \
+run_test "NCO (20 MHz IF, inferred accumulator)" \
     tb/tb_nco_reg.vvp \
-    tb/tb_nco_400m.v nco_400m_enhanced.v
+    tb/tb_nco.v nco.v
 
 run_test "FIR Lowpass" \
     tb/tb_fir_reg.vvp \
