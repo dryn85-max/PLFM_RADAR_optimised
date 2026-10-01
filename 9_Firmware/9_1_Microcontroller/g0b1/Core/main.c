@@ -1,11 +1,35 @@
-/* Bring-up main: 64 MHz clock, HAL init, boot banner, LD4 blink at 1 Hz.
- * The application sequencer replaces the loop in a later task. */
+/* Target wiring: 64 MHz clock, peripherals, IWDG (4 s), then app_init() and the
+ * app_loop() superloop. All logic lives in Core/app (host-tested). */
 #include "stm32g0xx_hal.h"
 #include "hal_gpio.h"
 #include "hal_init.h"
 #include "hal_time.h"
 #include "hal_uart.h"
+#include "app.h"
+#include "config.h"
 #include "fault.h"
+#include "pll_lo.h"
+
+/* IWDG: LSI 32 kHz / 256 * 500 counts = 4.0 s window (config.h). */
+_Static_assert(IWDG_PRESCALER_DIV == 256, "IWDG prescaler constant must match IWDG_PRESCALER_256");
+static IWDG_HandleTypeDef s_hiwdg;
+
+/* Strong override of the weak no-op in hal_time.c; called once per app_loop(). */
+void iwdg_refresh(void)
+{
+    (void)HAL_IWDG_Refresh(&s_hiwdg);
+}
+
+static void iwdg_start(void)
+{
+    s_hiwdg.Instance = IWDG;
+    s_hiwdg.Init.Prescaler = IWDG_PRESCALER_256;
+    s_hiwdg.Init.Reload = IWDG_RELOAD;
+    s_hiwdg.Init.Window = IWDG_WINDOW_DISABLE;
+    if (HAL_IWDG_Init(&s_hiwdg) != HAL_OK) {
+        Error_Handler();
+    }
+}
 
 void Error_Handler(void)
 {
@@ -45,6 +69,7 @@ static void SystemClock_Config(void)
 int main(void)
 {
     static const char banner[] = "AERIS-10 G0B1 boot\r\n";
+    static const char placeholder[] = "PLL table is a placeholder\r\n";
 
     hal_gpio_init();            /* all rails/enables/resets low before anything else */
     HAL_Init();
@@ -55,12 +80,15 @@ int main(void)
     hal_i2c_init();
 
     (void)uart_write(banner, sizeof banner - 1u);
+    if (pll_default_table_is_placeholder()) {
+        /* The LO cannot lock with a placeholder table: app_init() will end in a
+         * non-latched FAULT_PLL_LOCK with the RF rails off. */
+        (void)uart_write(placeholder, sizeof placeholder - 1u);
+    }
 
-    uint32_t last = millis();
+    iwdg_start();               /* app_init() refreshes it between the long stages */
+    app_init();
     for (;;) {
-        if ((uint32_t)(millis() - last) >= 500u) {
-            last += 500u;
-            gpio_toggle(PIN_LED);
-        }
+        app_loop();
     }
 }

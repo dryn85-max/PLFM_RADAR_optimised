@@ -9,7 +9,10 @@ static void (*hook_)(uint32_t now_us);
 void mock_time_set_hook(void (*fn)(uint32_t now_us)) { hook_ = fn; }
 static void tick_(void) { if (hook_ != NULL) hook_(now_us_); }
 
-void mock_time_reset(void) { now_us_ = 0; hook_ = NULL; }
+int mock_iwdg_refreshes;
+void iwdg_refresh(void) { mock_iwdg_refreshes++; }
+
+void mock_time_reset(void) { now_us_ = 0; hook_ = NULL; mock_iwdg_refreshes = 0; }
 void mock_time_advance_us(uint32_t us) { now_us_ += us; tick_(); }  /* wraps like micros() */
 
 uint32_t micros(void) { return now_us_; }

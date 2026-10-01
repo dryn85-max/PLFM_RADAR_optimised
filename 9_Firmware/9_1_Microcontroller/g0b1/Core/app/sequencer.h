@@ -9,7 +9,8 @@
  * Emergency stop is GPIO only (no SPI/I2C, no delay, no log), so it works
  * with a hung bus and from fault handlers. Order: DIG3 mixers_enable low ->
  * PA 5 V -> ADTR LNA 3V3 -> ADTR VSS_SW -> ADTR VDD_SW -> ADAR supply ->
- * LO enable -> FPGA enable. */
+ * LO enable -> FPGA DIG0, DIG1, DIG2, DIG4 low -> FPGA enable (the DIG lines go
+ * low while the FPGA is still powered so no MCU output back-powers it). */
 #ifndef SEQUENCER_H
 #define SEQUENCER_H
 
@@ -22,7 +23,7 @@ typedef struct { gpio_t pin; uint8_t level; uint16_t delay_ms; } seq_step_t;
 #define SEQ_BASE_UP_N 5
 #define SEQ_RF_UP_N   2
 #define SEQ_DOWN_N    9
-#define SEQ_ESTOP_N   8
+#define SEQ_ESTOP_N   12
 extern const seq_step_t SEQ_BASE_UP[SEQ_BASE_UP_N];
 extern const seq_step_t SEQ_RF_UP[SEQ_RF_UP_N];
 extern const seq_step_t SEQ_DOWN[SEQ_DOWN_N];

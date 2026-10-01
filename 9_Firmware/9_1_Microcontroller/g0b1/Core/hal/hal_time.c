@@ -29,6 +29,11 @@ void delay_us(uint32_t us)
     while ((uint32_t)(micros() - start) < us) { }
 }
 
+/* Weak default: main.c defines the real IWDG refresh. */
+__attribute__((weak)) void iwdg_refresh(void)
+{
+}
+
 void delay_ms(uint32_t ms)
 {
     while (ms--) {

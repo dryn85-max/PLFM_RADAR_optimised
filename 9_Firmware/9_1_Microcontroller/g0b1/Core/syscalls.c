@@ -1,17 +1,16 @@
-/* Minimal newlib-nano stubs: _write -> USART2, _sbrk bounded by the linker heap limit. */
+/* Minimal newlib-nano stubs: _write -> uart_write (USART2), _sbrk bounded by the linker heap limit. */
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/stat.h>
-#include "stm32g0xx_hal.h"
+#include "hal_uart.h"
 
-extern UART_HandleTypeDef huart2;   /* defined in main.c */
 extern char _sheap, _eheap;
 
 int _write(int fd, const char *buf, int len)
 {
     (void)fd;
-    if (HAL_UART_Transmit(&huart2, (uint8_t *)buf, (uint16_t)len, 50) != HAL_OK) {
+    if (len < 0 || uart_write(buf, (size_t)len) != 0) {   /* 50 ms timeout inside hal_uart */
         errno = EIO;
         return -1;
     }

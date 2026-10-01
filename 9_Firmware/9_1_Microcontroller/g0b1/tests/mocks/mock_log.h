@@ -30,11 +30,13 @@ extern int mock_log_overflow;   /* 1 once an event was dropped */
 extern int mock_gpio_port_reads;   /* gpio_read_fpga_port() call count */
 extern int mock_gpio_pin_reads;    /* gpio_read() call count */
 extern char mock_uart_tx[1024]; /* everything written via uart_write */
+extern int mock_iwdg_refreshes;   /* iwdg_refresh() call count */
 
 void mock_log_add(int kind, int a, int b, int c, const uint8_t *bytes, size_t n);
 
 void mock_reset(void);                                    /* clears everything */
 void mock_spi_set_rx(const uint8_t *bytes, size_t n);     /* queue MISO bytes */
+void mock_spi_set_default_rx(uint8_t b);                  /* MISO byte once the queue is empty (default 0) */
 void mock_spi_fail_next(int err);                         /* next spi_xfer returns err */
 void mock_i2c_set_rx(const uint8_t *bytes, size_t n);     /* queue i2c_read bytes */
 void mock_i2c_fail_next(int err);                         /* next i2c call returns err */

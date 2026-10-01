@@ -107,12 +107,15 @@ static void test_estop_order_no_delay_no_bus(void)
     static const exp_t E[] = {
         { PIN_FPGA_DIG3, 0, 0 }, { PIN_EN_PA, 0, 0 }, { PIN_EN_LNA, 0, 0 },
         { PIN_EN_ADTR_VSS_SW, 0, 0 }, { PIN_EN_ADTR_VDD_SW, 0, 0 }, { PIN_EN_ADAR, 0, 0 },
-        { PIN_EN_LO, 0, 0 }, { PIN_EN_FPGA, 0, 0 },
+        { PIN_EN_LO, 0, 0 },
+        /* FPGA inputs low BEFORE the FPGA loses power: no back-powering through MCU outputs */
+        { PIN_FPGA_DIG0, 0, 0 }, { PIN_FPGA_DIG1, 0, 0 }, { PIN_FPGA_DIG2, 0, 0 },
+        { PIN_FPGA_DIG4, 0, 0 }, { PIN_EN_FPGA, 0, 0 },
     };
     size_t i;
     fresh();
     sequencer_emergency_stop();
-    check_sequence(E, 8);
+    check_sequence(E, 12);
     TT_ASSERT_EQ(0, count_bus());
     TT_ASSERT_EQ(0, count_kind(MOCK_EV_DELAY_US) + count_kind(MOCK_EV_DELAY_MS));
     TT_ASSERT_EQ(0, count_kind(MOCK_EV_UART_WRITE));
@@ -120,7 +123,7 @@ static void test_estop_order_no_delay_no_bus(void)
         TT_ASSERT_EQ(0, SEQ_ESTOP[i].delay_ms);
         TT_ASSERT_EQ(0, SEQ_ESTOP[i].level);
     }
-    TT_ASSERT_EQ(8, SEQ_ESTOP_N);
+    TT_ASSERT_EQ(12, SEQ_ESTOP_N);
 }
 
 static void test_estop_drops_pa_before_everything_but_mixers(void)
@@ -128,11 +131,32 @@ static void test_estop_drops_pa_before_everything_but_mixers(void)
     /* every rail ends low, even when everything was high before */
     int p;
     fresh();
-    for (p = PIN_EN_FPGA; p <= PIN_FPGA_DIG3; p++) gpio_write((gpio_t)p, 1);
+    for (p = PIN_EN_FPGA; p <= PIN_FPGA_DIG4; p++) gpio_write((gpio_t)p, 1);
     mock_log_n = 0;
     sequencer_emergency_stop();
     for (p = PIN_EN_FPGA; p <= PIN_EN_PA; p++) TT_ASSERT_EQ(0, gpio_read((gpio_t)p));
-    TT_ASSERT_EQ(0, gpio_read(PIN_FPGA_DIG3));
+    for (p = PIN_FPGA_DIG0; p <= PIN_FPGA_DIG4; p++) TT_ASSERT_EQ(0, gpio_read((gpio_t)p));
+}
+
+static void test_estop_dig_low_before_fpga_enable(void)
+{
+    int i, fpga_idx = -1, dig_low_seen = 0;
+    fresh();
+    sequencer_emergency_stop();
+    TT_ASSERT_EQ(PIN_FPGA_DIG3, mock_log[0].a);   /* DIG3 stays first */
+    for (i = 0; i < mock_log_n; i++) {
+        if (mock_log[i].a == PIN_EN_FPGA) fpga_idx = i;
+    }
+    TT_ASSERT(fpga_idx > 0);
+    for (i = 0; i < fpga_idx; i++) {
+        int pin = mock_log[i].a;
+        if (pin >= PIN_FPGA_DIG0 && pin <= PIN_FPGA_DIG4) {
+            TT_ASSERT_EQ(0, mock_log[i].b);
+            dig_low_seen |= 1 << (pin - PIN_FPGA_DIG0);
+        }
+    }
+    TT_ASSERT_EQ(0x1F, dig_low_seen);
+    TT_ASSERT_EQ(fpga_idx, mock_log_n - 1);       /* FPGA enable is the last step */
 }
 
 static void test_estop_idempotent(void)
@@ -140,7 +164,7 @@ static void test_estop_idempotent(void)
     fresh();
     sequencer_emergency_stop();
     sequencer_emergency_stop();
-    TT_ASSERT_EQ(16, mock_log_n);
+    TT_ASSERT_EQ(24, mock_log_n);
     TT_ASSERT_EQ(0, count_bus());
 }
 
@@ -199,7 +223,7 @@ static void test_fault_integration(void)
     fault_raise(FAULT_OVERTEMP);
     TT_ASSERT_EQ(0, gpio_read(PIN_EN_PA));
     TT_ASSERT_EQ(0, gpio_read(PIN_EN_FPGA));
-    TT_ASSERT_EQ(8, mock_log_n);
+    TT_ASSERT_EQ(12, mock_log_n);
     /* PLL lock loss: only RF off */
     fresh();
     gpio_write(PIN_EN_FPGA, 1); gpio_write(PIN_EN_PA, 1);
@@ -231,6 +255,7 @@ int main(void)
     TT_RUN(test_down_table);
     TT_RUN(test_estop_order_no_delay_no_bus);
     TT_RUN(test_estop_drops_pa_before_everything_but_mixers);
+    TT_RUN(test_estop_dig_low_before_fpga_enable);
     TT_RUN(test_estop_idempotent);
     TT_RUN(test_latched_refuses_power_up);
     TT_RUN(test_nonlatched_fault_does_not_block_up);
