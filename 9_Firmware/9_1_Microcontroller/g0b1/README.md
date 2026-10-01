@@ -54,46 +54,58 @@ checkout builds without network access.
 
 ## Wiring (Core/hal/pins.h, Core/hal/hal_gpio.c)
 
-The "Nucleo connector" column is not derivable from anything in this repository
-(UM2324 is not vendored), so it is left as **verify vs UM2324** rather than
+The "Nucleo connector" column is filled only where it follows from the
+UM2324-derived notes in the (untrusted, alternative-plan) PR
+`dryn85-max/PLFM_RADAR_optimised#1` for the *same MCU pins*; UM2324 itself is not
+vendored here, so every other entry says **VERIFY vs UM2324** instead of being
 guessed. AF numbers come from the HAL headers (`GPIO_AF0_SPI1/SPI2`,
 `GPIO_AF6_I2C1`, `GPIO_AF1_USART2`); the pin-to-AF assignment is **computed, not
-verified against the datasheet AF table**.
+verified against the datasheet AF table**. The pin table itself is data in
+`Core/hal/pins_table.c`; `tests/test_pins.c` checks it (DIG0..7 = PC0..PC7, no
+shared pins, none of the Nucleo-reserved lines: PC13 B1, PC14/PC15 LSE, PF0/PF1
+HSE pads, PA13/PA14 SWD, PA11/PA12 future USB, PA9/PA10 which the G0 can remap
+onto the PA11/PA12 pads).
 
 | Signal | MCU pin | Dir (MCU) | Role | Nucleo connector |
 |---|---|---|---|---|
-| ADAR SPI2 SCK | PB13 (AF0) | out | ADAR1000 SPI clock, 16 MHz (64/4), mode 0 | verify vs UM2324 |
-| ADAR SPI2 MISO | PB14 (AF0) | in | ADAR1000 SDO | verify vs UM2324 |
-| ADAR SPI2 MOSI | PB15 (AF0) | out | ADAR1000 SDI | verify vs UM2324 |
-| ADAR CS0..CS3 | PB12, PB11, PB10, PB2 | out | Chip select, active low, idle high (CS1..3 used when `ADAR_COUNT` > 1) | verify vs UM2324 |
-| PLL SPI1 SCK | PB3 (AF0) | out | LO PLL SPI clock, 8 MHz (64/8) | verify vs UM2324 |
-| PLL SPI1 MISO | PB4 (AF0) | in | PLL readback | verify vs UM2324 |
-| PLL SPI1 MOSI | PB5 (AF0) | out | PLL data | verify vs UM2324 |
-| PLL CS | PB1 | out | PLL chip select, active low, idle high | verify vs UM2324 |
-| PLL CE | PB0 | out | PLL chip enable, idle low | verify vs UM2324 |
-| PLL LD | PB6 | in | PLL lock detect | verify vs UM2324 |
-| I2C1 SCL | PB8 (AF6) | open-drain | ADS7830 (addr `0x48`, ch 0 = temperature), 100 kHz | verify vs UM2324 |
-| I2C1 SDA | PB9 (AF6) | open-drain | ADS7830 | verify vs UM2324 |
-| USART2 TX / RX | PA2 / PA3 (AF1) | out / in | ST-LINK virtual COM port, 115200 8N1 | ST-LINK VCP (on-board; verify vs UM2324) |
-| LED LD4 | PA5 | out | Status LED | on-board |
-| EN_FPGA | PA0 | out | FPGA rail enable, active high | verify vs UM2324 |
-| EN_LO | PA1 | out | LO rail enable | verify vs UM2324 |
-| EN_ADAR | PA4 | out | ADAR1000 supply enable | verify vs UM2324 |
-| EN_ADTR_VDD_SW | PA6 | out | ADTR1107 VDD_SW enable | verify vs UM2324 |
-| EN_ADTR_VSS_SW | PA7 | out | ADTR1107 VSS_SW enable | verify vs UM2324 |
-| EN_LNA | PA8 | out | ADTR LNA 3V3 rail enable | verify vs UM2324 |
-| EN_PA | PC8 | out | PA 5 V rail enable | verify vs UM2324 |
-| FPGA DIG0 | PC0 | out | `new_chirp` | verify vs UM2324 |
-| FPGA DIG1 | PC1 | out | `new_elevation` | verify vs UM2324 |
-| FPGA DIG2 | PC2 | out | `new_azimuth` | verify vs UM2324 |
-| FPGA DIG3 | PC3 | out | `mixers_enable` | verify vs UM2324 |
-| FPGA DIG4 | PC4 | out | `fpga_reset_n` | verify vs UM2324 |
-| FPGA DIG5 | PC5 | in | `agc_saturation` | verify vs UM2324 |
-| FPGA DIG6 | PC6 | in | `agc_enable` | verify vs UM2324 |
-| FPGA DIG7 | PC7 | in | reserved | verify vs UM2324 |
+| ADAR SPI2 SCK | PB13 (AF0) | out | ADAR1000 SPI clock, 16 MHz (64/4), mode 0 | CN10 (Morpho) |
+| ADAR SPI2 MISO | PB14 (AF0) | in | ADAR1000 SDO | CN10 (Morpho) |
+| ADAR SPI2 MOSI | PB15 (AF0) | out | ADAR1000 SDI | CN10 (Morpho) |
+| ADAR CS0..CS3 | PB12, PB11, PB10, PB2 | out | Chip select, active low, idle high (CS1..3 used when `ADAR_COUNT` > 1) | VERIFY vs UM2324 |
+| PLL SPI1 SCK | PB3 (AF0) | out | LO PLL SPI clock, 8 MHz (64/8) | VERIFY vs UM2324 |
+| PLL SPI1 MISO | PB4 (AF0) | in | PLL readback | VERIFY vs UM2324 |
+| PLL SPI1 MOSI | PB5 (AF0) | out | PLL data | VERIFY vs UM2324 |
+| PLL CS | PB1 | out | PLL chip select, active low, idle high | VERIFY vs UM2324 |
+| PLL CE | PB0 | out | PLL chip enable, idle low | VERIFY vs UM2324 |
+| PLL LD | PB6 | in | PLL lock detect | VERIFY vs UM2324 |
+| I2C1 SCL | PB8 (AF6) | open-drain | ADS7830 (addr `0x48`, ch 0 = temperature), 100 kHz | CN5 D15; solder bridge to A4 (PC1 = DIG1) must be open, see below |
+| I2C1 SDA | PB9 (AF6) | open-drain | ADS7830 | CN5 D14; solder bridge to A5 (PC0 = DIG0) must be open, see below |
+| USART2 TX / RX | PA2 / PA3 (AF1) | out / in | ST-LINK virtual COM port, 115200 8N1 | ST-LINK VCP (on-board; routed to ST-LINK by default, not to the headers; VERIFY solder bridges vs UM2324) |
+| LED LD4 | PA5 | out | Status LED | on-board LD4 (user LED) |
+| EN_FPGA | PA0 | out | FPGA rail enable, active high | VERIFY vs UM2324 |
+| EN_LO | PA1 | out | LO rail enable | VERIFY vs UM2324 |
+| EN_ADAR | PA4 | out | ADAR1000 supply enable | VERIFY vs UM2324 |
+| EN_ADTR_VDD_SW | PA6 | out | ADTR1107 VDD_SW enable | VERIFY vs UM2324 |
+| EN_ADTR_VSS_SW | PA7 | out | ADTR1107 VSS_SW enable | VERIFY vs UM2324 |
+| EN_LNA | PA8 | out | ADTR LNA 3V3 rail enable | VERIFY vs UM2324 |
+| EN_PA | PC8 | out | PA 5 V rail enable (was PA9; moved off the PA9/PA11 remap pair) | VERIFY vs UM2324 |
+| FPGA DIG0 | PC0 | out | `new_chirp` | A5 (connector VERIFY vs UM2324) |
+| FPGA DIG1 | PC1 | out | `new_elevation` | A4 (connector VERIFY vs UM2324) |
+| FPGA DIG2 | PC2 | out | `new_azimuth` | VERIFY vs UM2324 |
+| FPGA DIG3 | PC3 | out | `mixers_enable` | VERIFY vs UM2324 |
+| FPGA DIG4 | PC4 | out | `fpga_reset_n` | VERIFY vs UM2324 |
+| FPGA DIG5 | PC5 | in | `agc_saturation` | VERIFY vs UM2324 |
+| FPGA DIG6 | PC6 | in | `agc_enable` | VERIFY vs UM2324 |
+| FPGA DIG7 | PC7 | in | reserved | VERIFY vs UM2324 |
 
 **Hardware requirements.**
 
+- **Nucleo solder bridges (UM2324).** PB8/PB9 (I2C1 SCL/SDA, Arduino D15/D14)
+  may be tied by solder bridges to A4/A5, which are PC1/PC0 = our DIG1/DIG0; those
+  bridges **must be open**, otherwise the I2C bus and the FPGA DIG lines are
+  shorted together (also in the BACKLOG bring-up checklist). PA2/PA3 are routed to
+  the ST-LINK VCP by default; do not use them for anything else unless the
+  bridges are changed. Exact bridge names: VERIFY vs UM2324.
 - **External pull-downs on all `EN_*` lines (EN_FPGA, EN_LO, EN_ADAR,
   EN_ADTR_VDD_SW, EN_ADTR_VSS_SW, EN_LNA, EN_PA) and on DIG0..DIG4.** The MCU
   pins are high-Z during reset and flashing, and the FPGA `reset_n` (DIG4) has

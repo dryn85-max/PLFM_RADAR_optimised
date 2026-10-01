@@ -38,7 +38,10 @@ Follow-up work that is out of scope for the current plans.
   (MCU pins are high-Z during reset/flashing; the FPGA `reset_n` has an internal
   `PULLUP`, `xc7a50t_ftg256.xdc:121`); ADAR1000 `PA_ON` not pulled low;
   `CTRL_SW` level (receive) measured before the PA rail rises; a deliberate
-  watchdog reset leaves `fault=13` latched.
+  watchdog reset leaves `fault=13` latched; **Nucleo
+  solder bridges: PB8/PB9 (I2C1) must NOT be tied to A4/A5 (PC1/PC0 = DIG1/DIG0) -
+  verify they are open; PA2/PA3 stay routed to the ST-LINK VCP**; connector
+  column of the README wiring table checked against UM2324.
 
 ## RTL track
 
