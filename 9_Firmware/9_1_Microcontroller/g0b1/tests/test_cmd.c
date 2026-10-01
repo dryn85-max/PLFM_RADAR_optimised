@@ -22,6 +22,7 @@ static char  g_out[256];
 static void fresh(void)
 {
     mock_reset();
+    adar_test_reset_state();
     fault_test_power_cycle();
     fault_init();
     fpga_if_init();
@@ -107,6 +108,23 @@ static void test_beam_spi_error_keeps_state(void)
     expect("beam 10 20", "ERR spi");
     TT_ASSERT_EQ(0, count_kind(MOCK_EV_GPIO_TOGGLE));
     TT_ASSERT(strstr(run("status"), " az=0 el=0 ") != NULL);
+}
+
+/* M6: a beam write that fails part-way answers ERR spi, changes no state, never
+ * toggles DIG1/DIG2, and best-effort re-applies the previous elevation. */
+static void test_beam_partial_failure_reapplies_previous(void)
+{
+    int i, spi = 0, per_beam = ADAR_COUNT * 4 * 2 * 3;   /* RX+TX phase, I/Q/load each */
+    fresh();
+    expect("beam 10 20", "OK");
+    TT_ASSERT(strstr(run("status"), " az=10 el=20 ") != NULL);
+    mock_log_n = 0;
+    mock_spi_fail_after(4, -EIO);                      /* fails mid-way through the new table */
+    expect("beam -30 -40", "ERR spi");
+    TT_ASSERT_EQ(0, count_kind(MOCK_EV_GPIO_TOGGLE));
+    TT_ASSERT(strstr(run("status"), " az=10 el=20 ") != NULL);
+    for (i = 0; i < mock_log_n; i++) if (mock_log[i].kind == MOCK_EV_SPI) spi++;
+    TT_ASSERT_EQ(5 + per_beam, spi);                   /* 4 ok + 1 failed + full re-apply of el=20 */
 }
 
 static void test_gain_valid(void)
@@ -232,6 +250,31 @@ static void test_tx_rx_auto(void)
     TT_ASSERT(strstr(run("status"), " mode=auto ") != NULL);   /* mode unchanged on failure */
 }
 
+/* M5: STATUS mode is the ADAR mode actually set, "none" before any adar_set_mode. */
+static void test_status_mode_none_before_init(void)
+{
+    fresh();
+    TT_ASSERT(strstr(run("status"), " mode=none ") != NULL);
+    mock_spi_fail_next(-EIO);
+    expect("auto", "ERR spi");
+    TT_ASSERT(strstr(run("status"), " mode=none ") != NULL);   /* a failed set does not claim a mode */
+    expect("auto", "OK");
+    TT_ASSERT(strstr(run("status"), " mode=auto ") != NULL);
+}
+
+#if ADAR_COUNT > 1
+static void test_status_mode_mixed_after_partial_failure(void)
+{
+    fresh();
+    expect("tx", "OK");
+    mock_spi_fail_after(1, -EIO);                      /* dev 0 takes "rx", dev 1 fails */
+    expect("rx", "ERR spi");
+    TT_ASSERT(strstr(run("status"), " mode=mixed ") != NULL);
+    expect("rx", "OK");
+    TT_ASSERT(strstr(run("status"), " mode=rx ") != NULL);
+}
+#endif
+
 static void test_args_and_unknown(void)
 {
     fresh();
@@ -323,7 +366,7 @@ static void test_status_exact(void)
     uint8_t raw = 76;
     fresh();
     for (g = 0; g < 16; g++) gains[g] = -1;
-    build_status(want, "STATUS lock=0 temp=0 temp_err=0 fault=0 latched=0 mode=auto az=0 el=0 agc=0 base=30", gains);
+    build_status(want, "STATUS lock=0 temp=0 temp_err=0 fault=0 latched=0 mode=none az=0 el=0 agc=0 base=30", gains);
     expect("status", want);
     TT_ASSERT(strlen(g_out) < 200);
 
@@ -408,11 +451,16 @@ int main(void)
     TT_RUN(test_beam_valid);
     TT_RUN(test_beam_invalid);
     TT_RUN(test_beam_spi_error_keeps_state);
+    TT_RUN(test_beam_partial_failure_reapplies_previous);
     TT_RUN(test_gain_valid);
     TT_RUN(test_gain_invalid);
     TT_RUN(test_gain_spi_error);
     TT_RUN(test_gain_then_agc_writes_only_differences);
     TT_RUN(test_tx_rx_auto);
+    TT_RUN(test_status_mode_none_before_init);
+#if ADAR_COUNT > 1
+    TT_RUN(test_status_mode_mixed_after_partial_failure);
+#endif
     TT_RUN(test_args_and_unknown);
     TT_RUN(test_blank_lines);
     TT_RUN(test_stop);

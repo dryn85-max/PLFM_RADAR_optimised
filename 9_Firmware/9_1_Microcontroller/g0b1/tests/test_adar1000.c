@@ -400,6 +400,27 @@ static void test_bias_values_within_safe_limit(void)
     }
 }
 
+static void test_mode_tracking(void)
+{
+    mock_reset();
+    adar_test_reset_state();
+    TT_ASSERT_EQ(ADAR_MODE_NONE, adar_get_mode(0));
+    TT_ASSERT_EQ(0, adar_set_mode(0, ADAR_MODE_SPI_TX));
+    TT_ASSERT_EQ(ADAR_MODE_SPI_TX, adar_get_mode(0));
+    mock_spi_fail_next(-EIO);
+    TT_ASSERT_EQ(-EIO, adar_set_mode(0, ADAR_MODE_SPI_RX));
+    TT_ASSERT_EQ(ADAR_MODE_SPI_TX, adar_get_mode(0));        /* only success changes it */
+    TT_ASSERT_EQ(-EINVAL, adar_set_mode(0, (adar_mode_t)9));
+    TT_ASSERT_EQ(ADAR_MODE_SPI_TX, adar_get_mode(0));
+    TT_ASSERT_EQ(ADAR_MODE_NONE, adar_get_mode(ADAR_COUNT)); /* bad device */
+    /* a soft reset (adar_init) forgets the mode: chip 0 resets every chip */
+    mock_spi_set_default_rx(0xA5);
+    TT_ASSERT_EQ(0, adar_init(0));
+    TT_ASSERT_EQ(ADAR_MODE_NONE, adar_get_mode(0));
+    TT_ASSERT_EQ(0, adar_set_mode(0, ADAR_MODE_TR_PIN));
+    TT_ASSERT_EQ(ADAR_MODE_TR_PIN, adar_get_mode(0));
+}
+
 static void test_temp_read_ok(void)
 {
     uint8_t raw = 0;
@@ -489,6 +510,7 @@ int main(void)
     TT_RUN(test_operational_bias);
     TT_RUN(test_operational_bias_enables_last);
     TT_RUN(test_bias_values_within_safe_limit);
+    TT_RUN(test_mode_tracking);
     TT_RUN(test_temp_read_ok);
     TT_RUN(test_temp_read_polls_until_eoc);
     TT_RUN(test_temp_read_timeout);

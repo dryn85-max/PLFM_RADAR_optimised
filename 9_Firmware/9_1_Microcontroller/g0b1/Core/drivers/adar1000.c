@@ -80,6 +80,28 @@ const uint8_t VM_Q[128] = {
 
 static int dev_ok(uint8_t dev) { return dev < ADAR_COUNT; }
 
+static adar_mode_t s_mode[ADAR_COUNT];   /* valid only where s_mode_valid[] is set */
+static uint8_t     s_mode_valid[ADAR_COUNT];
+
+adar_mode_t adar_get_mode(uint8_t dev)
+{
+    return (dev_ok(dev) && s_mode_valid[dev]) ? s_mode[dev] : ADAR_MODE_NONE;
+}
+
+static void forget_modes(uint8_t dev)
+{
+    uint8_t i;
+    for (i = 0; i < ADAR_COUNT; i++) {
+        if (dev == 0 || i == dev) {
+            s_mode_valid[i] = 0;
+        }
+    }
+}
+
+#ifdef HOST_TEST
+void adar_test_reset_state(void) { forget_modes(0); }
+#endif
+
 static gpio_t cs_pin(uint8_t dev)
 {
     return (gpio_t)((int)PIN_ADAR_CS0 + (int)dev);
@@ -163,6 +185,7 @@ int adar_init(uint8_t dev)
     if (!dev_ok(dev)) {
         return -EINVAL;
     }
+    forget_modes(dev);   /* a reset of chip 0 resets all chips (p. 47) */
     /* Soft reset (DS Table 33 p. 57: bit7 SOFTRESET, bit0 SOFTRESET_; 0x81).
      * Only effective on chip 0, where it resets every chip on the bus (p. 47). */
     rc = adar_write(dev, REG_INTERFACE_CONFIG_A, INTERFACE_CONFIG_A_SOFT_RESET);
@@ -309,7 +332,7 @@ int adar_set_tx_phase(uint8_t dev, uint8_t ch, uint8_t idx)
  * SW_DRV_EN_POL and POL stay 0 (the polarization switch is not used). */
 #define SW_BASE  (SW_CTRL_SW_DRV_TR_STATE | SW_CTRL_SW_DRV_EN_TR)
 
-int adar_set_mode(uint8_t dev, adar_mode_t m)
+static int set_mode_hw(uint8_t dev, adar_mode_t m)
 {
     if (!dev_ok(dev)) {
         return -EINVAL;
@@ -337,6 +360,16 @@ int adar_set_mode(uint8_t dev, adar_mode_t m)
     default:
         return -EINVAL;
     }
+}
+
+int adar_set_mode(uint8_t dev, adar_mode_t m)
+{
+    int rc = set_mode_hw(dev, m);
+    if (rc == 0) {
+        s_mode[dev] = m;
+        s_mode_valid[dev] = 1;
+    }
+    return rc;
 }
 
 /* ---- Temperature -------------------------------------------------------- */

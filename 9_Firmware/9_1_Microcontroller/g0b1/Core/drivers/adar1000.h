@@ -4,7 +4,8 @@
  * - Up to ADAR_COUNT devices on one SPI bus (spi_bus ADAR), one CS per device.
  * - Channel index is 0-based (0..3) everywhere (upstream passed 1-based and
  *   masked with & 3, which hit the wrong channel).
- * - No state is kept here; every call is a short list of SPI writes.
+ * - The only state kept is the last mode applied (adar_get_mode); every call
+ *   is otherwise a short list of SPI writes.
  * - TR switching is NOT done over SPI per pulse: after adar_set_mode(TR_PIN)
  *   the FPGA drives the ADAR1000 TR pin.
  * - All functions return 0 or a negative errno (-EINVAL for dev >= ADAR_COUNT
@@ -117,7 +118,8 @@ extern const uint8_t VM_Q[128];
 typedef enum {
     ADAR_MODE_TR_PIN,    /* TR pin (FPGA) controls TX/RX; the normal run state */
     ADAR_MODE_SPI_TX,    /* bench: force TX over SPI */
-    ADAR_MODE_SPI_RX     /* bench: force RX over SPI */
+    ADAR_MODE_SPI_RX,    /* bench: force RX over SPI */
+    ADAR_MODE_NONE       /* adar_get_mode() only: no adar_set_mode() succeeded since adar_init */
 } adar_mode_t;
 
 /* Raw register access. adar_write: 3 bytes {(dev<<5)|(reg>>8 & 0x1F), reg, val};
@@ -153,6 +155,15 @@ int adar_set_tx_phase(uint8_t dev, uint8_t ch, uint8_t idx);
  * sub-circuits (0x02E/0x02F = 0x7F); the SPI modes assume that was done
  * (call TR_PIN once after adar_init). Each SPI mode is one write to 0x031. */
 int adar_set_mode(uint8_t dev, adar_mode_t m);
+
+/* Mode last applied successfully by adar_set_mode() (a failed call leaves it
+ * unchanged), ADAR_MODE_NONE after adar_init() (a soft reset of chip 0 resets
+ * every chip, so it clears all devices) or for dev >= ADAR_COUNT. The only
+ * state this module keeps; used by the STATUS line. */
+adar_mode_t adar_get_mode(uint8_t dev);
+#ifdef HOST_TEST
+void adar_test_reset_state(void);   /* all devices back to ADAR_MODE_NONE */
+#endif
 
 /* Temperature sensor: start conversion, poll EOC up to 100 ms, read result. */
 int adar_read_temp_raw(uint8_t dev, uint8_t *raw);

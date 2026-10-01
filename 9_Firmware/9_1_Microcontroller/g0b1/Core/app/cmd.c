@@ -17,7 +17,6 @@
 
 static agc_t *s_agc;
 static int    s_az, s_el;
-static const char *s_mode = "auto";
 
 static char   s_line[CMD_MAX_LINE + 1];
 static size_t s_len;
@@ -28,7 +27,6 @@ void cmd_init(agc_t *agc)
     s_agc = agc;
     s_az = 0;
     s_el = 0;
-    s_mode = "auto";
     s_len = 0;
     s_overflow = 0;
 }
@@ -80,6 +78,21 @@ static int set_mode_all(adar_mode_t m)
     return 0;
 }
 
+/* Mode of the ADAR devices as actually applied: none / auto / tx / rx, or
+ * "mixed" when a failed all-device switch left them different. */
+static const char *mode_name(void)
+{
+    static const char *const NAMES[] = { "auto", "tx", "rx", "none" };
+    adar_mode_t m = adar_get_mode(0);
+    uint8_t d;
+    for (d = 1; d < ADAR_COUNT; d++) {
+        if (adar_get_mode(d) != m) {
+            return "mixed";
+        }
+    }
+    return NAMES[m];
+}
+
 static size_t do_status(char *out, size_t outlen)
 {
     sbuf_t sb;
@@ -90,7 +103,7 @@ static size_t do_status(char *out, size_t outlen)
     sb_puts(&sb, " temp_err=");          sb_put_int(&sb, thermal_last_err() != 0 ? 1 : 0);
     sb_puts(&sb, " fault=");             sb_put_int(&sb, (int)fault_active());
     sb_puts(&sb, " latched=");           sb_put_int(&sb, fault_is_latched() ? 1 : 0);
-    sb_puts(&sb, " mode=");              sb_puts(&sb, s_mode);
+    sb_puts(&sb, " mode=");              sb_puts(&sb, mode_name());
     sb_puts(&sb, " az=");                sb_put_int(&sb, s_az);
     sb_puts(&sb, " el=");                sb_put_int(&sb, s_el);
     sb_puts(&sb, " agc=");               sb_put_int(&sb, s_agc->enabled ? 1 : 0);
@@ -116,6 +129,12 @@ static size_t do_beam(char **t, int n, char *out, size_t outlen)
     }
     rc = beam_apply(el);
     if (rc != 0) {
+        /* beam_apply() stops at the first failing write, so some elements may
+         * already carry the new phases. State (az/el) and the FPGA strobes
+         * (DIG1/DIG2) are left untouched; best-effort re-apply of the previous
+         * elevation to bring the array back (result ignored: the bus is
+         * probably faulty). */
+        (void)beam_apply(s_el);
         return reply(out, outlen, "ERR spi");
     }
     if (el != s_el) {
@@ -146,12 +165,11 @@ static size_t do_gain(char **t, int n, char *out, size_t outlen)
     return reply(out, outlen, "OK");
 }
 
-static size_t do_mode(const char *name, adar_mode_t m, char *out, size_t outlen)
+static size_t do_mode(adar_mode_t m, char *out, size_t outlen)
 {
     if (set_mode_all(m) != 0) {
-        return reply(out, outlen, "ERR spi");
+        return reply(out, outlen, "ERR spi");   /* STATUS shows what each device really has */
     }
-    s_mode = name;
     return reply(out, outlen, "OK");
 }
 
@@ -212,13 +230,13 @@ size_t cmd_exec(const char *line, char *out, size_t outlen)
             return reply(out, outlen, "ERR args");
         }
         if (strcmp(cmd, "tx") == 0) {
-            return do_mode("tx", ADAR_MODE_SPI_TX, out, outlen);
+            return do_mode(ADAR_MODE_SPI_TX, out, outlen);
         }
         if (strcmp(cmd, "rx") == 0) {
-            return do_mode("rx", ADAR_MODE_SPI_RX, out, outlen);
+            return do_mode(ADAR_MODE_SPI_RX, out, outlen);
         }
         if (strcmp(cmd, "auto") == 0) {
-            return do_mode("auto", ADAR_MODE_TR_PIN, out, outlen);
+            return do_mode(ADAR_MODE_TR_PIN, out, outlen);
         }
         fault_raise(FAULT_ESTOP_CMD);
         return reply(out, outlen, "OK stopped");

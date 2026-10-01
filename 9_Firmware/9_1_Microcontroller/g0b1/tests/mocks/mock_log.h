@@ -38,6 +38,7 @@ void mock_reset(void);                                    /* clears everything *
 void mock_spi_set_rx(const uint8_t *bytes, size_t n);     /* queue MISO bytes */
 void mock_spi_set_default_rx(uint8_t b);                  /* MISO byte once the queue is empty (default 0) */
 void mock_spi_fail_next(int err);                         /* next spi_xfer returns err */
+void mock_spi_fail_after(int ok_count, int err);          /* spi_xfer number ok_count+1 returns err */
 void mock_i2c_set_rx(const uint8_t *bytes, size_t n);     /* queue i2c_read bytes */
 void mock_i2c_fail_next(int err);                         /* next i2c call returns err */
 void mock_time_advance_us(uint32_t us);
