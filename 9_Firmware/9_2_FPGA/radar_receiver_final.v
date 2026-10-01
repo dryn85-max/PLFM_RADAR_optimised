@@ -366,34 +366,6 @@ doppler_processor_optimized #(
 
 // ========== STATUS ==========
 
-// ========== DEBUG AND VERIFICATION ==========
-reg [31:0] frame_counter;
-reg [5:0] chirps_in_current_frame;
-
-always @(posedge clk or negedge reset_n) begin
-    if (!reset_n) begin
-        frame_counter <= 0;
-        chirps_in_current_frame <= 0;
-    end else begin
-        // Count chirps in current frame
-        if (range_data_valid && decimated_range_bin == 0) begin
-            // First range bin of a chirp
-            chirps_in_current_frame <= chirps_in_current_frame + 1;
-        end
-        
-        // Detect frame completion
-        if (new_chirp_frame) begin
-            frame_counter <= frame_counter + 1;
-            `ifdef SIMULATION
-            $display("[TOP] Frame %0d started. Previous frame had %0d chirps", 
-                     frame_counter, chirps_in_current_frame);
-            `endif
-            chirps_in_current_frame <= 0;
-        end
-    end
-end
-
-
 // ========== ADC DEBUG TAP (for self-test / bring-up) ==========
 assign dbg_adc_i     = adc_i_scaled;
 assign dbg_adc_q     = adc_q_scaled;
