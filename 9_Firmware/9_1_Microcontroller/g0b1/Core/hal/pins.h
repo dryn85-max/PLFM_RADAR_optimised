@@ -12,12 +12,17 @@
  *  LED LD4                        PA5
  *  EN_FPGA, EN_LO, EN_ADAR        PA0, PA1, PA4 (active high)
  *  EN_ADTR_VDD_SW, EN_ADTR_VSS_SW PA6, PA7
- *  EN_LNA (3V3), EN_PA (5 V)      PA8, PA9
+ *  EN_LNA (3V3), EN_PA (5 V)      PA8, PC8
  *  FPGA DIG0..DIG4 (outputs)      PC0..PC4: new_chirp, new_elevation,
  *                                 new_azimuth, mixers_enable, fpga_reset_n
  *  FPGA DIG5..DIG7 (inputs)       PC5..PC7: agc_saturation, agc_enable, reserved
  *
- * Target mapping table (port, pin, direction, idle level) lives in hal_gpio.c.
+ * Not used (Nucleo-reserved): PC13 (B1), PC14/PC15 (LSE), PF0/PF1 (HSE pads),
+ * PA13/PA14 (SWD), PA11/PA12 (future USB), PA9/PA10 (remappable onto the PA11/PA12
+ * pads on STM32G0). tests/test_pins.c enforces this.
+ *
+ * Mapping table (port, pin, direction, idle level) is pure data in pins_table.c;
+ * hal_gpio.c applies it on the target.
  * Chip selects idle HIGH (active low); every other output idles LOW.
  */
 #ifndef PINS_H

@@ -8,6 +8,9 @@ Follow-up work that is out of scope for the current plans.
   `9_Firmware/9_1_Microcontroller/g0b1/Core/drivers/pll_tables/` with exports from
   TICS Pro (LMX2594) / ADI ACE (ADF4372), remove `PLL_TABLE_PLACEHOLDER`. Until
   then lock fails and the unit reports `FAULT_PLL_LOCK`.
+  Generate the headers with `9_Firmware/9_1_Microcontroller/g0b1/tools/regtable_to_h.py`
+  (usage in the g0b1 README; it emits `PLL_TABLE_PLACEHOLDER 0`); do not hand-type
+  the 113 LMX2594 words.
 - [ ] **Verify pins, AF numbers and I2C TIMINGR** (`0x10B17DB5`) against the
   STM32G0B1 datasheet and UM2324; fill in the "Nucleo connector" column of the
   README wiring table.
@@ -38,7 +41,10 @@ Follow-up work that is out of scope for the current plans.
   (MCU pins are high-Z during reset/flashing; the FPGA `reset_n` has an internal
   `PULLUP`, `xc7a50t_ftg256.xdc:121`); ADAR1000 `PA_ON` not pulled low;
   `CTRL_SW` level (receive) measured before the PA rail rises; a deliberate
-  watchdog reset leaves `fault=13` latched.
+  watchdog reset leaves `fault=13` latched; **Nucleo
+  solder bridges: PB8/PB9 (I2C1) must NOT be tied to A4/A5 (PC1/PC0 = DIG1/DIG0) -
+  verify they are open; PA2/PA3 stay routed to the ST-LINK VCP**; connector
+  column of the README wiring table checked against UM2324.
 
 ## RTL track
 
