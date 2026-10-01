@@ -102,10 +102,18 @@ jobs:
           uv run python tb/golden/gen_fft_golden.py
           uv run python tb/golden/gen_mf_chain_golden.py
           uv run python tb/golden/gen_fullchain_golden.py
-          git diff --exit-code -- . ':!tb/golden/golden_doppler.mem'
+          git diff --exit-code -- .
 
       - name: Run full FPGA regression
         run: bash run_regression.sh
+        working-directory: 9_Firmware/9_2_FPGA
+
+      # The receiver golden compare checks against the committed
+      # tb/golden/golden_doppler.mem, and golden generate writes to a scratch
+      # file, so the regression must leave tb/golden untouched.
+      # (tb/cosim/*.csv are rewritten by the regression and ignored here.)
+      - name: Check the regression did not rewrite committed golden files
+        run: git diff --exit-code -- tb/golden
         working-directory: 9_Firmware/9_2_FPGA
 
   # ===========================================================================

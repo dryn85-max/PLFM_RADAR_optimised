@@ -11,15 +11,20 @@
 // TWO MODES (compile-time define):
 //
 //   1. GOLDEN_GENERATE mode  (-DGOLDEN_GENERATE):
-//      Dumps all Doppler output samples to golden reference files.
-//      Run once on known-good RTL:
+//      Dumps all Doppler output samples to a SCRATCH file (never the
+//      committed golden): -DGOLDEN_OUT_PATH='"<path>"', default
+//      tb/golden/golden_doppler.generated.mem (untracked).  Blessing a new
+//      golden is a deliberate act: point GOLDEN_OUT_PATH at
+//      tb/golden/golden_doppler.mem, check two runs give the same md5, commit.
+//      Run on known-good RTL:
 //        iverilog -g2001 -DSIMULATION -DGOLDEN_GENERATE -o tb_golden_gen.vvp \
 //          <src files> tb/tb_radar_receiver_final.v
 //        mkdir -p tb/golden
 //        vvp tb_golden_gen.vvp
 //
 //   2. Default mode (no GOLDEN_GENERATE):
-//      Loads golden files, compares each Doppler output against reference,
+//      Loads the COMMITTED tb/golden/golden_doppler.mem, compares each Doppler
+//      output bit-exactly against it,
 //      and runs physics-based bounds checks.
 //        iverilog -g2001 -DSIMULATION -o tb_radar_receiver_final.vvp \
 //          <src files> tb/tb_radar_receiver_final.v
@@ -204,7 +209,7 @@ endtask
 // GOLDEN MEMORY DECLARATIONS AND LOAD/STORE LOGIC
 // ============================================================================
 localparam GOLDEN_ENTRIES   = 2048;  // 64 range bins * 32 Doppler bins
-localparam GOLDEN_TOLERANCE = 2;     // +/- 2 LSB tolerance for comparison
+localparam GOLDEN_TOLERANCE = 0;     // bit-exact: the receiver output is deterministic
 
 reg [31:0] golden_doppler [0:2047];
 
@@ -564,9 +569,20 @@ initial begin
 
     // ---- DUMP GOLDEN FILE (generate mode only) ----
 `ifdef GOLDEN_GENERATE
-    $writememh("tb/golden/golden_doppler.mem", golden_doppler);
-    $display("[GOLDEN_GENERATE] Wrote tb/golden/golden_doppler.mem (%0d entries captured)",
+    // Generate NEVER writes the committed golden file: the committed
+    // tb/golden/golden_doppler.mem is the reference that default (compare)
+    // mode checks against.  To bless a new golden after a legitimate output
+    // change, run generate with -DGOLDEN_OUT_PATH='"tb/golden/golden_doppler.mem"'
+    // and commit the result deliberately.
+`ifdef GOLDEN_OUT_PATH
+    $writememh(`GOLDEN_OUT_PATH, golden_doppler);
+    $display("[GOLDEN_GENERATE] Wrote %0s (%0d entries captured)",
+             `GOLDEN_OUT_PATH, doppler_output_count);
+`else
+    $writememh("tb/golden/golden_doppler.generated.mem", golden_doppler);
+    $display("[GOLDEN_GENERATE] Wrote tb/golden/golden_doppler.generated.mem (%0d entries captured)",
              doppler_output_count);
+`endif
 `endif
 
     // ================================================================
@@ -674,7 +690,9 @@ initial begin
     // CHECK G1: All golden comparisons match
     if (golden_compare_count > 0) begin
         check(golden_mismatch_count == 0,
-              "G1: All Doppler outputs match golden reference within tolerance");
+              "G1: All Doppler outputs match committed golden reference");
+        check(golden_compare_count == GOLDEN_ENTRIES,
+              "G1b: Every golden entry (64 x 32) was compared");
     end else begin
         check(0, "G1: All Doppler outputs match golden reference (NO COMPARISONS)");
     end

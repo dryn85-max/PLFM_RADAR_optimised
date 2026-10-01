@@ -490,14 +490,17 @@ run_test "Full-Chain Real-Data (decim→Doppler, exact match)" \
     doppler_processor.v xfft_16.v fft_engine.v
 
 if [[ "$QUICK" -eq 0 ]]; then
-    # Golden generate
-    run_test "Receiver (golden generate)" \
+    # Golden generate: writes to a scratch file, never to the committed golden
+    GOLDEN_SCRATCH="$(mktemp "${TMPDIR:-/tmp}/golden_doppler_XXXXXX.mem")"
+    run_test "Receiver (golden generate, scratch output)" \
         tb/tb_rx_golden_reg.vvp \
-        -DGOLDEN_GENERATE \
+        -DGOLDEN_GENERATE "-DGOLDEN_OUT_PATH=\"$GOLDEN_SCRATCH\"" \
         tb/tb_radar_receiver_final.v "${RECEIVER_RTL[@]}"
 
-    # Golden compare
-    run_test "Receiver (golden compare)" \
+    rm -f "$GOLDEN_SCRATCH"
+
+    # Golden compare: bit-exact against the COMMITTED tb/golden/golden_doppler.mem
+    run_test "Receiver (golden compare vs committed)" \
         tb/tb_rx_compare_reg.vvp \
         tb/tb_radar_receiver_final.v "${RECEIVER_RTL[@]}"
 
