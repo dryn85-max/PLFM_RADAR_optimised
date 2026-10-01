@@ -94,7 +94,7 @@ static void feed_uart(const char *s) { mock_uart_push_rx(s, strlen(s)); }
 
 static void test_happy_path_order(void)
 {
-    int a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, w;
+    int a, b, c, d, e, f, g, h, i, i2, j, k, l, m, n, n2, n3, o, p, q, w;
     healthy();
     app_init();
     TT_ASSERT_EQ(FAULT_NONE, fault_active());
@@ -108,17 +108,24 @@ static void test_happy_path_order(void)
     g = find_adar_write(REG_INTERFACE_CONFIG_A, INTERFACE_CONFIG_A_SOFT_RESET, 0, f);
     h = find_adar_read(REG_SCRATCHPAD, g);              /* scratchpad readback */
     i = find_adar_write(REG_PA_CH1_BIAS_ON, kPaBiasTxSafe, 0, h);
+    /* I1: ADTR1107 CTRL_SW is driven to receive (SPI RX mode, 0xB0) before any
+     * RF rail rises: TR_SW_POS floats after power-up/soft reset (DS p. 38/44). */
+    i2 = find_adar_write(REG_SW_CONTROL, 0xB0, 0, i);
     j = find_gpio(PIN_EN_LNA, 1, i);
     k = find_gpio(PIN_EN_PA, 1, j);
-    l = find_adar_write(REG_PA_CH1_BIAS_ON, kPaBiasOperational, 0, k);
+    l = find_adar_write(REG_PA_CH1_BIAS_OFF, kPaBiasRxSafe, 0, k);   /* operational bias */
     m = find_adar_write(REG_SW_CONTROL, 1, SW_CTRL_TR_SOURCE, l);   /* TR-pin mode */
     n = find_adar_write(REG_CH1_RX_PHS_I, -1, 0, m);    /* beam 0 */
+    /* B: boot gains as upstream: TX VGA 0x7F, RX VGA = AGC base (30), after the beam */
+    n2 = find_adar_write(REG_CH1_TX_GAIN, kDefaultTxVgaGain, 0, n);
+    n3 = find_adar_write(REG_CH1_RX_GAIN, kDefaultRxVgaGain, 0, n);
     o = find_gpio(PIN_FPGA_DIG4, 0, n);                 /* FPGA reset pulse: low ... */
     p = find_gpio(PIN_FPGA_DIG4, 1, o);                 /* ... released */
     q = find_gpio(PIN_FPGA_DIG3, 1, p);                 /* mixers on */
     w = find_kind(MOCK_EV_I2C_WRITE, q);                /* ADS7830 warm-up last */
     TT_ASSERT(a >= 0 && b > a && c > b && d > c && e > d);
-    TT_ASSERT(f > e && g > f && h > g && i > h && j > i && k > j);
+    TT_ASSERT(f > e && g > f && h > g && i > h && i2 > i && j > i2 && k > j);
+    TT_ASSERT(n2 > n && n3 > n && o > n2 && o > n3);
     TT_ASSERT(l > k && m > l && n > m && o > n && p > o && q > p && w > q);
     TT_ASSERT_EQ(0x48, mock_log[w].a);
     TT_ASSERT_EQ(0x8C, mock_log[w].bytes[0]);
@@ -137,6 +144,50 @@ static void test_happy_path_order(void)
     TT_ASSERT(find_gpio(PIN_FPGA_DIG3, 1, 0) > p);
     TT_ASSERT_EQ(0, thermal_last());                    /* warm-up result is discarded */
     TT_ASSERT_EQ(0, thermal_last_err());
+}
+
+static void test_boot_gains_and_agc_cache(void)
+{
+    int g, ch, found;
+    healthy();
+    app_init();
+    TT_ASSERT_EQ(FAULT_NONE, fault_active());
+    for (g = 0; g < ADAR_COUNT * 4; g++) {
+        /* AGC cache matches what was written (so the AGC does not rewrite it) */
+        TT_ASSERT_EQ(kDefaultRxVgaGain, app_agc()->written[g]);
+        ch = g % 4;
+        found = 0;
+        {
+            int x;
+            for (x = 0; x < mock_log_n; x++) {
+                const mock_event_t *e = &mock_log[x];
+                if (e->kind == MOCK_EV_SPI && e->a == SPI_BUS_ADAR && !(e->bytes[0] & 0x80) &&
+                    ((e->bytes[0] >> 5) & 7) == g / 4 && reg_of(e) == REG_CH1_TX_GAIN + ch &&
+                    e->bytes[2] == kDefaultTxVgaGain) found = 1;
+            }
+        }
+        TT_ASSERT(found);
+    }
+}
+
+/* A: no PA/LNA gate bias DAC write beyond 0x6A (-2.0 V) during a whole boot. */
+static void test_boot_bias_writes_within_limit(void)
+{
+    int x, n = 0;
+    healthy();
+    app_init();
+    for (x = 0; x < mock_log_n; x++) {
+        const mock_event_t *e = &mock_log[x];
+        int reg;
+        if (e->kind != MOCK_EV_SPI || e->a != SPI_BUS_ADAR || (e->bytes[0] & 0x80)) continue;
+        reg = reg_of(e);
+        if ((reg >= REG_PA_CH1_BIAS_ON && reg <= REG_LNA_BIAS_ON) ||
+            (reg >= REG_PA_CH1_BIAS_OFF && reg <= REG_LNA_BIAS_OFF)) {
+            TT_ASSERT(e->bytes[2] <= 0x6A);
+            n++;
+        }
+    }
+    TT_ASSERT(n >= 10 * ADAR_COUNT);
 }
 
 static void test_warmup_errors_ignored(void)
@@ -355,6 +406,8 @@ static void test_agc_runs_in_loop(void)
 int main(void)
 {
     TT_RUN(test_happy_path_order);
+    TT_RUN(test_boot_gains_and_agc_cache);
+    TT_RUN(test_boot_bias_writes_within_limit);
     TT_RUN(test_warmup_errors_ignored);
     TT_RUN(test_pll_placeholder_lock_fails);
     TT_RUN(test_pll_spi_error_is_pll_fault);

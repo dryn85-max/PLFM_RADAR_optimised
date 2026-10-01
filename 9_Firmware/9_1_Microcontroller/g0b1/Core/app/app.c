@@ -36,6 +36,7 @@ static void say_boot_latched(fault_t f)
 void app_init(void)
 {
     uint8_t d;
+    int g;
     int16_t warmup;
     int rc;
 
@@ -71,6 +72,13 @@ void app_init(void)
         if (rc == 0) {
             rc = adar_set_safe_bias(d);
         }
+        if (rc == 0) {
+            /* TR_SW_POS (-> ADTR1107 CTRL_SW) floats after power-up/soft reset
+             * (ADAR1000 DS p. 38, p. 44): drive it to receive (3.3 V) over SPI
+             * before any RF rail rises. TR-pin mode is set after the
+             * operational bias. */
+            rc = adar_set_mode(d, ADAR_MODE_SPI_RX);
+        }
         if (rc != 0) {
             DIAG_ERR("BF", "ADAR%u init failed (%d)", (unsigned)d, rc);
             fault_raise(FAULT_ADAR_COMM);
@@ -96,6 +104,23 @@ void app_init(void)
     rc = beam_apply(0);
     if (rc != 0) {
         DIAG_ERR("BF", "beam init failed (%d)", rc);
+        fault_raise(FAULT_ADAR_COMM);
+        return;
+    }
+    /* Boot gains as upstream: TX VGA 0x7F, RX VGA = AGC base on every channel.
+     * agc_apply() writes the RX gains from the AGC state (all unknown after
+     * agc_invalidate), so agc.written[] matches the hardware afterwards. */
+    for (g = 0; g < ADAR_COUNT * 4; g++) {
+        rc = adar_set_tx_gain((uint8_t)(g / 4), (uint8_t)(g % 4), kDefaultTxVgaGain);
+        if (rc != 0) {
+            break;
+        }
+    }
+    if (rc == 0) {
+        rc = agc_apply(&s_agc);
+    }
+    if (rc < 0) {
+        DIAG_ERR("BF", "boot gains failed (%d)", rc);
         fault_raise(FAULT_ADAR_COMM);
         return;
     }

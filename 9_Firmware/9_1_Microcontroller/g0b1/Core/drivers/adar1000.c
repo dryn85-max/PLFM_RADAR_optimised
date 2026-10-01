@@ -195,7 +195,7 @@ int adar_set_safe_bias(uint8_t dev)
         { REG_PA_CH1_BIAS_ON + 1, kPaBiasTxSafe },
         { REG_PA_CH1_BIAS_ON + 2, kPaBiasTxSafe },
         { REG_PA_CH1_BIAS_ON + 3, kPaBiasTxSafe },
-        { REG_LNA_BIAS_ON, kLnaBiasOff },
+        { REG_LNA_BIAS_ON, kLnaBiasOperational },   /* 0 V */
         { REG_LNA_BIAS_OFF, kLnaBiasOff },
         /* BIAS_CTRL = 0: DACs always use the ON values (DS Table 16 p. 39,
          * Table 18 p. 40), so PA gate sits at the safe level in RX and TX.

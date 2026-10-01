@@ -347,7 +347,7 @@ static void test_safe_bias(void)
     TT_ASSERT_EQ(0, adar_set_safe_bias(0));
     for (ch = 0; ch < 4; ch++) expect_write(ch, 0, 0x029 + ch, 0x5D);   /* PA ON */
     expect_write(4, 0, 0x02D, 0x00);                                     /* LNA ON */
-    expect_write(5, 0, 0x04A, 0x00);                                     /* LNA OFF */
+    expect_write(5, 0, 0x04A, 0x68);                                     /* LNA OFF (-1.96 V) */
     /* BIAS_CTRL=0 (ON values always used), LNA_BIAS_OUT_EN=1 (Table 75) */
     expect_write(6, 0, 0x030, 0x10);
     expect_write(7, 0, 0x028, 0x02);
@@ -360,11 +360,11 @@ static void test_operational_bias(void)
     mock_reset();
     TT_ASSERT_EQ(0, adar_set_operational_bias(0));
     for (ch = 0; ch < 4; ch++) {
-        expect_write(ch, 0, 0x029 + ch, 0x7F);        /* PA ON  (kPaBiasOperational) */
-        expect_write(4 + ch, 0, 0x046 + ch, 0x20);    /* PA OFF (kPaBiasRxSafe) */
+        expect_write(ch, 0, 0x029 + ch, 0x5D);        /* PA ON  (kPaBiasOperational, pinched -1.75 V) */
+        expect_write(4 + ch, 0, 0x046 + ch, 0x5D);    /* PA OFF (kPaBiasRxSafe, same) */
     }
-    expect_write(8, 0, 0x02D, 0x30);                  /* LNA ON */
-    expect_write(9, 0, 0x04A, 0x00);                  /* LNA OFF */
+    expect_write(8, 0, 0x02D, 0x00);                  /* LNA ON  (0 V) */
+    expect_write(9, 0, 0x04A, 0x68);                  /* LNA OFF (-1.96 V) */
     expect_write(10, 0, 0x036, 0x2D);
     expect_write(11, 0, 0x037, 0x06);
     expect_write(12, 0, 0x028, 0x02);
@@ -380,6 +380,24 @@ static void test_operational_bias_enables_last(void)
     mock_reset();
     adar_set_operational_bias(0);
     TT_ASSERT_EQ(0x30, spi_ev(spi_count() - 1)->bytes[1]);
+}
+
+/* Owner decision: no PA/LNA gate bias DAC value beyond 0x6A (-2.0 V; DS p. 31:
+ * 0xFF = -4.8 V linear) may ever be written (ADTR1107 VGG abs. max protection). */
+static void test_bias_values_within_safe_limit(void)
+{
+    int pass, i;
+    for (pass = 0; pass < 2; pass++) {
+        mock_reset();
+        TT_ASSERT_EQ(0, pass == 0 ? adar_set_safe_bias(0) : adar_set_operational_bias(0));
+        for (i = 0; i < spi_count(); i++) {
+            const mock_event_t *e = spi_ev(i);
+            int reg = ((e->bytes[0] & 0x1F) << 8) | e->bytes[1];
+            if ((reg >= 0x029 && reg <= 0x02D) || (reg >= 0x046 && reg <= 0x04A)) {
+                TT_ASSERT(e->bytes[2] <= 0x6A);
+            }
+        }
+    }
 }
 
 static void test_temp_read_ok(void)
@@ -470,6 +488,7 @@ int main(void)
     TT_RUN(test_safe_bias);
     TT_RUN(test_operational_bias);
     TT_RUN(test_operational_bias_enables_last);
+    TT_RUN(test_bias_values_within_safe_limit);
     TT_RUN(test_temp_read_ok);
     TT_RUN(test_temp_read_polls_until_eoc);
     TT_RUN(test_temp_read_timeout);

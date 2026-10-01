@@ -78,18 +78,36 @@
 #define MEM_CTRL_BIAS_RAM_BYPASS       (1u << 5)
 #define MEM_CTRL_BEAM_RAM_BYPASS       (1u << 6)
 
-/* ---- Upstream bias constants (ADAR1000_Manager.h, kept verbatim) -------- */
-/* 0x00 -> 0 V, 0xFF -> -4.8 V at the PA_BIASx / LNA_BIAS pins. */
+/* ---- Bias constants (owner decision: SAFE values) ----------------------- */
+/* PA_BIASx / LNA_BIAS DAC: 0x00 -> 0 V, 0xFF -> -4.8 V, linear (DS p. 31;
+ * 0x5D = -1.75 V, 0x6A = -2.0 V). The ADTR1107 VGG_PA/VGG_LNA pins must never
+ * see more than -2.0 V from this firmware, so every PA/LNA bias constant is
+ * limited to 0x6A at compile time (see _Static_assert below).
+ *
+ * Upstream values (PA ON 0x7F = -2.5 V, OFF 0x20, LNA ON 0x30) are NOT used:
+ * 0x7F exceeds the limit and the ON/OFF pair looked swapped. PA ON = PA OFF =
+ * 0x5D keeps the PA pinched in both TR states (no TX current), so the true
+ * quiescent-current (Idq) value is still to be found on hardware (BACKLOG).
+ * LNA ON = 0 V (self-biased operation), LNA OFF = 0x68 (-1.96 V, LNA debiased
+ * while transmitting). */
 #define kDefaultTxVgaGain      0x7F
 #define kDefaultRxVgaGain      30
-#define kLnaBiasOff            0x00
-#define kLnaBiasOperational    0x30
+#define kLnaBiasOperational    0x00
+#define kLnaBiasOff            0x68
 #define kPaBiasTxSafe          0x5D
-#define kPaBiasIdqCalibration  0x0D
-#define kPaBiasOperational     0x7F
-#define kPaBiasRxSafe          0x20
+#define kPaBiasIdqCalibration  0x0D   /* unused: Idq calibration is not implemented */
+#define kPaBiasOperational     0x5D
+#define kPaBiasRxSafe          0x5D
+#define kBiasDacMaxSafe        0x6A
 #define kTxBiasCurrent         0x2D
 #define kTxDriverBiasCurrent   0x06
+
+_Static_assert(kLnaBiasOperational <= kBiasDacMaxSafe, "LNA ON bias beyond -2.0 V");
+_Static_assert(kLnaBiasOff <= kBiasDacMaxSafe, "LNA OFF bias beyond -2.0 V");
+_Static_assert(kPaBiasTxSafe <= kBiasDacMaxSafe, "PA safe bias beyond -2.0 V");
+_Static_assert(kPaBiasIdqCalibration <= kBiasDacMaxSafe, "PA Idq bias beyond -2.0 V");
+_Static_assert(kPaBiasOperational <= kBiasDacMaxSafe, "PA ON bias beyond -2.0 V");
+_Static_assert(kPaBiasRxSafe <= kBiasDacMaxSafe, "PA OFF bias beyond -2.0 V");
 
 /* Vector-modulator tables: 128-state phase grid, step 2.8125 deg.
  * Byte = bit5 polarity, bits[4:0] magnitude. Index with phase % 128. */
@@ -116,13 +134,14 @@ int adar_read(uint8_t dev, uint16_t reg, uint8_t *val);
 int adar_init(uint8_t dev);
 
 /* Safe bias, before the ADTR1107 VDD_PA rail is applied: PA gate bias ON =
- * kPaBiasTxSafe (pinch-off) on all four channels, LNA bias 0 V, BIAS_CTRL=0 so
- * the ON values are always used. */
+ * kPaBiasTxSafe (pinch-off) on all four channels, LNA bias ON 0 V (OFF
+ * kLnaBiasOff), BIAS_CTRL=0 so the ON values are always used. */
 int adar_set_safe_bias(uint8_t dev);
 
-/* Operational bias: PA ON/OFF = kPaBiasOperational/kPaBiasRxSafe, LNA ON/OFF =
- * kLnaBiasOperational/kLnaBiasOff, TX bias currents, then BIAS_CTRL +
- * LNA_BIAS_OUT_EN so the ON/OFF pairs follow TR (PA_ON pin must be high). */
+/* Operational bias: PA ON/OFF = kPaBiasOperational/kPaBiasRxSafe (both 0x5D,
+ * PA stays pinched), LNA ON/OFF = kLnaBiasOperational/kLnaBiasOff, TX bias
+ * currents, then BIAS_CTRL + LNA_BIAS_OUT_EN so the ON/OFF pairs follow TR
+ * (PA_ON pin must be high or floating: it has an internal pull-up). */
 int adar_set_operational_bias(uint8_t dev);
 
 int adar_set_rx_gain(uint8_t dev, uint8_t ch, uint8_t gain);   /* 0x010+ch, LDRX */
