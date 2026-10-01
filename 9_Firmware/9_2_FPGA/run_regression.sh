@@ -498,6 +498,10 @@ run_test "Matched Filter Chain" \
     tb/tb_matched_filter_processing_chain.v matched_filter_processing_chain.v \
     fft_engine.v chirp_memory_loader_param.v
 
+run_test "Reference spectrum ROM" \
+    tb/tb_ref_rom_reg.vvp \
+    tb/tb_ref_spectrum_rom.v ref_spectrum_rom.v
+
 echo ""
 
 # ===========================================================================

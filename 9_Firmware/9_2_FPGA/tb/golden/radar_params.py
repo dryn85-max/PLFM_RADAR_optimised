@@ -91,9 +91,14 @@ def if_chirp_adc(n_samples, amp, delay, seed=1):
 
 def baseband_chirp(n_samples, t_chirp):
     """Complex baseband chirp at FS_BB as float arrays (i, q), unit amplitude,
-    phase = pi * (BW/T) * t^2 (same formula as the old gen_chirp_mem.py)."""
+    as produced by ddc.v for the 10->30 MHz IF chirp of if_chirp_adc().
+
+    ddc.v mixes with I = x*cos, Q = x*sin, i.e. I + jQ = x*exp(+j*w0*t); the
+    low-pass keeps the exp(-j*phi_IF) half of the real chirp, so the baseband
+    phase is  -(pi*k*t^2 - pi*BW*t)  with k = BW/T (frequency +BW/2 -> -BW/2).
+    """
     n = np.arange(n_samples)
     t = n / FS_BB
     rate = CHIRP_BW / t_chirp
-    phase = np.pi * rate * t * t
+    phase = np.pi * CHIRP_BW * t - np.pi * rate * t * t
     return np.cos(phase), np.sin(phase)
