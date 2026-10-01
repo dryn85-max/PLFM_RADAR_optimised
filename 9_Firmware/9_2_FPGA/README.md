@@ -202,6 +202,15 @@ e. **No per-stage FFT scaling.** `fft_engine` outputs saturate at 16 bits when
 f. **Header comment in `cfar_ca.v`** still quotes upstream resource numbers
    (8 x 21 multiplier); the counted values above are the actual ones (8 x 23 and
    23 x 7).
+g. **Range FFT `INTERNAL_W` is 25, not the spec's 24** (owner decision,
+   commit `a5a524a`). With I and Q both at full scale the 256-point spectrum
+   reaches about `sqrt(2) * 2^23`, which wraps a 24-bit signed word; 25 bits
+   hold `N * sqrt(2) * 2^15 < 2^24`. The full-scale vector in golden test (c)
+   fails with 24 bits. Do not "fix" it back to 24. The 16-point Doppler engine
+   keeps 24 bits (bound below `2^20`).
+h. **`fft_twiddle_1024.mem` is test-only.** No `PROD_RTL` module reads it; it
+   is kept only for `tb/tb_range_fft_realdata.v`, which still runs the
+   1024-point real-data check.
 
 ## Hand-off: what remains board-specific
 
