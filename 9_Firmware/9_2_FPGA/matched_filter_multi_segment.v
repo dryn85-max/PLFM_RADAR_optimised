@@ -36,7 +36,9 @@
 // Overrun: a chirp-start toggle that arrives while the segmenter is busy
 // (collecting or processing) is IGNORED (the running chirp completes intact,
 // nothing is overwritten) and the sticky flag mf_overrun is set; it is
-// cleared only by reset.  A chirp that arrives in IDLE starts normally.
+// cleared only by reset.  A chirp that arrives in IDLE starts normally, and so
+// does one that arrives in the single ST_OUTPUT cycle of the last segment (the
+// segmenter would be idle the next cycle: no overrun, no dropped chirp).
 // mf_overrun is not yet routed to a host status register (protocol change,
 // owner's decision).
 //
@@ -132,6 +134,8 @@ reg             primed;
 // second chirp.)
 reg mc_new_chirp_prev, mc_new_elevation_prev, mc_new_azimuth_prev;
 wire chirp_start_pulse = mc_new_chirp ^ mc_new_chirp_prev;
+// last segment's single output cycle: the next state is ST_IDLE
+wire st_output_last = (state == ST_OUTPUT) && (current_segment >= total_segments - 1'b1);
 
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin
@@ -160,7 +164,10 @@ always @(posedge clk or negedge reset_n) begin
         fft_input_valid <= 1'b0;
 
         // A chirp that arrives while busy is ignored (see header); remember it.
-        if (chirp_start_pulse && state != ST_IDLE) mf_overrun <= 1'b1;
+        // Exception: ST_OUTPUT of the last segment is a single cycle after which
+        // the segmenter is idle, so a chirp arriving exactly then is started
+        // directly (see ST_OUTPUT) instead of being dropped.
+        if (chirp_start_pulse && state != ST_IDLE && !st_output_last) mf_overrun <= 1'b1;
 
         case (state)
         ST_IDLE: begin
@@ -230,7 +237,16 @@ always @(posedge clk or negedge reset_n) begin
         ST_OUTPUT: begin
             if (current_segment < total_segments - 1'b1)
                 state <= ST_NEXT_SEGMENT;
-            else
+            else if (chirp_start_pulse) begin
+                // Chirp toggle in the last cycle before IDLE: start it now
+                // (same actions as ST_IDLE + chirp_start_pulse), not an overrun.
+                buffer_write_ptr <= 0; buffer_read_ptr <= 0; seg_base <= 0;
+                current_segment <= 0; saw_chain_output <= 0;
+                state <= ST_COLLECT_DATA;
+                long_q         <= use_long_chirp;
+                total_segments <= use_long_chirp ? LONG_SEGMENTS[2:0] : 3'd1;
+                window_len     <= use_long_chirp ? LONG_WINDOW[RAM_AW:0] : SHORT_CHIRP_SAMPLES[RAM_AW:0];
+            end else
                 state <= ST_IDLE;
         end
 

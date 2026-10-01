@@ -187,6 +187,28 @@ module tb_mf_segmenter;
         check(mf_overrun == 1'b1, "chirp during collection sets mf_overrun");
         wait_idle;
         check_long_stream("long chirp with a chirp ignored during collection");
+
+        // ---- chirp toggle in the single ST_OUTPUT cycle of the LAST segment ----
+        // The segmenter is idle the very next cycle, so this chirp is neither an
+        // overrun nor may it be dropped: it must start and run to completion.
+        reset_n = 0; tog = 0; repeat (3) @(posedge clk); #1; reset_n = 1; repeat (3) @(posedge clk); #1;
+        check(mf_overrun == 1'b0, "reset clears mf_overrun before the ST_OUTPUT-edge test");
+        tog_at = -1;
+        start_chirp(1);
+        drive_samples(STREAM_N);
+        t = 0;
+        while (!(uut.state == 4'd6 && uut.current_segment == uut.total_segments - 1'b1) && t < 400000) begin
+            @(posedge clk); #1; t = t + 1;
+        end
+        check(uut.state == 4'd6 && uut.current_segment == 3'd3, "reached ST_OUTPUT of the last segment");
+        feeds = 0; outs = 0; busy_cycles = 0;
+        tog = ~tog;                              // sampled by the DUT in ST_OUTPUT of segment 3
+        @(posedge clk); #1;
+        check(mf_overrun == 1'b0, "chirp toggle in last ST_OUTPUT cycle is not flagged as overrun");
+        drive_samples(STREAM_N);
+        wait_idle;
+        check_long_stream("long chirp started in the last ST_OUTPUT cycle");
+        check(mf_overrun == 1'b0, "mf_overrun still clear after the ST_OUTPUT-edge chirp");
         $display("max busy time of a long chirp: %0d clk = %0d us at 100 MHz", max_busy, max_busy / 100);
 
         $display("\nResults: %0d/%0d passed", pass_count, pass_count + fail_count);
