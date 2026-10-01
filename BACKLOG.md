@@ -48,10 +48,13 @@ Follow-up work that is out of scope for the current plans.
 
 ## RTL track
 
-Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-f).
+Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-l).
 
-- [ ] **One range-bin set per chirp for the Doppler/MTI path (decision needed).**
-  `range_bin_decimator` now emits 4 x 64 bins per long chirp (one set per
+- [ ] **One range-bin set per chirp for the Doppler/MTI path (pre-existing
+  upstream behaviour; owner decided to keep it as is for now).**
+  Upstream `b46dd71` also produced 4 x 64 bins per long chirp (4 segments,
+  each 1024 -> 64), so this is not a regression of the port.
+  `range_bin_decimator` emits 4 x 64 bins per long chirp (one set per
   matched-filter segment) and `doppler_processor_optimized` /
   `mti_canceller` count every 64-bin set as one chirp (`doppler_processor.v`
   lines 264-268). The four sets of one chirp therefore fill four slow-time
@@ -89,9 +92,9 @@ Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-f).
   `scripts/200t`, `scripts/te0712`, `scripts/te0713` and
   `radar_system_top_te07*_dev.v` (they reference removed tops/ports); deleting
   hardware flow files needs the owner's go-ahead.
-- [ ] **Stale comments in untouched RTL.** `cfar_ca.v` header quotes the old
-  resource numbers (8 x 21 multiplier, 1 BRAM) and `range_bin_decimator.v`
-  header still describes 1024 -> 64 bins; `doppler_processor.v:247` has a case
+- [ ] **Stale comments in untouched RTL.** `cfar_ca.v` header quotes upstream's
+  Vivado-measured resource numbers (8 x 21 multiplier, 1 BRAM; see README
+  limitation f); `doppler_processor.v:247` has a case
   without `default` (advisory SYNTH-6 warning in the regression lint).
 - [ ] **Doppler window multiplier sharing.** The three window multiplies in
   `doppler_processor.v` have identical operands in exclusive branches; the
@@ -103,3 +106,28 @@ Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-f).
 - [ ] **Real-data validation of the overlap-save alignment** (reference segment
   vs signal segment) with the new 12-bit / 100 MSPS front end; all current
   checks use synthetic chirps.
+- [ ] **FT2232H write path may lose the 0x55 footer under host back-pressure
+  (protocol-affecting, owner decision).** In `usb_data_interface_ft2232h.v`
+  the WR_DONE state drops `ft_wr_n` without checking `ft_txe_n`; if the host
+  stalls and TXE# deasserts mid-packet, the last byte(s), in particular the
+  `0x55` footer, can be lost. Present at upstream `b46dd71`. Fixing it changes
+  the write handshake (hold the byte until TXE# is low), so it needs the
+  owner's decision. It also needs a back-pressure end-to-end test:
+  `tb/tb_system_e2e.v` never raises `ft_txe_n`, so check G5.5 (footer present)
+  passes trivially and would not catch the loss.
+- [ ] **CDC synchronizer constraints / attributes.** `ASYNC_REG` was removed per
+  the vendor-neutral spec; add the target tool's synchronizer attributes and
+  CDC timing exceptions when the project is created (README hand-off list).
+- [ ] **DAC forwarded clock and ADC clock phase.** The DAC clock is forwarded on
+  the same edge as the data (hold risk) and the ADC DCO phase relation is not
+  handled in RTL; resolve with the board wrapper, a PLL phase shift and output /
+  input delay constraints (README hand-off list).
+- [ ] **Short chirp covers only ~78 m.** The 13-sample short-chirp window (0.5 us
+  at 25 MSPS) limits the short-chirp range window to about 78 m (upstream: 50
+  samples at 100 MSPS). Decide whether that is acceptable for the near-range
+  mode.
+- [ ] **Run the new cdc_handshake data-integrity property.** The property added
+  to `formal/fv_cdc_handshake.v` (PROPERTY 8) and the changed `src_ready`
+  equation were written without `sby` available; run them (bmc and cover) and
+  fix the wrapper if clk2fflogic timing makes the monitor off by one. The
+  simulation stress test in `tb/tb_cdc_modules.v` is the evidence so far.

@@ -149,6 +149,14 @@ Run `python3 tb/golden/count_multipliers.py` for the full per-line report.
 - The synthesizable matched-filter chain is compiled without `-DSIMULATION` in
   `tb_mf_chain`, `tb_mf_segmenter` and `tb_mf_multiseg`, bit-exact against
   `tb/golden/gen_mf_chain_golden.py`.
+- Receiver golden: `Receiver (golden generate)` writes only a scratch file;
+  `Receiver (golden compare)` checks the receiver output bit-exactly against the
+  COMMITTED `tb/golden/golden_doppler.mem` (a one-LSB change fails the
+  regression). Re-bless the file only for a legitimate output change, after two
+  runs give the same md5.
+- `cdc_handshake` is stress-tested in `tb_cdc_modules` (120 <-> 100 MHz, held
+  valid and valid/ready producers, destination back-pressure, in-order
+  scoreboard).
 - Receiver and system tests (`tb_radar_receiver_final`, `radar_system_tb`,
   `tb_system_e2e`, both USB modes), real-data Doppler and decimator-to-Doppler
   exact-match tests (ADI CN0566 vectors), and unit tests for CIC, NCO, FIR,
@@ -179,17 +187,19 @@ b. **`mf_overrun` is not host-visible.** A chirp start that arrives while the
    by `tb_mf_segmenter`) is ignored and sets a sticky flag; the USB protocol was
    deliberately left unchanged, so the flag is visible in simulation only. The
    PRI of long chirps must exceed the busy time.
-c. **Four range-bin sets per long chirp.** `range_bin_decimator` runs on each
-   segment's 256-bin profile and emits 64 bins per segment, i.e. 4 x 64 outputs
-   per long chirp (one set per segment); the upstream design produced one set
-   of 64 per chirp. Consequence, from reading `doppler_processor.v`
-   (lines 264-268, not simulated with a multi-segment input): the Doppler
-   processor and the MTI history treat every 64-bin set as one chirp (the chirp
-   index advances after 64 bins), so the four sets of one long chirp occupy four
-   consecutive slow-time slots and a 32-slot frame spans 8 long chirps instead
-   of 32. The slow-time axis is therefore not meaningful for the long chirp
-   until the sets are merged or selected (one set per chirp); this needs a
-   design decision and is listed in `BACKLOG.md`.
+c. **Four range-bin sets per long chirp (pre-existing upstream behaviour,
+   kept by owner decision).** `range_bin_decimator` runs on each segment's
+   256-bin profile and emits 64 bins per segment, i.e. 4 x 64 outputs per long
+   chirp (one set per segment). The upstream design at `b46dd71` did the same
+   (4 segments, each 1024 -> 64), so this is NOT a regression of the port.
+   Consequence, from reading `doppler_processor.v` (lines 264-268, not
+   simulated with a multi-segment input): the Doppler processor and the MTI
+   history treat every 64-bin set as one chirp (the chirp index advances after
+   64 bins), so the four sets of one long chirp occupy four consecutive
+   slow-time slots and a 32-slot frame spans 8 long chirps instead of 32. The
+   slow-time axis is therefore not meaningful for the long chirp until the sets
+   are merged or selected (one set per chirp). The owner decided to keep the
+   4 x 64 sets as they are; the open design question stays in `BACKLOG.md`.
 d. **Stale board files (Decision 8).** `constraints/`, `scripts/50t`,
    `scripts/200t`, `scripts/te0712`, `scripts/te0713`,
    `radar_system_top_te07*_dev.v` and `constraints/README.md` belong to the old
@@ -199,9 +209,12 @@ e. **No per-stage FFT scaling.** `fft_engine` outputs saturate at 16 bits when
    the input exceeds roughly 1/16 of full scale; keep the matched-filter input
    small with `host_gain_shift` / AGC. Internal words that would overflow wrap
    (the Python models do the same).
-f. **Header comment in `cfar_ca.v`** still quotes upstream resource numbers
-   (8 x 21 multiplier); the counted values above are the actual ones (8 x 23 and
-   23 x 7).
+f. **Resource figures in the `cfar_ca.v` header are upstream's, not this
+   port's.** The header block "Resources (measured, Vivado Build 25 on
+   XC7A200T)" (1 block RAM, one 8 x 21 multiplier, 21 x 5 cross-multiplies) is
+   the upstream Vivado measurement; it was not re-measured here and the header
+   was left untouched. The static counts of this port (table above) are an
+   8 x 23 alpha product and 23 x 7 GO/SO cross products.
 g. **Range FFT `INTERNAL_W` is 25, not the spec's 24** (owner decision,
    commit `a5a524a`). With I and Q both at full scale the 256-point spectrum
    reaches about `sqrt(2) * 2^23`, which wraps a 24-bit signed word; 25 bits
@@ -211,6 +224,29 @@ g. **Range FFT `INTERNAL_W` is 25, not the spec's 24** (owner decision,
 h. **`fft_twiddle_1024.mem` is test-only.** No `PROD_RTL` module reads it; it
    is kept only for `tb/tb_range_fft_realdata.v`, which still runs the
    1024-point real-data check.
+
+i. **Upstream defect fixed: only every second chirp was processed.**
+   `mc_new_chirp` is a toggle (`radar_mode_controller.v`), but the upstream
+   segmenter at `b46dd71` detected only the rising edge
+   (`mc_new_chirp && !mc_new_chirp_prev`), so every second chirp was silently
+   dropped. The segmenter now processes every chirp (both toggle edges), by
+   owner decision. This doubles the chirp rate seen by the Doppler/MTI path
+   compared with upstream (relevant for limitation c and for the PRI budget in
+   limitation b).
+j. **Short-chirp window is 13 samples (~78 m).** The short chirp is 0.5 us =
+   13 samples at 25 MSPS; the segmenter processes a 13-sample window followed
+   by zeros, so the short-chirp matched filter covers about 13 x 6 m = 78 m of
+   range. Upstream used 50 samples at 100 MSPS for the same 0.5 us.
+k. **USB raw range stream changed resolution.** The raw range-profile words
+   sent over USB are now 256 bins per segment at 6 m spacing (25 MSPS) instead
+   of 1024 bins at 1.5 m (100 MSPS) per segment. The packet format is
+   unchanged. The decimated spacing seen by Doppler/CFAR is preserved: 4 x 6 m
+   = 24 m, same as upstream's 16 x 1.5 m.
+l. **No synchronizer attributes in the RTL (spec decision).** `ASYNC_REG` and
+   other vendor attributes were removed to keep the RTL vendor-neutral (the
+   regression greps for them). The CDC flops (`cdc_single_bit` chains,
+   `cdc_handshake` request/acknowledge chains, reset synchronizers) therefore
+   carry no placement/metastability hints; see the hand-off list.
 
 ## Hand-off: what remains board-specific
 
@@ -227,3 +263,19 @@ h. **`fft_twiddle_1024.mem` is test-only.** No `PROD_RTL` module reads it; it
   ROM inference on the first real compile.
 - The first synthesis run on the chosen device will give the real DSP / RAM
   mapping and Fmax at 100 MHz; the numbers above are static estimates.
+- **CDC constraints and attributes (M4).** Add synchronizer constraints for the
+  target tool on every CDC path: `ASYNC_REG` (Vivado) / `SYNCHRONIZER_IDENTIFICATION`
+  and `set_false_path` / `set_max_delay -datapath_only` or the Quartus
+  equivalents (`set_false_path` / `SYNCHRONIZER_IDENTIFICATION`) for the
+  `cdc_single_bit` chains, the `cdc_handshake` request/acknowledge chains and
+  the data bus it holds stable (`src_data_reg` -> `dst_data_reg`), and the
+  reset synchronizers. They were removed from the RTL per the vendor-neutral spec.
+- **DAC clock forwarding and ADC clock phase (M6).** In `dac_interface_single.v`
+  the forwarded DAC clock is launched on the same clock edge as the data (hold /
+  setup margin at the DAC pins is not guaranteed; use an ODDR-style forwarded
+  clock with a phase offset or a PLL phase shift and constrain output delays).
+  For the ADC, the DCO-to-sample-clock phase handling (`adc_cmos_interface.v`
+  captures on a single edge of the ADC data clock) must be closed with input
+  delay constraints and, if needed, an IDELAY/PLL phase shift on the board.
+- **Host back-pressure on the FT2232H path** is an open protocol question; see
+  `BACKLOG.md` (RTL track, WR_DONE / `ft_txe_n`).
