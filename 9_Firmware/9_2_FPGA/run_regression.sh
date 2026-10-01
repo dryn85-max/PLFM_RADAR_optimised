@@ -524,6 +524,10 @@ run_test "Radar Mode Controller" \
     tb/tb_rmc_reg.vvp \
     tb/tb_radar_mode_controller.v radar_mode_controller.v
 
+run_test "ADC CMOS Interface" \
+    tb/tb_adc_reg.vvp \
+    tb/tb_adc_cmos_interface.v adc_cmos_interface.v
+
 echo ""
 
 # ===========================================================================
