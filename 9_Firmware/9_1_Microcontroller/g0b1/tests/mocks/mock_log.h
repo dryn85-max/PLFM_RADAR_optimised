@@ -27,6 +27,8 @@ typedef struct {
 extern mock_event_t mock_log[MOCK_LOG_CAP];
 extern int mock_log_n;
 extern int mock_log_overflow;   /* 1 once an event was dropped */
+extern int mock_gpio_port_reads;   /* gpio_read_fpga_port() call count */
+extern int mock_gpio_pin_reads;    /* gpio_read() call count */
 extern char mock_uart_tx[1024]; /* everything written via uart_write */
 
 void mock_log_add(int kind, int a, int b, int c, const uint8_t *bytes, size_t n);
