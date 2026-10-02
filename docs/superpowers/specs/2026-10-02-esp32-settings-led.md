@@ -77,19 +77,35 @@ erases the home Wi-Fi credentials). The live page has no authentication.
 - `/wifi` and the new `/ld2410` work on the on-demand AP exactly as on the fallback AP
   (AP-only check by the socket's local address, existing `http_srv_req_on_ap`).
 
-### R4. LD2410C commands (core, host-tested; protocol facts VERIFY against the Hi-Link
-"LD2410C Serial Communication Protocol" — not in `hardware/datasheets/` yet)
-- Encoders: set max gates and duration (`0x0060`: words 0x0000 max moving gate, 0x0001 max
-  still gate, 0x0002 no-one duration s, each `u16 word + u32 value`), read parameters
-  (`0x0061`), set gate sensitivity (`0x0064`: 0x0000 gate (0..8), 0x0001 moving, 0x0002
-  still), read firmware version (`0x00A0`), factory reset (`0x00A2`), restart (`0x00A3`),
-  Bluetooth on/off (`0x00A4`, value 0x0000 off / 0x0001 on; effective after restart).
-- Decoders: read-parameters ACK (`0xAA` header, max gate N, max moving gate, max still gate,
-  N+1 moving sensitivities, N+1 still sensitivities, duration u16) and firmware-version ACK
-  (type u16, major u16, minor u32; shown as `V<major hi>.<major lo>.<minor hex>`). Bounds
-  checked; malformed ACKs rejected.
-- Value limits: gates 2..8, duration 0..65535 s, sensitivity 0..100 (VERIFY; the manual may
-  fix the still sensitivity of gates 0 and 1 — if so they are shown read-only).
+### R4. LD2410C commands (core, host-tested)
+Source: `hardware/datasheets/Protocolo_comunicacion_serial_LD2410C.pdf` (Hi-Link "HLK-LD2410C
+serial communication protocol" V1.00, 2022-11-7; English text despite the file name). Page
+numbers below are the document's "Page N / 23".
+- Every command needs enable-config (`0x00FF`, value `0x0001`) first and end-config (`0x00FE`)
+  after (§2.2.1-2.2.2, p. 9-10; §2.4.1, p. 20-21). The enable-config ACK carries status,
+  protocol version and buffer size `0x0040`.
+- Encoders: set max gates and no-one duration (`0x0060`, §2.2.3, p. 10: words 0x0000 max motion
+  gate, 0x0001 max still gate, 0x0002 no-one duration, each `u16 word + u32 value`; gates 2..8,
+  duration 0..65535 s; stored in the module); read parameters (`0x0061`, §2.2.4, p. 11); set gate
+  sensitivity (`0x0064`, §2.2.7, p. 12-13: word 0x0000 gate (0..8, 0xFFFF = all), 0x0001
+  motion, 0x0002 still, each `u16 word + u32 value`; stored); read firmware version (`0x00A0`,
+  §2.2.8, p. 13); factory reset (`0x00A2`, §2.2.10, p. 14, effective after a restart, so it is
+  followed by a restart); restart (`0x00A3`, §2.2.11, p. 15, the module restarts after sending the
+  ACK); Bluetooth off (`0x00A4`, value `0x0000`, §2.2.12, p. 16, effective after a restart, so it
+  is followed by a restart). The document is inconsistent for "on" (text 0x0100, example bytes
+  `01 00` = 0x0001): only "off" is used.
+- Decoders: read-parameters ACK (p. 11, intra-frame length 0x1C: status u16, header `0xAA`, max
+  gate N (8), max motion gate, max still gate, N+1 motion sensitivities, N+1 still
+  sensitivities, no-one duration u16); firmware-version ACK (p. 13: status, type u16, major
+  u16, minor u32; the example `07 01` = major 0x0107 is shown as "V1.07", i.e. high byte, dot,
+  low byte in hex; the example minor bytes `16 15 09 22` are shown as "22091615", which does not
+  match a little-endian u32 (0x22091516): show `%08x` of the little-endian value and **VERIFY**
+  against the real module on the bench). Bounds checked; malformed ACKs rejected.
+- Value limits: gates 2..8 (the command section, p. 10; §1.2.2 on p. 6 says 1..8, the command
+  section wins), duration 0..65535 s, sensitivity 0..100 (§1.2.2, p. 6-7; 100 = gate ignored).
+  The **still sensitivity of gates 0 and 1 is not settable** (Table 7, p. 15): shown read-only;
+  a `0x0064` write for gate 0 or 1 sends the still value read from the module unchanged.
+- Factory defaults (Table 7, p. 15) are shown on the page as a reference.
 - `LD_CMD_MAX_VALUE` grows to fit the 18-byte values.
 
 ### R5. Command execution in the LD2410C task
@@ -115,9 +131,10 @@ erases the home Wi-Fi credentials). The live page has no authentication.
 ### R7. Docs and BACKLOG
 - `esp32/README.md` (button table, LED table, AP on demand, `/ld2410`, VERIFY items),
   `docs/decisions.md` (decisions 1–10), `docs/architecture.md`, BACKLOG: close the settings
-  page and authentication items (decision 2), drop the PA temperature item from the ESP32
+  page and authentication items (decision 2), the "LD2410C manual" item (now in
+  `hardware/datasheets/`), drop the PA temperature item from the ESP32
   track, add: protocol v4 (config record, 0.2 m resolution, azimuth), rotating radar details
-  (decision 10 with shopping list), LD2410C protocol PDF into `hardware/datasheets/`.
+  (decision 10 with shopping list).
 
 ## Non-goals
 No password/HTTPS, no change to the live page data or the recording protocol, no 0.2 m
