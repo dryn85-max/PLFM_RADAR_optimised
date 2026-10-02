@@ -64,6 +64,40 @@ Follow-up work that is out of scope for the current plans.
   can land in the middle of a typed line and the partial line is not redrawn
   (pre-existing, more visible now that the console echoes).
 
+## ESP32 MVP track
+
+Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
+`docs/superpowers/specs/2026-10-02-esp32-ld2410-mvp.md`).
+
+- [ ] **LD2410C settings page** on the live page: maximum gates, per-gate
+  sensitivity, hold time (the first version only enables engineering mode).
+- [ ] **GPS NEO-6M and IMU BMI160 on the ESP32.** Pins are to be assigned (the
+  MVP uses GPIO17/18 for the LD2410C, GPIO19/20 for native USB, GPIO0 for BOOT).
+- [ ] **Decide A (everything on the ESP32-S3) vs B (hybrid STM32 + ESP32-S3)
+  when the RF chain is bought.** Pin-count analysis summary: the ESP32-S3
+  N32R8V has about 27-31 usable GPIO (octal flash/PSRAM take GPIO26-37, strapping
+  and USB pins are further limited); the minimum need is about 19-25 pins with
+  hardware PG->EN chaining of the base power rails; the PA and LNA enables must
+  stay on direct MCU pins with pull-downs so they are off while the MCU boots or
+  resets. Numbers to be re-checked against the ESP32-S3 datasheet (**VERIFY**).
+- [ ] **PA over-temperature sensor choice for the STM32.** Options: A) TMP3x on
+  the internal ADC (needs a pin reshuffle); B) I2C LM75 / TMP102; C) AHT only
+  for air temperature; D) keep the ADS7830. NTC probes from the ZFC39 kit are an
+  option for the probe itself. Needs an owner decision.
+- [ ] **Hi-Link LD2410C protocol manual into `hardware/datasheets/`**, then
+  verify the parser, the frame decoder, the command codec and the test vectors
+  (`esp32/tests/vectors/`, currently synthetic) against it and a real capture
+  (engineering frame layout incl. the extra module-specific bytes, ACK
+  sequence, frame rate, maximum payload length).
+- [ ] **Pin the `espressif/mdns` component version and commit
+  `esp32/dependencies.lock`** (now `^1.8.0` and the lock file is git-ignored),
+  so builds are reproducible.
+- [ ] **TCP keepalive for the recording server** (only 1 s keep-alive batches and
+  5 s socket timeouts today); a half-open connection from a vanished client is
+  noticed by the send timeout only.
+- [ ] **Optional authentication on the live page** (none in the MVP; anyone on
+  the AP or the home network can open it and the recording port).
+
 ## RTL track
 
 Context: `fpga/README.md` (known limitations a-l).
