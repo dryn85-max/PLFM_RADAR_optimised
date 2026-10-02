@@ -49,7 +49,7 @@
  * Timing:
  *   Phase 2 takes ~(66 + T + 3*64) * 32 ≈ 8500 cycles per frame @ 100 MHz
  *   = 85 µs. Frame period @ PRF=1932 Hz, 32 chirps = 16.6 ms. Fits easily.
- * Resources (measured, Vivado Build 25 on XC7A200T — see docs/reports.html):
+ * Resources (measured, Vivado Build 25 on XC7A200T — see legacy/docs-site/reports.html):
  *   - 1 block RAM for the magnitude buffer (2048 x 17 bits = 34.8 kbit)
  *   - 1 multiplier for alpha * noise_sum (8 x 21 bits); the GO/SO modes add
  *     two small cross-multiplies (21 x 5 bits) that may map to logic

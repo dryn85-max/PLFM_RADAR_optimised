@@ -15,7 +15,7 @@ Regenerate whenever the Doppler processing pipeline changes:
 ## How to regenerate
 
 ```bash
-cd 9_Firmware/9_2_FPGA
+cd fpga
 python3 tb/cosim/real_data/golden_reference.py
 # Then copy the Doppler-specific files:
 python3 -c "

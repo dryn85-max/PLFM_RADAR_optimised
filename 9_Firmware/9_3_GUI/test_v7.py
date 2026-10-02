@@ -19,6 +19,20 @@ from dataclasses import asdict
 import numpy as np
 
 
+def _find_repo_root():
+    here = os.path.abspath(__file__)
+    d = os.path.dirname(here)
+    while True:
+        if os.path.isfile(os.path.join(d, "pyproject.toml")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            raise RuntimeError("repository root (pyproject.toml) not found")
+        d = parent
+
+
+_REPO_ROOT = _find_repo_root()
+
 # =============================================================================
 # Test: v7.models
 # =============================================================================
@@ -590,7 +604,7 @@ class TestSoftwareFPGASignalChain(unittest.TestCase):
     """SoftwareFPGA.process_chirps with real co-sim data."""
 
     COSIM_DIR = os.path.join(
-        os.path.dirname(__file__), "..", "9_2_FPGA", "tb", "cosim",
+        _REPO_ROOT, "fpga", "tb", "cosim",
         "real_data", "hex"
     )
 
@@ -703,7 +717,7 @@ class TestDetectFormat(unittest.TestCase):
     """detect_format auto-detection logic."""
 
     COSIM_DIR = os.path.join(
-        os.path.dirname(__file__), "..", "9_2_FPGA", "tb", "cosim",
+        _REPO_ROOT, "fpga", "tb", "cosim",
         "real_data", "hex"
     )
 
@@ -747,7 +761,7 @@ class TestReplayEngineCosim(unittest.TestCase):
     """ReplayEngine loading from FPGA co-sim directory."""
 
     COSIM_DIR = os.path.join(
-        os.path.dirname(__file__), "..", "9_2_FPGA", "tb", "cosim",
+        _REPO_ROOT, "fpga", "tb", "cosim",
         "real_data", "hex"
     )
 

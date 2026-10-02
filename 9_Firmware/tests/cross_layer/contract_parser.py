@@ -25,11 +25,12 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GUI_DIR = REPO_ROOT / "9_Firmware" / "9_3_GUI"
-FPGA_DIR = REPO_ROOT / "9_Firmware" / "9_2_FPGA"
+FPGA_DIR = REPO_ROOT / "fpga"
 MCU_DIR = REPO_ROOT / "9_Firmware" / "9_1_Microcontroller"
 MCU_LIB_DIR = MCU_DIR / "9_1_1_C_Cpp_Libraries"
 MCU_CODE_DIR = MCU_DIR / "9_1_3_C_Cpp_Code"
-XDC_DIR = FPGA_DIR / "constraints"
+# Xilinx constraints are legacy-only (not built or tested).
+XDC_DIR = REPO_ROOT / "legacy" / "9_Firmware" / "9_2_FPGA" / "constraints"
 
 
 # ===================================================================

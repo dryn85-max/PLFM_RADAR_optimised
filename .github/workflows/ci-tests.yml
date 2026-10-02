@@ -70,7 +70,7 @@ jobs:
 
   # ===========================================================================
   # FPGA RTL Regression (38 testbenches + lint + vendor-neutrality/resource gates)
-  # Golden vectors under 9_Firmware/9_2_FPGA/tb/golden are committed; the
+  # Golden vectors under fpga/tb/golden are committed; the
   # generators (numpy) are re-run here to make sure they still reproduce them.
   # ===========================================================================
   fpga-regression:
@@ -93,7 +93,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y iverilog
 
       - name: Regenerate golden vectors and check they are unchanged
-        working-directory: 9_Firmware/9_2_FPGA
+        working-directory: fpga
         run: |
           uv run python tb/golden/gen_twiddle_rom.py 256
           uv run python tb/golden/gen_ref_spectrum.py
@@ -106,7 +106,7 @@ jobs:
 
       - name: Run full FPGA regression
         run: bash run_regression.sh
-        working-directory: 9_Firmware/9_2_FPGA
+        working-directory: fpga
 
       # The receiver golden compare checks against the committed
       # tb/golden/golden_doppler.mem, and golden generate writes to a scratch
@@ -114,7 +114,7 @@ jobs:
       # (tb/cosim/*.csv are rewritten by the regression and ignored here.)
       - name: Check the regression did not rewrite committed golden files
         run: git diff --exit-code -- tb/golden
-        working-directory: 9_Firmware/9_2_FPGA
+        working-directory: fpga
 
   # ===========================================================================
   # Cross-Layer Contract Tests (Python ↔ Verilog ↔ C)

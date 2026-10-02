@@ -27,10 +27,17 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Import golden_reference by adding the cosim path to sys.path
 # ---------------------------------------------------------------------------
-_GOLDEN_REF_DIR = str(
-    Path(__file__).resolve().parents[2]  # 9_Firmware/
-    / "9_2_FPGA" / "tb" / "cosim" / "real_data"
-)
+def _find_repo_root() -> Path:
+    """Walk up from this file to the directory containing pyproject.toml."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    raise RuntimeError(f"repository root (pyproject.toml) not found above {here}")
+
+
+_REPO_ROOT = _find_repo_root()
+_GOLDEN_REF_DIR = str(_REPO_ROOT / "fpga" / "tb" / "cosim" / "real_data")
 if _GOLDEN_REF_DIR not in sys.path:
     sys.path.insert(0, _GOLDEN_REF_DIR)
 
@@ -55,7 +62,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Twiddle factor file paths (relative to FPGA root)
 # ---------------------------------------------------------------------------
-_FPGA_DIR = Path(__file__).resolve().parents[2] / "9_2_FPGA"
+_FPGA_DIR = _REPO_ROOT / "fpga"
 TWIDDLE_1024 = str(_FPGA_DIR / "fft_twiddle_1024.mem")
 TWIDDLE_16 = str(_FPGA_DIR / "fft_twiddle_16.mem")
 

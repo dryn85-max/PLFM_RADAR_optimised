@@ -109,7 +109,7 @@ onto the PA11/PA12 pads).
 - **External pull-downs on all `EN_*` lines (EN_FPGA, EN_LO, EN_ADAR,
   EN_ADTR_VDD_SW, EN_ADTR_VSS_SW, EN_LNA, EN_PA) and on DIG0..DIG4.** The MCU
   pins are high-Z during reset and flashing, and the FPGA `reset_n` (DIG4) has
-  an internal `PULLUP` (`9_Firmware/9_2_FPGA/constraints/xc7a50t_ftg256.xdc:121`),
+  an internal `PULLUP` (`legacy/9_Firmware/9_2_FPGA/constraints/xc7a50t_ftg256.xdc:121`),
   so without a pull-down the FPGA would be released from reset and the rails could
   float on at power-up or while flashing.
 - **ADAR1000 `PA_ON` pin (B3)** is not driven by the MCU (no GPIO assigned). It

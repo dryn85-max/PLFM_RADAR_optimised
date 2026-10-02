@@ -15,7 +15,7 @@ Each case produces 6 hex files (sig_i, sig_q, ref_i, ref_q, out_i, out_q)
 plus a human-readable summary file.
 
 Usage:
-  cd /Users/ganeshpanth/PLFM_RADAR/9_Firmware/9_2_FPGA/tb
+  cd /Users/ganeshpanth/PLFM_RADAR/fpga/tb
   python3 gen_mf_golden_ref.py
 """
 

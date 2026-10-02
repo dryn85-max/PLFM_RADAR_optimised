@@ -48,7 +48,7 @@ Follow-up work that is out of scope for the current plans.
 
 ## RTL track
 
-Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-l).
+Context: `fpga/README.md` (known limitations a-l).
 
 - [ ] **One range-bin set per chirp for the Doppler/MTI path (pre-existing
   upstream behaviour; owner decided to keep it as is for now).**
@@ -88,9 +88,9 @@ Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-l).
   `doppler_processor`, `radar_mode_controller`, `range_bin_decimator`) were not
   re-run; only the stale twiddle-file entry in `fv_doppler_processor.sby` was
   fixed. Run them and add a CI job (OSS CAD Suite) if they pass.
-- [ ] **Stale Xilinx flows.** Delete or port `constraints/`, `scripts/50t`,
-  `scripts/200t`, `scripts/te0712`, `scripts/te0713` and
-  `radar_system_top_te07*_dev.v` (they reference removed tops/ports); deleting
+- [ ] **Stale Xilinx flows.** Delete or port (now under `legacy/9_Firmware/9_2_FPGA/`)
+  `constraints/`, `scripts/50t`, `scripts/200t`, `scripts/te0712`,
+  `scripts/te0713` and `radar_system_top_te07*_dev.v` (they reference removed tops/ports); deleting
   hardware flow files needs the owner's go-ahead.
 - [ ] **Stale comments in untouched RTL.** `cfar_ca.v` header quotes upstream's
   Vivado-measured resource numbers (8 x 21 multiplier, 1 BRAM; see README

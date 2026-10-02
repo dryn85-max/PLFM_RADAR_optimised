@@ -203,8 +203,9 @@ c. **Four range-bin sets per long chirp (pre-existing upstream behaviour,
 d. **Stale board files (Decision 8).** `constraints/`, `scripts/50t`,
    `scripts/200t`, `scripts/te0712`, `scripts/te0713`,
    `radar_system_top_te07*_dev.v` and `constraints/README.md` belong to the old
-   Xilinx flows and reference removed tops/ports/modules. They are kept for
-   reference and are neither built nor tested.
+   Xilinx flows and reference removed tops/ports/modules. They now live under
+   `legacy/9_Firmware/9_2_FPGA/` (same relative paths), kept for reference and
+   neither built nor tested.
 e. **No per-stage FFT scaling.** `fft_engine` outputs saturate at 16 bits when
    the input exceeds roughly 1/16 of full scale; keep the matched-filter input
    small with `host_gain_shift` / AGC. Internal words that would overflow wrap

@@ -9,7 +9,7 @@ Integer replica of ddc.v (NCO -> 12x16 mixer -> CIC R=4 -> FIR):
 Writes ddc_adc_in.hex (12-bit), ddc_golden_i.hex, ddc_golden_q.hex, plus the
 full-scale vector set ddc_adc_fs_in.hex / ddc_fs_golden_i/q.hex (20 MHz-IF tone
 clipped rail-to-rail, -2048..2047 signed, exercising the mixer/CIC/FIR extremes).
-Run from 9_Firmware/9_2_FPGA:  python3 tb/golden/gen_ddc_golden.py
+Run from fpga:  python3 tb/golden/gen_ddc_golden.py
 """
 import os
 import sys

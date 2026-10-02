@@ -11,7 +11,7 @@ Architecture:
   Sub-frame 1 (short PRI): chirps 16-31 -> 16-pt Hamming -> 16-pt FFT -> bins 16-31
 
 Usage:
-    cd ~/PLFM_RADAR/9_Firmware/9_2_FPGA/tb/cosim
+    cd ~/PLFM_RADAR/fpga/tb/cosim
     python3 gen_doppler_golden.py
     python3 gen_doppler_golden.py stationary   # single scenario
 

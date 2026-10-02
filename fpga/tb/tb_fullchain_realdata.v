@@ -29,7 +29,7 @@
  *     tb/tb_fullchain_realdata.v \
  *     range_bin_decimator.v doppler_processor.v xfft_16.v fft_engine.v
  *
- * Run from: 9_Firmware/9_2_FPGA/
+ * Run from: fpga/
  *   vvp tb/tb_fullchain_realdata.vvp
  */
 

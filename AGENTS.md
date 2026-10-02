@@ -86,7 +86,7 @@ GPT-5.5 is not used.
 - **Package installs must use the `sfw` prefix** (supply-chain mandate from
   CONTRIBUTING.md): `sfw uv pip install <pkg>`, `sfw npm install <pkg>`,
   `sfw cargo <cmd>`. Never run bare `pip install`.
-- FPGA (Verilog-2001, Icarus): `cd 9_Firmware/9_2_FPGA && bash run_regression.sh`.
+- FPGA (Verilog-2001, Icarus): `cd fpga && bash run_regression.sh`.
   The RTL (`radar_system_top.v`) is the single source of truth for opcode
   values, bit widths and reset defaults. No SystemVerilog, no `$clog2`.
 - Python (GUI/scripts/tests): `uv run ruff check .`;

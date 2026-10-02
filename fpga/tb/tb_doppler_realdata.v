@@ -19,7 +19,7 @@
  *     -o tb/tb_doppler_realdata.vvp \
  *     tb/tb_doppler_realdata.v doppler_processor.v xfft_16.v fft_engine.v
  *
- * Run from: 9_Firmware/9_2_FPGA/
+ * Run from: fpga/
  *   vvp tb/tb_doppler_realdata.vvp
  */
 
