@@ -74,7 +74,7 @@ static void SystemClock_Config(void)
 
 int main(void)
 {
-    static const char banner[] = "AERIS-10 G0B1 boot\r\n";
+    static const char banner[] = "AERIS-10 Lite G0B1 boot\r\n";
     static const char placeholder[] = "PLL table is a placeholder\r\n";
 
     hal_gpio_init();            /* all rails/enables/resets low before anything else */
