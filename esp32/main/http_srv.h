@@ -13,6 +13,12 @@ esp_err_t http_srv_start(void);
 /* Register more handlers (the uri string must stay valid). */
 esp_err_t http_srv_register(const httpd_uri_t *uri);
 
+/* Server handle (NULL before http_srv_start). */
+httpd_handle_t http_srv_handle(void);
+
+/* Called (in the httpd task) when a client socket is closed; set before http_srv_start. */
+void http_srv_set_close_hook(void (*hook)(int fd));
+
 /* True if the request arrived on the soft-AP interface (conservative: unknown -> false). */
 bool http_srv_req_on_ap(httpd_req_t *req);
 

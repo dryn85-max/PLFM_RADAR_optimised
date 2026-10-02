@@ -13,6 +13,19 @@
 
 static const char *TAG = "http";
 static httpd_handle_t s_server;
+static void (*s_close_hook)(int fd);
+
+httpd_handle_t http_srv_handle(void) { return s_server; }
+
+void http_srv_set_close_hook(void (*hook)(int fd)) { s_close_hook = hook; }
+
+/* Replaces the default session close: must close the socket itself. */
+static void on_session_close(httpd_handle_t hd, int sockfd)
+{
+    (void)hd;
+    if (s_close_hook) s_close_hook(sockfd);
+    close(sockfd);
+}
 
 static const char WIFI_PAGE[] =
     "<!doctype html><html><head><meta charset=\"utf-8\">"
@@ -115,6 +128,7 @@ esp_err_t http_srv_start(void)
     if (s_server != NULL) return ESP_ERR_INVALID_STATE;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = 8;
+    cfg.close_fn = on_session_close;
     cfg.stack_size = 6144;
     cfg.lru_purge_enable = true;
     esp_err_t err = httpd_start(&s_server, &cfg);

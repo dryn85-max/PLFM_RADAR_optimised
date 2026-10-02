@@ -18,3 +18,6 @@ CONFIG_FREERTOS_HZ=1000
 
 # Main task stack: Wi-Fi start-up runs in app_main.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# WebSocket support in esp_http_server (live view /ws).
+CONFIG_HTTPD_WS_SUPPORT=y

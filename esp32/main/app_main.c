@@ -6,6 +6,7 @@
 
 #include "http_srv.h"
 #include "ld2410_task.h"
+#include "live.h"
 #include "wifi_mgr.h"
 
 #define RING_BYTES_PSRAM (4u * 1024u * 1024u)
@@ -52,8 +53,14 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "BOOT monitor failed: %s", esp_err_to_name(err));
     }
+    live_prepare(); /* close hook must be in place before the server starts */
     err = http_srv_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "http_srv_start failed: %s", esp_err_to_name(err));
+    } else {
+        err = live_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "live_start failed: %s", esp_err_to_name(err));
+        }
     }
 }
