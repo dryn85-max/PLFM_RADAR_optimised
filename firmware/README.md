@@ -19,7 +19,7 @@ Design: `docs/superpowers/specs/2026-10-01-firmware-g0b1-port.md`; plan:
 
 ## Build, flash, test
 
-Run everything from `9_Firmware/9_1_Microcontroller/g0b1`.
+Run everything from `firmware/`.
 
 | Command | What it does |
 |---|---|

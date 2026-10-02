@@ -744,7 +744,7 @@ class TestTier1STM32SettingsPacket:
 #
 # Cross-layer contract: the firmware constants
 #   ADAR1000Manager::VM_I[128] / VM_Q[128]
-# (in 9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/ADAR1000_Manager.cpp)
+# (in legacy/9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/ADAR1000_Manager.cpp)
 # MUST equal the byte values published in the ADAR1000 datasheet Rev. B,
 # Tables 13-16 page 34 ("Phase Shifter Programming"), on a uniform 2.8125 deg
 # grid (index N == phase N * 360/128 deg).
@@ -768,6 +768,7 @@ class TestTier2Adar1000VmTableGroundTruth:
     def cpp_source(self):
         path = (
             cp.REPO_ROOT
+            / "legacy"
             / "9_Firmware"
             / "9_1_Microcontroller"
             / "9_1_1_C_Cpp_Libraries"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Re-vendor the STM32CubeG0 subset used by the G0B1 firmware.
 # Fetches three pinned tags, verifies the commit SHA, and copies an allow-list of files
-# into Drivers/, Core/ and the g0b1 root. The result is committed.
+# into Drivers/, Core/ and the firmware root. The result is committed.
 #
 # Pins:
 #   stm32g0xx_hal_driver  v1.4.7           a0cf8a8b96183fdcc2e3b1cf0bcf0825f27bd0c9

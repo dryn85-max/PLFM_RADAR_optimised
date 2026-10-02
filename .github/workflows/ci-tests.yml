@@ -51,11 +51,11 @@ jobs:
           -v --tb=short
 
   # ===========================================================================
-  # MCU Firmware Unit Tests (20 tests)
+  # Legacy F7 MCU unit tests (20 tests)
   # Bug regression (15) + Gap-3 safety tests (5)
   # ===========================================================================
   mcu-tests:
-    name: MCU Firmware Tests
+    name: Legacy F7 MCU tests
     runs-on: ubuntu-latest
 
     steps:
@@ -66,7 +66,7 @@ jobs:
 
       - name: Build and run MCU tests
         run: make test
-        working-directory: 9_Firmware/9_1_Microcontroller/tests
+        working-directory: legacy/9_Firmware/9_1_Microcontroller/tests
 
   # ===========================================================================
   # FPGA RTL Regression (38 testbenches + lint + vendor-neutrality/resource gates)
@@ -147,7 +147,7 @@ jobs:
           -v --tb=short
 
   # ===========================================================================
-  # STM32G0B1 firmware (9_1_Microcontroller/g0b1): host tests + ARM cross-build
+  # STM32G0B1 firmware (firmware/): host tests + ARM cross-build
   # ===========================================================================
   mcu-g0b1:
     name: MCU G0B1 Firmware
@@ -161,16 +161,16 @@ jobs:
 
       - name: Host tests (ADAR_COUNT=1 and 4)
         run: make test
-        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+        working-directory: firmware
 
       - name: Build default (ADAR_COUNT=1, DIAG=1)
         run: make
-        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+        working-directory: firmware
 
       - name: Build DIAG=0
         run: make DIAG=0 clean all
-        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+        working-directory: firmware
 
       - name: Build ADAR_COUNT=4
         run: make ADAR_COUNT=4 clean all
-        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+        working-directory: firmware

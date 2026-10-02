@@ -5,10 +5,10 @@ Follow-up work that is out of scope for the current plans.
 ## G0B1 firmware track
 
 - [ ] **Real PLL register exports.** Replace the placeholder tables in
-  `9_Firmware/9_1_Microcontroller/g0b1/Core/drivers/pll_tables/` with exports from
+  `firmware/Core/drivers/pll_tables/` with exports from
   TICS Pro (LMX2594) / ADI ACE (ADF4372), remove `PLL_TABLE_PLACEHOLDER`. Until
   then lock fails and the unit reports `FAULT_PLL_LOCK`.
-  Generate the headers with `9_Firmware/9_1_Microcontroller/g0b1/tools/regtable_to_h.py`
+  Generate the headers with `firmware/tools/regtable_to_h.py`
   (usage in the g0b1 README; it emits `PLL_TABLE_PLACEHOLDER 0`); do not hand-type
   the 113 LMX2594 words.
 - [ ] **Verify pins, AF numbers and I2C TIMINGR** (`0x10B17DB5`) against the

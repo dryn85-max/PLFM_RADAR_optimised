@@ -7,8 +7,8 @@
  * all parsed field=value pairs to stdout.
  *
  * Compile: c++ -std=c++11 -o stm32_settings_stub stm32_settings_stub.cpp \
- *          ../../9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/RadarSettings.cpp \
- *          -I../../9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/
+ *          ../../legacy/9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/RadarSettings.cpp \
+ *          -I../../legacy/9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/
  *
  * Usage:  ./stm32_settings_stub packet.bin
  *         Prints: field=value lines (one per field)

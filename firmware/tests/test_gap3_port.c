@@ -1,4 +1,4 @@
-/* Ports of the upstream "Gap 3 safety" test intents (9_1_Microcontroller/tests/)
+/* Ports of the upstream "Gap 3 safety" test intents (legacy/9_Firmware/9_1_Microcontroller/tests/)
  * to the G0B1 modules. The IWDG-refresh and cold-start timer intents that need
  * app_loop()/app_init() are in test_app.c.
  * Upstream IDQ periodic re-read and max-8-sensors do not apply (no Idq channels,

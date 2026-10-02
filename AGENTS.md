@@ -92,8 +92,8 @@ GPT-5.5 is not used.
 - Python (GUI/scripts/tests): `uv run ruff check .`;
   `cd 9_Firmware/9_3_GUI && uv run pytest test_GUI_V65_Tk.py test_v7.py -v`.
 - MCU, legacy F7 tree (reference only, do not modify):
-  `cd 9_Firmware/9_1_Microcontroller/tests && make clean && make`.
-- MCU, STM32G0B1 port: `cd 9_Firmware/9_1_Microcontroller/g0b1 && make test && make`
+  `cd legacy/9_Firmware/9_1_Microcontroller/tests && make clean && make`.
+- MCU, STM32G0B1 port: `cd firmware && make test && make`
   (arm-none-eabi-gcc; `make DIAG=0`, `make ADAR_COUNT=4` must also build).
   See its README.
 - Cross-layer contracts:
