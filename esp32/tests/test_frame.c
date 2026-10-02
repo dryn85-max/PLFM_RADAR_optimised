@@ -72,6 +72,8 @@ static void test_vectors_data(void)
 {
     check_vector_data("frame_normal", 0);
     check_vector_data("frame_engineering", 1);
+    check_vector_data("frame_engineering_real_0", 1);
+    check_vector_data("frame_engineering_real_1", 1);
 }
 
 static void test_known_offsets(void)

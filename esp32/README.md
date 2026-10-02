@@ -176,7 +176,8 @@ Wi-Fi drop as long as the buffer still covers the outage.
 
 Source of truth: `esp32/components/core/rec_proto.[ch]` and `host/ld2410_rec.py`;
 both are tested against the shared vectors in `esp32/tests/vectors/`
-(synthetic, VERIFY against a real capture).
+(mostly synthetic; two engineering frames are real captures, confirmed on
+hardware 2026-10-02).
 
 **Request** (PC to ESP32, 12 B): `"LDRQ"`, `version u8 = 2`, `reserved u8[3] = 0`,
 `from_seq u32`. The server closes the connection on a bad length, magic,
@@ -212,11 +213,13 @@ boot. Sequence numbers wrap at 2^32.
 
 `raw` is the LD2410C frame byte for byte, header to footer.
 
-## LD2410C protocol summary (VERIFY)
+## LD2410C protocol summary
 
 The Hi-Link manual is not in the repository yet (BACKLOG). The layout below is
 what the code implements; it was written from the protocol description and is
-checked only by synthetic vectors.
+checked by synthetic vectors and, for the engineering frame, by two real
+captures (confirmed on hardware 2026-10-02; Hi-Link manual still not in
+`hardware/datasheets/`).
 
 - UART 256000 8N1.
 - **Data frame:** header `F4 F3 F2 F1`, payload length u16, payload, footer
@@ -265,8 +268,10 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 
 - Octal flash and octal PSRAM boot on the N32R8V module (`sdkconfig.defaults`).
 - LD2410C ACK sequence and the real frame rate.
-- Engineering frame layout, including the extra module-specific bytes; maximum
-  payload length 64; the shared test vectors are synthetic.
+- Engineering frame layout, including the extra module-specific bytes:
+  confirmed on hardware 2026-10-02 (two real frames in the shared vectors);
+  Hi-Link manual still not in `hardware/datasheets/`. Maximum payload length
+  64 is still VERIFY; the other shared test vectors are synthetic.
 - WebSocket close handling (slot removal, reconnect of the page).
 - Recording server preemption (a new client replacing the old one) and the
   5 s send/receive timeouts; there is no TCP keepalive (BACKLOG).

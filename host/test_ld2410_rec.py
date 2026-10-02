@@ -37,7 +37,13 @@ def listify(d: dict) -> dict:
 # ---- decoder against shared vectors ----------------------------------------
 
 
-@pytest.mark.parametrize("name", ["frame_normal", "frame_engineering"])
+@pytest.mark.parametrize("name", [
+        "frame_normal",
+        "frame_engineering",
+        "frame_engineering_real_0",
+        "frame_engineering_real_1",
+    ],
+)
 def test_decode_data_vectors(name):
     raw, exp = vec(name)
     assert raw.hex() == exp["raw_hex"]
@@ -57,6 +63,8 @@ def test_every_vector_is_covered():
     assert names == {
         "frame_normal",
         "frame_engineering",
+        "frame_engineering_real_0",
+        "frame_engineering_real_1",
         "ack_ok",
         "ack_fail",
         "batch_gap_wrap",
