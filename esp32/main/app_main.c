@@ -3,6 +3,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "sdkconfig.h"
 
 #include "gps_task.h"
 #include "http_srv.h"
@@ -12,6 +13,12 @@
 #include "rec_srv.h"
 #include "status_led_task.h"
 #include "wifi_mgr.h"
+
+/* sdkconfig.defaults selects the 1.5 MB single-app partition table; an existing esp32/sdkconfig
+ * overrides the defaults and would keep the 1 MB table, which the firmware already fills to 97 %. */
+#ifndef CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE
+#error "CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y is required (delete esp32/sdkconfig and rebuild)"
+#endif
 
 #define RING_BYTES_PSRAM (4u * 1024u * 1024u)
 #define RING_BYTES_INTERNAL (32u * 1024u)

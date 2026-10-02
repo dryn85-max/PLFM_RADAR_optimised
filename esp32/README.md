@@ -104,7 +104,10 @@ idf.py set-target esp32s3
 idf.py build flash monitor
 ```
 
-`sdkconfig.defaults` is committed (octal flash and PSRAM, console on
+`sdkconfig.defaults` is committed (octal flash and PSRAM, the ESP-IDF "single factory app
+(large)" partition table: NVS at 0x9000 as before, 1.5 MB app, since the 1 MB app of the plain
+table was 97 % full; `app_main.c` stops the build with `#error` while a stale `sdkconfig` still
+selects another table; console on
 USB-Serial-JTAG, WebSocket support with the post-handshake callback
 (`CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT`: from v5.5.5 on, esp_http_server
 reports a new WebSocket client only through it), `CONFIG_LWIP_MAX_SOCKETS=16`: httpd uses

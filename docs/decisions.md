@@ -87,6 +87,7 @@ B). Fork baseline: upstream `b46dd71`.
 | **Bluetooth of the LD2410C is switched off** (once, from the page). | Otherwise anyone nearby could change the settings with the Hi-Link phone app. | this change |
 | **The recording protocol is unchanged (still v3); settings changes are logged on the console only.** A config record, the 0.2 m resolution and the azimuth of the rotating radar go to BACKLOG as one protocol change (v4). | Keeps this cycle small and avoids two incompatible protocol bumps. | this change |
 | **Rotating radar: purpose = rehearse the mechanics and software for the future radar; step mode (move, settle, take frames); drive B: 28BYJ-48 + ULN2003 + a home sensor (Hall or slotted optical), 360 degrees back and forth (no slip ring).** The hardware is not on hand: a separate later cycle, recorded in BACKLOG with the shopping list. | Owner decision in the LD2410C settings brainstorming; step mode keeps the azimuth of every frame known without a continuous-rotation encoder. | this change |
+| **ESP32 partition table: ESP-IDF "single factory app (large)" (1.5 MB app, NVS unchanged at 0x9000).** | The firmware reached 97 % of the 1 MB app partition of the plain table; the large variant keeps the NVS offset (Wi-Fi credentials survive). A custom table with OTA was not chosen now. | this change |
 
 ## Process decisions (earlier)
 
