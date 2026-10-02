@@ -11,7 +11,21 @@
  *    each scan) avoids a mode change under connected clients and needs no restore logic.
  *  - wifi_mgr_scan() is skipped while a STA connect attempt is in flight (the scan would abort
  *    it); the retry timer in turn waits while a scan runs. Both are serialised by s_scan_lock.
- *  - The AP is WPA2-PSK, channel 1, max 4 clients, password printed on the console at every boot.
+ *  - The AP is WPA2-PSK, channel 1, max 4 clients, password printed on the console at every boot
+ *    and whenever the AP is started on demand.
+ *  - AP on demand (wifi_mgr_ap_on_demand(), BOOT released after 2-5 s): from STA only, switches to
+ *    APSTA (the STA link stays up, the AP uses its channel). The mode is changed only while
+ *    s_scan_lock is held and no connect attempt is in flight. AP clients are counted from the
+ *    AP_STACONNECTED / AP_STADISCONNECTED events; an idle timer (AP_DEMAND_IDLE_MS) runs from the AP
+ *    start and from every drop of the client count to 0, and is stopped while a client is
+ *    connected. When it fires with no client, the mode returns to STA. The fallback AP (no
+ *    credentials / STA failed) is never switched off; a request while an AP runs only restarts
+ *    the idle timer of an on-demand AP.
+ *  - BOOT (GPIO0), action on release, held-zone colour on the RGB LED (core boot_btn): 2-5 s = AP on
+ *    demand, 5-10 s = erase the STA credentials and restart (the AP password is kept), > 10 s or
+ *    < 2 s = nothing. A button already down when the task starts is ignored until released once.
+ *  - The RGB LED shows the AP state: fallback AP steady (SL_AP_ONLY), on-demand AP slow blink
+ *    (SL_AP_ON_DEMAND), otherwise off; the fallback AP stays "only" if the STA connects later.
  *  - Wi-Fi driver storage is RAM, so credentials exist only in our NVS keys. The STA password is
  *    never logged. */
 #include "wifi_mgr.h"
@@ -35,6 +49,9 @@
 #include "mdns.h"
 #include "nvs.h"
 
+#include "boot_btn.h"
+#include "status_led.h"
+#include "status_led_task.h"
 #include "wifi_form.h"
 #include "wifi_scan.h"
 #include "sntp_sync.h"
@@ -50,7 +67,12 @@
 
 #define BOOT_GPIO GPIO_NUM_0
 #define BOOT_POLL_MS 50
-#define BOOT_HOLD_MS 5000
+#define RESET_FLASH_WAIT_MS (SL_FLASH_TOTAL_MS + 100u) /* let the red flashes finish before the restart */
+
+#define AP_DEMAND_IDLE_MS 600000u /* on-demand AP off this long after the last client left (10 min) */
+#define AP_IDLE_RETRY_MS 5000u    /* idle expiry could not switch the mode now: try again */
+#define AP_LOCK_WAIT_MS 3000u     /* wifi_mgr_ap_on_demand(): wait for scan/connect to end */
+#define AP_LOCK_POLL_MS 100u
 
 #define GOT_IP_BIT BIT0
 
@@ -64,6 +86,11 @@ static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 static volatile bool s_sta_wanted;
 static volatile bool s_sta_connecting; /* esp_wifi_connect() issued, no CONNECTED/DISCONNECTED yet */
 static SemaphoreHandle_t s_scan_lock;  /* held during a scan and while issuing a connect */
+
+typedef enum { AP_KIND_NONE = 0, AP_KIND_FALLBACK, AP_KIND_DEMAND } ap_kind_t;
+static volatile ap_kind_t s_ap_kind;   /* written under s_scan_lock (and once at start) */
+static volatile int s_ap_clients;      /* written only by the event handler */
+static esp_timer_handle_t s_idle_timer;
 
 #define SCAN_ACTIVE_MS 120 /* per channel; 13 channels ~ 1.6 s plus the channel switches */
 #define RETRY_DEFER_MS 1000
@@ -135,6 +162,42 @@ static void retry_cb(void *arg)
     xSemaphoreGive(s_scan_lock);
 }
 
+static void idle_timer_restart(void)
+{
+    esp_timer_stop(s_idle_timer); /* error if not running: ignored */
+    esp_timer_start_once(s_idle_timer, (uint64_t)AP_DEMAND_IDLE_MS * 1000u);
+}
+
+/* esp_timer task context. The mode switch needs s_scan_lock; blocking here would stall every other
+ * esp_timer callback (STA retry) behind a running scan, so the lock is only tried: when it is busy
+ * (scan) or a connect attempt is in flight, the timer is re-armed for AP_IDLE_RETRY_MS. */
+static void idle_cb(void *arg)
+{
+    (void)arg;
+    if (s_ap_kind != AP_KIND_DEMAND || s_ap_clients != 0) return;
+    if (xSemaphoreTake(s_scan_lock, 0) != pdTRUE) {
+        esp_timer_start_once(s_idle_timer, (uint64_t)AP_IDLE_RETRY_MS * 1000u);
+        return;
+    }
+    if (s_sta_connecting) {
+        xSemaphoreGive(s_scan_lock);
+        esp_timer_start_once(s_idle_timer, (uint64_t)AP_IDLE_RETRY_MS * 1000u);
+        return;
+    }
+    if (s_ap_kind == AP_KIND_DEMAND && s_ap_clients == 0) {
+        esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (err == ESP_OK) {
+            s_ap_kind = AP_KIND_NONE;
+            status_led_set_ap(SL_AP_OFF);
+            ESP_LOGI(TAG, "on-demand AP off (no client for %u min)", (unsigned)(AP_DEMAND_IDLE_MS / 60000u));
+        } else {
+            ESP_LOGE(TAG, "AP off failed: %s", esp_err_to_name(err));
+            esp_timer_start_once(s_idle_timer, (uint64_t)AP_IDLE_RETRY_MS * 1000u);
+        }
+    }
+    xSemaphoreGive(s_scan_lock);
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
@@ -154,6 +217,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             esp_timer_start_once(s_retry_timer, (uint64_t)s_backoff_ms * 1000u);
             s_backoff_ms = s_backoff_ms * 2u > BACKOFF_MAX_MS ? BACKOFF_MAX_MS : s_backoff_ms * 2u;
         }
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+        s_ap_clients++;
+        esp_timer_stop(s_idle_timer); /* error if not running: ignored */
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
+        if (s_ap_clients > 0) s_ap_clients--;
+        if (s_ap_clients == 0 && s_ap_kind == AP_KIND_DEMAND) idle_timer_restart();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *ev = (const ip_event_got_ip_t *)data;
         s_backoff_ms = BACKOFF_MIN_MS;
@@ -199,6 +268,8 @@ esp_err_t wifi_mgr_start(void)
     if (s_events == NULL || s_scan_lock == NULL) return ESP_ERR_NO_MEM;
     const esp_timer_create_args_t targs = {.callback = retry_cb, .name = "sta_retry"};
     ESP_ERROR_CHECK(esp_timer_create(&targs, &s_retry_timer));
+    const esp_timer_create_args_t iargs = {.callback = idle_cb, .name = "ap_idle"};
+    ESP_ERROR_CHECK(esp_timer_create(&iargs, &s_idle_timer));
 
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
@@ -239,6 +310,10 @@ esp_err_t wifi_mgr_start(void)
         ESP_ERROR_CHECK(esp_wifi_start());
     }
     memset(pass, 0, sizeof pass);
+    if (!sta_ok) { /* fallback AP: stays "only" even if the STA connects later (AP stays up) */
+        s_ap_kind = AP_KIND_FALLBACK;
+        status_led_set_ap(SL_AP_ONLY);
+    }
 
     esp_netif_ip_info_t ap_ip = {0};
     esp_netif_get_ip_info(s_ap_netif, &ap_ip);
@@ -308,21 +383,79 @@ done:
     return err;
 }
 
+esp_err_t wifi_mgr_ap_on_demand(void)
+{
+    if (s_scan_lock == NULL) return ESP_ERR_INVALID_STATE; /* wifi_mgr_start() did not finish */
+    /* No mode change during a scan or a connect attempt: wait for both to end. */
+    bool locked = false;
+    for (uint32_t waited = 0; waited <= AP_LOCK_WAIT_MS; waited += AP_LOCK_POLL_MS) {
+        if (xSemaphoreTake(s_scan_lock, pdMS_TO_TICKS(AP_LOCK_POLL_MS)) == pdTRUE) {
+            if (!s_sta_connecting) {
+                locked = true;
+                break;
+            }
+            xSemaphoreGive(s_scan_lock);
+            vTaskDelay(pdMS_TO_TICKS(AP_LOCK_POLL_MS));
+        }
+    }
+    if (!locked) {
+        ESP_LOGW(TAG, "AP on demand: Wi-Fi busy (scan or connect), try again");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t err = ESP_OK;
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    esp_err_t merr = esp_wifi_get_mode(&mode);
+    if (merr != ESP_OK) {
+        err = merr;
+    } else if (mode == WIFI_MODE_APSTA) { /* an AP already runs: only keep an on-demand one alive */
+        if (s_ap_kind == AP_KIND_DEMAND && s_ap_clients == 0) idle_timer_restart();
+    } else if (mode == WIFI_MODE_STA) {
+        char ap_pass[WF_AP_PASS_LEN + 1];
+        load_or_create_ap_pass(ap_pass);
+        char ap_ssid[33];
+        wifi_config_t ap_cfg;
+        fill_ap_config(&ap_cfg, ap_pass, ap_ssid, sizeof ap_ssid);
+        err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+        if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+        if (err == ESP_OK) {
+            s_ap_clients = 0;
+            s_ap_kind = AP_KIND_DEMAND;
+            status_led_set_ap(SL_AP_ON_DEMAND);
+            idle_timer_restart();
+            esp_netif_ip_info_t ap_ip = {0};
+            esp_netif_get_ip_info(s_ap_netif, &ap_ip);
+            printf("AP password: %s  AP SSID: %s  AP IP: " IPSTR " (AP on demand)\n", ap_pass, ap_ssid,
+                   IP2STR(&ap_ip.ip));
+        } else {
+            ESP_LOGE(TAG, "AP on demand failed: %s", esp_err_to_name(err));
+        }
+        memset(ap_pass, 0, sizeof ap_pass);
+        memset(&ap_cfg, 0, sizeof ap_cfg);
+    } else {
+        err = ESP_ERR_INVALID_STATE; /* Wi-Fi not started or AP-only mode: not used by this firmware */
+    }
+    xSemaphoreGive(s_scan_lock);
+    return err;
+}
+
 static void boot_monitor_task(void *arg)
 {
     (void)arg;
-    int held_ms = 0;
+    bb_t bb;
+    bb_init(&bb, gpio_get_level(BOOT_GPIO) == 0); /* low at start: ignore until released once */
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(BOOT_POLL_MS));
-        if (gpio_get_level(BOOT_GPIO) == 0) {
-            held_ms += BOOT_POLL_MS;
-            if (held_ms >= BOOT_HOLD_MS) {
-                erase_credentials();
-                ESP_LOGW(TAG, "Wi-Fi credentials erased");
-                esp_restart();
-            }
-        } else {
-            held_ms = 0;
+        bb_act_t act = bb_step(&bb, gpio_get_level(BOOT_GPIO) == 0, BOOT_POLL_MS);
+        status_led_set_button(bb_is_held(&bb), bb_held_zone(&bb));
+        if (act == BB_ACT_AP) {
+            if (wifi_mgr_ap_on_demand() == ESP_OK) status_led_flash(SL_BLUE); /* no flash on failure */
+        } else if (act == BB_ACT_RESET) {
+            status_led_flash(SL_RED);
+            vTaskDelay(pdMS_TO_TICKS(RESET_FLASH_WAIT_MS));
+            erase_credentials();
+            ESP_LOGW(TAG, "Wi-Fi credentials erased (AP password kept)");
+            esp_restart();
         }
     }
 }

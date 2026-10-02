@@ -1,4 +1,4 @@
-/* Wi-Fi manager: STA from NVS credentials, AP fallback, mDNS, BOOT-button credential reset. */
+/* Wi-Fi manager: STA from NVS credentials, AP fallback, AP on demand, mDNS, BOOT-button actions. */
 #ifndef WIFI_MGR_H
 #define WIFI_MGR_H
 
@@ -21,7 +21,14 @@ esp_netif_t *wifi_mgr_ap_netif(void);
  * error. *count is 0 on any error. */
 esp_err_t wifi_mgr_scan(wsc_rec *out, size_t max, size_t *count);
 
-/* Start the GPIO0 (BOOT) monitor task: held >= 5 s erases STA credentials and restarts. */
+/* Bring up the AP next to the STA (STA mode only) and restart its 10 min idle timer; if an AP
+ * already runs, only the idle timer of an on-demand AP is restarted. Waits up to ~3 s for a scan or
+ * connect attempt to end: ESP_ERR_TIMEOUT then. ESP_ERR_INVALID_STATE when Wi-Fi is not in STA/APSTA.
+ * Prints the AP password line on the console. */
+esp_err_t wifi_mgr_ap_on_demand(void);
+
+/* Start the GPIO0 (BOOT) monitor task; action on release: held 2-5 s = AP on demand, 5-10 s =
+ * erase STA credentials and restart, otherwise nothing. Feeds the status LED. */
 esp_err_t wifi_mgr_boot_monitor_start(void);
 
 #endif
