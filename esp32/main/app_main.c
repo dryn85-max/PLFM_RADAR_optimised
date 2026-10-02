@@ -7,6 +7,7 @@
 #include "http_srv.h"
 #include "ld2410_task.h"
 #include "live.h"
+#include "rec_srv.h"
 #include "wifi_mgr.h"
 
 #define RING_BYTES_PSRAM (4u * 1024u * 1024u)
@@ -48,6 +49,10 @@ void app_main(void)
     err = wifi_mgr_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "wifi_mgr_start failed: %s", esp_err_to_name(err));
+    }
+    err = rec_srv_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "rec_srv_start failed: %s", esp_err_to_name(err));
     }
     err = wifi_mgr_boot_monitor_start();
     if (err != ESP_OK) {
