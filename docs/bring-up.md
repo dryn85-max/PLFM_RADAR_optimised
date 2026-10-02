@@ -35,7 +35,7 @@ Sources: [firmware/README.md](../firmware/README.md) (firmware),
 6. **Real PLL register exports** (placeholders do not lock). See step 3 below.
 7. **FPGA board choice and wrapper:** Cyclone dev board is TBD; a top-level
    wrapper, pin assignments and constraints are needed before any FPGA bring-up
-   (see step 8). Source: fpga/README.md "Hand-off".
+   (see step 7). Source: fpga/README.md "Hand-off".
 
 ## Ordered checklist
 
