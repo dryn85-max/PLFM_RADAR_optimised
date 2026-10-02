@@ -8,7 +8,11 @@ import io
 import json
 import socket
 import struct
+import signal
+import subprocess
+import sys
 import threading
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -596,3 +600,199 @@ def test_server_with_other_version_batch_reconnects(tmp_path):
     srv, recs = run_recorder(tmp_path, script, 1)
     assert srv.requests == [0, 0]
     assert reboot_summary(recs) == [("f", 0)]
+
+
+# ---- Ctrl+C / stop promptness ------------------------------------------------
+
+
+class SilentServer:
+    """Accepts one connection, reads the request, then sends nothing."""
+
+    def __init__(self) -> None:
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+        self.conns: list[socket.socket] = []
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        with contextlib.suppress(OSError):
+            while True:
+                c, _ = self.sock.accept()
+                self.conns.append(c)
+
+    def close(self) -> None:
+        for c in self.conns:
+            c.close()
+        self.sock.close()
+
+
+def test_stop_during_blocking_read_is_prompt(tmp_path):
+    """stop set while recv waits (idle device, long timeout) must not wait for the timeout."""
+    stop = threading.Event()
+    srv = SilentServer()
+    threading.Timer(0.3, stop.set).start()
+    t0 = time.monotonic()
+    try:
+        lr.record("127.0.0.1", srv.port, tmp_path / "a.ldrec", stop, timeout=30)
+    finally:
+        srv.close()
+    assert time.monotonic() - t0 < 1.5
+
+
+def test_stop_during_backoff_is_prompt(tmp_path):
+    stop = threading.Event()
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()  # nothing listens: connection refused -> backoff
+    threading.Timer(0.3, stop.set).start()
+    t0 = time.monotonic()
+    lr.record("127.0.0.1", port, tmp_path / "b.ldrec", stop, backoff_initial=30, backoff_max=30)
+    assert time.monotonic() - t0 < 1.5
+
+
+def test_stop_mid_batch_is_prompt_and_file_clean(tmp_path):
+    """A slow trickle inside one batch must not delay stop; whole records only in the file."""
+    stop = threading.Event()
+    full = batch(0, list(range(50)))
+    srv = FakeServer([[full[:100]]])  # 20-byte header + part of the records, then silence
+    path = tmp_path / "c.ldrec"
+    threading.Timer(0.3, stop.set).start()
+    t0 = time.monotonic()
+    try:
+        w = lr.record("127.0.0.1", srv.port, path, stop, timeout=30)
+    finally:
+        srv.close()
+    assert time.monotonic() - t0 < 1.5
+    assert w.frames == 0
+    lr.parse_file(path.read_bytes())  # strict parse: no truncated record
+
+
+def test_keyboard_interrupt_mid_batch_propagates_and_leaves_clean_file(tmp_path, monkeypatch):
+    calls = {"n": 0}
+    real = lr.encode_frame_rec
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise KeyboardInterrupt
+        return real(*a, **k)
+
+    monkeypatch.setattr(lr, "encode_frame_rec", boom)
+    srv = FakeServer([[batch(0, list(range(10)))]])
+    path = tmp_path / "d.ldrec"
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            lr.record("127.0.0.1", srv.port, path, timeout=2)
+    finally:
+        srv.close()
+    _, recs = lr.parse_file(path.read_bytes())  # strict
+    assert all(isinstance(r, lr.FrameRec) for r in recs)
+
+
+def test_keyboard_interrupt_during_write_truncates_partial_record(tmp_path):
+    class Dying:
+        def __init__(self, fh):
+            self.fh = fh
+
+        def write(self, b):
+            self.fh.write(b[: len(b) // 2])  # half a record hits the file
+            raise KeyboardInterrupt
+
+        def __getattr__(self, n):
+            return getattr(self.fh, n)
+
+    path = tmp_path / "e.ldrec"
+    with open(path, "wb") as fh:
+        fh.write(lr.encode_file_header(1))
+        fh.flush()
+        w = lr._Writer(fh)
+        w.fh = Dying(fh)
+        hdr = lr.parse_batch_header(batch(0, [0, 1]))
+        recs = [lr.Record(0, 1, frame_for(0)), lr.Record(1, 2, frame_for(1))]
+        with pytest.raises(KeyboardInterrupt):
+            w.add_batch(hdr, recs, 5)
+        w.fh = fh
+        w.discard_partial()
+    lr.parse_file(path.read_bytes())  # strict
+
+
+def _run_cli(tmp_path, host, port, sigs, wait=1.0):
+    path = tmp_path / "cli.ldrec"
+    p = subprocess.Popen(
+        [sys.executable, str(Path(lr.__file__)), "record", host,
+         "--port", str(port), "-o", str(path)],
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    time.sleep(wait)
+    t0 = time.monotonic()
+    for _ in range(sigs):
+        p.send_signal(signal.SIGINT)
+        time.sleep(0.05)
+    try:
+        rc = p.wait(3)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        raise
+    return rc, time.monotonic() - t0, p.stderr.read(), path
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+@pytest.mark.parametrize("sigs", [1, 5])
+def test_cli_sigint_during_catchup_burst(tmp_path, sigs):
+    raw = frame_for(0)
+    stopper = threading.Event()
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(2)
+
+    def serve():
+        c, _ = srv.accept()
+        c.recv(12)
+        seq = 0
+        while not stopper.is_set():
+            body = b"".join(struct.pack("<IQH", seq + i, i, len(raw)) + raw for i in range(20))
+            hdr = struct.pack("<4sBBHIHHI", b"LDRB", 2, 0, 0, seq, 20, 0, BOOT_A)
+            try:
+                c.sendall(hdr + body)
+            except OSError:
+                return
+            seq += 20
+
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        rc, dt, err, path = _run_cli(tmp_path, "127.0.0.1", srv.getsockname()[1], sigs)
+    finally:
+        stopper.set()
+        srv.close()
+    assert rc == 0
+    assert dt < 1.5
+    assert "interrupted" in err
+    lr.parse_file(path.read_bytes())  # strict: complete records only
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_cli_sigint_idle_device_long_timeout(tmp_path):
+    srv = SilentServer()
+    try:
+        rc, dt, err, _ = _run_cli(tmp_path, "127.0.0.1", srv.port, 1)
+    finally:
+        srv.close()
+    assert rc == 0
+    assert dt < 1.5
+    assert "interrupted" in err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_cli_sigint_during_backoff(tmp_path):
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    rc, dt, err, _ = _run_cli(tmp_path, "127.0.0.1", port, 1, wait=2.0)
+    assert rc == 0
+    assert dt < 1.5
+    assert "interrupted" in err

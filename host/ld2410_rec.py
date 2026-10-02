@@ -17,7 +17,11 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+import errno
 import logging
+import os
+import select
+import signal
 import socket
 import struct
 import sys
@@ -32,6 +36,7 @@ log = logging.getLogger("ld2410_rec")
 
 SEQ_MASK = 0xFFFFFFFF
 DEFAULT_PORT = 5410
+POLL_S = 0.2  # blocking I/O is cut into slices of this length so `stop` is seen promptly
 
 REQ_MAGIC = b"LDRQ"
 BATCH_MAGIC = b"LDRB"
@@ -415,6 +420,7 @@ class _Writer:
 
     def __init__(self, fh: IO[bytes], next_seq: int | None = None) -> None:
         self.fh = fh
+        self.good = fh.tell()  # end of the last completely written, flushed record
         self.next_seq = next_seq
         self.boot_id: int | None = None
         self.frames = 0
@@ -429,8 +435,7 @@ class _Writer:
         if hdr.boot_id != self.boot_id:
             if self.boot_id is not None:
                 log.warning("device rebooted: boot_id %08x -> %08x", self.boot_id, hdr.boot_id)
-                self.fh.write(encode_reboot_rec(self.boot_id, hdr.boot_id, pc_time_ns))
-                self.fh.flush()
+                self._commit(encode_reboot_rec(self.boot_id, hdr.boot_id, pc_time_ns))
                 self.reboots += 1
                 self.boot_id = hdr.boot_id
                 self.next_seq = None  # new sequence baseline
@@ -440,6 +445,7 @@ class _Writer:
                     return False
             else:
                 self.boot_id = hdr.boot_id
+        out = bytearray()
         for r in recs:
             if self.next_seq is not None:
                 d = seq_delta(r.seq, self.next_seq)
@@ -453,36 +459,135 @@ class _Writer:
                         (r.seq - 1) & SEQ_MASK,
                         " (device reported GAP)" if hdr.gap else "",
                     )
-                    self.fh.write(encode_gap_rec(self.next_seq, r.seq, pc_time_ns))
+                    out += encode_gap_rec(self.next_seq, r.seq, pc_time_ns)
                     self.gaps += 1
-            self.fh.write(encode_frame_rec(r.seq, r.esp_time_us, pc_time_ns, r.raw))
+            out += encode_frame_rec(r.seq, r.esp_time_us, pc_time_ns, r.raw)
             self.frames += 1
             self.next_seq = (r.seq + 1) & SEQ_MASK
-        self.fh.flush()
+        self._commit(bytes(out))
         return True
 
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    def _commit(self, data: bytes) -> None:
+        """Write whole records in one call and flush; remember the clean end of file."""
+        if data:
+            self.fh.write(data)
+        self.fh.flush()
+        self.good = self.fh.tell()
+
+    def discard_partial(self) -> None:
+        """After an interrupted write, cut the file back to the last complete record."""
+        with contextlib.suppress(OSError, ValueError):
+            self.fh.seek(self.good)
+            self.fh.truncate()
+
+class Stopped(Exception):
+    """The caller's stop event was set while waiting for the network."""
+
+def _recv_exact(
+    sock: socket.socket,
+    n: int,
+    stop: threading.Event | None = None,
+    idle_timeout: float | None = None,
+) -> bytes:
+    """Read exactly n bytes. With `stop`, the wait is sliced (the socket timeout is
+    then the slice, POLL_S) so a stop request is honoured within about one slice;
+    `idle_timeout` bounds the time without any received byte (TimeoutError)."""
     buf = bytearray()
+    last = time.monotonic()
     while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
+        if stop is not None and stop.is_set():
+            raise Stopped
+        try:
+            chunk = sock.recv(n - len(buf))
+        except TimeoutError:
+            if stop is None:
+                raise
+            if idle_timeout is not None and time.monotonic() - last >= idle_timeout:
+                raise TimeoutError("timed out waiting for data") from None
+            continue
         if not chunk:
             raise ConnectionError("connection closed by peer")
         buf += chunk
+        last = time.monotonic()
     return bytes(buf)
 
-def read_batch(sock: socket.socket) -> tuple[BatchHeader, list[Record]]:
-    """Read one batch from a socket (blocking, honours the socket timeout)."""
-    hdr = parse_batch_header(_recv_exact(sock, BATCH_HDR_LEN))
+def read_batch(
+    sock: socket.socket,
+    stop: threading.Event | None = None,
+    idle_timeout: float | None = None,
+) -> tuple[BatchHeader, list[Record]]:
+    """Read one batch from a socket (blocking, honours the socket timeout, or
+    `stop`/`idle_timeout` when given; see _recv_exact)."""
+    hdr = parse_batch_header(_recv_exact(sock, BATCH_HDR_LEN, stop, idle_timeout))
     recs: list[Record] = []
     for i in range(hdr.count):
-        head = _recv_exact(sock, REC_HDR_LEN)
+        head = _recv_exact(sock, REC_HDR_LEN, stop, idle_timeout)
         seq, esp, ln = struct.unpack("<IQH", head)
         try:
-            raw = _recv_exact(sock, ln)
+            raw = _recv_exact(sock, ln, stop, idle_timeout)
         except ConnectionError as e:
             raise ProtocolError(f"record {i} cut off after header: {e}") from e
         recs.append(Record(seq, esp, raw))
     return hdr, recs
+
+def _connect(host: str, port: int, timeout: float, stop: threading.Event) -> socket.socket:
+    """Like socket.create_connection, but polls `stop` every POLL_S while connecting."""
+    last: OSError | None = None
+    for fam, typ, proto, _name, addr in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        if stop.is_set():
+            raise Stopped
+        sock = socket.socket(fam, typ, proto)
+        try:
+            sock.setblocking(False)
+            err = sock.connect_ex(addr)
+            deadline = time.monotonic() + timeout
+            while err in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, 10035):
+                if stop.is_set():
+                    raise Stopped
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("timed out connecting")
+                _r, w, x = select.select([], [sock], [sock], POLL_S)
+                if w or x:
+                    err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                    break
+            if err:
+                raise OSError(err, os.strerror(err))
+            sock.settimeout(POLL_S)
+            return sock
+        except BaseException as e:
+            sock.close()
+            if not isinstance(e, OSError):
+                raise
+            last = e
+    raise last or OSError(f"cannot resolve {host}")
+
+def _record_loop(
+    host: str,
+    port: int,
+    w: _Writer,
+    stop: threading.Event,
+    max_frames: int | None,
+    timeout: float,
+    backoff_initial: float,
+    backoff_max: float,
+) -> None:
+    backoff = backoff_initial
+    while not stop.is_set() and (max_frames is None or w.frames < max_frames):
+        from_seq = w.next_seq if w.next_seq is not None else 0
+        try:
+            with _connect(host, port, timeout, stop) as sock:
+                sock.sendall(encode_request(from_seq))
+                log.info("connected to %s:%d, from_seq=%d", host, port, from_seq)
+                while not stop.is_set() and (max_frames is None or w.frames < max_frames):
+                    hdr, recs = read_batch(sock, stop, timeout)
+                    backoff = backoff_initial
+                    if not w.add_batch(hdr, recs, time.time_ns(), from_seq):
+                        break  # device rebooted: reconnect from seq 0 of the new boot
+        except (OSError, ProtocolError) as e:
+            log.warning("connection lost: %s; retry in %.1fs", e, backoff)
+            if stop.wait(backoff):
+                break
+            backoff = min(backoff * 2, backoff_max)
 
 def record(
     host: str,
@@ -508,24 +613,13 @@ def record(
         fh.write(encode_file_header(time.time_ns()))
         fh.flush()
         w = _Writer(fh)
-        backoff = backoff_initial
-        while not stop.is_set() and (max_frames is None or w.frames < max_frames):
-            from_seq = w.next_seq if w.next_seq is not None else 0
-            try:
-                with socket.create_connection((host, port), timeout=timeout) as sock:
-                    sock.settimeout(timeout)
-                    sock.sendall(encode_request(from_seq))
-                    log.info("connected to %s:%d, from_seq=%d", host, port, from_seq)
-                    while not stop.is_set() and (max_frames is None or w.frames < max_frames):
-                        hdr, recs = read_batch(sock)
-                        backoff = backoff_initial
-                        if not w.add_batch(hdr, recs, time.time_ns(), from_seq):
-                            break  # device rebooted: reconnect from seq 0 of the new boot
-            except (OSError, ProtocolError) as e:
-                log.warning("connection lost: %s; retry in %.1fs", e, backoff)
-                if stop.wait(backoff):
-                    break
-                backoff = min(backoff * 2, backoff_max)
+        try:
+            _record_loop(host, port, w, stop, max_frames, timeout, backoff_initial, backoff_max)
+        except Stopped:
+            pass
+        except BaseException:  # KeyboardInterrupt etc.: never leave half a record behind
+            w.discard_partial()
+            raise
     return w
 
 # --------------------------------------------------------------------------
@@ -544,14 +638,35 @@ def _load(path: str) -> tuple[int, list[FileRec]]:
         return parse_file(data, strict=False)
 
 def cmd_record(args: argparse.Namespace) -> int:
+    """Exit code 0 on Ctrl+C (a deliberate stop is not an error).
+
+    First SIGINT/SIGTERM only sets the stop event: all waits are sliced (POLL_S) so the
+    recorder returns within ~0.2 s and the file is closed cleanly. A further Ctrl+C
+    raises KeyboardInterrupt at once; the writer then cuts the file back to the last
+    complete record, so `info` can always read it.
+    """
     out = args.output or time.strftime("ld2410_%Y%m%d_%H%M%S.ldrec")
     stop = threading.Event()
+    presses = 0
+
+    def on_sigint(_signum: int, _frame: object) -> None:
+        nonlocal presses
+        presses += 1
+        stop.set()
+        if presses >= 2:
+            raise KeyboardInterrupt
+
+    old = signal.signal(signal.SIGINT, on_sigint)
     try:
         w = record(args.host, args.port, out, stop)
     except KeyboardInterrupt:
         stop.set()
         log.info("interrupted")
         return 0
+    finally:
+        signal.signal(signal.SIGINT, old)
+    if presses:
+        log.info("interrupted")
     _out(f"{out}: {w.frames} frames, {w.gaps} gaps")
     return 0
 
