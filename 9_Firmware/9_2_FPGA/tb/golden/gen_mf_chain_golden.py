@@ -70,7 +70,10 @@ def fullscale_vector(rom_i, rom_q, twiddle):
 
     oi, oq = chain(25)
     wi, wq = chain(24)
-    diff = max(max(abs(a - b) for a, b in zip(oi, wi)), max(abs(a - b) for a, b in zip(oq, wq)))
+    diff = max(
+        max(abs(a - b) for a, b in zip(oi, wi, strict=True)),
+        max(abs(a - b) for a, b in zip(oq, wq, strict=True)),
+    )
     print(f"full-scale chain: 24-bit model differs from 25-bit by up to {diff} LSB")  # noqa: T201
     assert diff > 0, "full-scale chain vector does not detect a 24-bit internal width"
     write_hex(os.path.join(HERE, "mf_sig_fs_i.hex"), si, 16)
