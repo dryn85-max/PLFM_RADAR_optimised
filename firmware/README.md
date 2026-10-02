@@ -167,13 +167,22 @@ CRLF. Source: `Core/app/cmd.c`.
 | `tx` | All ADAR1000 devices to SPI-controlled TX (`TR_SOURCE=0`) for bench tests | `OK`, `ERR spi` |
 | `rx` | All devices to SPI-controlled RX | `OK`, `ERR spi` |
 | `auto` | Return to TR-pin mode (FPGA owns TX/RX switching); the default after init | `OK`, `ERR spi` |
-| `status` | One status line (below); the only command answered while a fault is latched | `STATUS ...` |
+| `status` | One status line (below); answered while a fault is latched | `STATUS ...` |
+| `echo [on\|off]` | Switch console echo; without an argument report it. Default on after every reset (not persisted). Also answered while a fault is latched | `OK`, `ECHO on`, `ECHO off`, `ERR args` |
 | `stop` | Latched emergency stop (`FAULT_ESTOP_CMD`) | `OK stopped` |
 
 Other replies: `ERR unknown` (unknown command), `ERR args` (wrong argument
 count or non-integer, also for `status`/`tx`/`rx`/`auto`/`stop` with extra
-tokens), `ERR latched` (any command except `status` while a fault is latched),
+tokens), `ERR latched` (any command except `status` and `echo` while a fault is latched),
 `ERR too_long`. An empty line produces no reply.
+
+Echo and line editing: with echo on (default) every accepted character is
+echoed as typed and a line end is echoed as CRLF before the reply; an LF
+directly after a CR is ignored, so CRLF terminals give one line. Backspace
+(0x08) and DEL (0x7F) delete the last character (echoed as `\b \b`; nothing on an
+empty or over-long line). Other control characters, bytes >= 0x80 and ANSI
+escape sequences (e.g. arrow keys) are dropped and never reach the parser; a CR/LF
+inside an escape sequence still ends the line. Characters beyond 63 are not echoed.
 
 Status line format:
 
@@ -194,9 +203,9 @@ data+bss+noinit + 4 KB stack + 1 KB heap reserve):
 
 | Configuration | Flash (of 131072) | RAM (of 32768) |
 |---|---|---|
-| default (`ADAR_COUNT=1`, `DIAG=1`) | 24280 | 6320 |
-| `DIAG=0` | 16936 | 5896 |
-| `ADAR_COUNT=4` | 24460 | 6360 |
+| default (`ADAR_COUNT=1`, `DIAG=1`) | 24632 | 6332 |
+| `DIAG=0` | 17288 | 5908 |
+| `ADAR_COUNT=4` | 24808 | 6372 |
 
 ## Fault model
 

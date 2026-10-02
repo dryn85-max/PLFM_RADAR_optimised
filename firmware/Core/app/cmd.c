@@ -21,6 +21,11 @@ static int    s_az, s_el;
 static char   s_line[CMD_MAX_LINE + 1];
 static size_t s_len;
 static int    s_overflow;
+static int    s_echo = 1;      /* echo typed characters (default on, not persisted) */
+static int    s_last_cr;       /* previous byte was CR: a directly following LF is ignored */
+static int    s_esc;           /* ESC_*: dropping an escape sequence */
+
+enum { ESC_NONE = 0, ESC_START, ESC_CSI, ESC_SS3 };
 
 void cmd_init(agc_t *agc)
 {
@@ -29,6 +34,9 @@ void cmd_init(agc_t *agc)
     s_el = 0;
     s_len = 0;
     s_overflow = 0;
+    s_echo = 1;
+    s_last_cr = 0;
+    s_esc = ESC_NONE;
 }
 
 /* Strict integer: [+-]digits, nothing else. Oversized values saturate at BIG. */
@@ -173,6 +181,23 @@ static size_t do_mode(adar_mode_t m, char *out, size_t outlen)
     return reply(out, outlen, "OK");
 }
 
+/* `echo` works while a fault is latched, like `status`. */
+static size_t do_echo(char **t, int n, char *out, size_t outlen)
+{
+    if (n == 1) {
+        return reply(out, outlen, s_echo ? "ECHO on" : "ECHO off");
+    }
+    if (n == 2 && strcmp(t[1], "on") == 0) {
+        s_echo = 1;
+        return reply(out, outlen, "OK");
+    }
+    if (n == 2 && strcmp(t[1], "off") == 0) {
+        s_echo = 0;
+        return reply(out, outlen, "OK");
+    }
+    return reply(out, outlen, "ERR args");
+}
+
 size_t cmd_exec(const char *line, char *out, size_t outlen)
 {
     char buf[CMD_MAX_LINE + 1];
@@ -215,6 +240,9 @@ size_t cmd_exec(const char *line, char *out, size_t outlen)
     if (strcmp(cmd, "status") == 0) {
         return n == 1 ? do_status(out, outlen) : reply(out, outlen, "ERR args");
     }
+    if (strcmp(cmd, "echo") == 0) {
+        return do_echo(t, n, out, outlen);
+    }
     if (fault_is_latched()) {
         return reply(out, outlen, "ERR latched");
     }
@@ -252,12 +280,39 @@ static void send_reply(const char *msg, size_t n)
     }
 }
 
+static void echo_str(const char *s, size_t n)
+{
+    if (s_echo) {
+        (void)uart_write(s, n);
+    }
+}
+
 void cmd_feed(int c)
 {
     char out[200];
     size_t n;
+    int was_cr = s_last_cr;
 
+    c &= 0xFF;
+    s_last_cr = (c == '\r');
+
+    if (s_esc != ESC_NONE && c != '\r' && c != '\n') {
+        /* Drop the escape sequence up to and including its final byte. CR/LF
+         * never get here: they abort the sequence and are handled below. */
+        if (s_esc == ESC_START) {
+            s_esc = (c == '[') ? ESC_CSI : (c == 'O') ? ESC_SS3 : ESC_NONE;
+        } else if (s_esc == ESC_SS3 || (c >= 0x40 && c <= 0x7E)) {
+            s_esc = ESC_NONE;
+        }
+        return;
+    }
+    s_esc = ESC_NONE;
+
+    if (c == '\n' && was_cr) {
+        return;   /* LF of a CRLF pair: the line already ended */
+    }
     if (c == '\r' || c == '\n') {
+        echo_str("\r\n", 2);
         if (s_overflow) {
             s_overflow = 0;
             s_len = 0;
@@ -271,6 +326,20 @@ void cmd_feed(int c)
         send_reply(out, n);
         return;
     }
+    if (c == 0x1B) {
+        s_esc = ESC_START;
+        return;
+    }
+    if (c == 0x08 || c == 0x7F) {
+        if (!s_overflow && s_len > 0) {
+            s_len--;
+            echo_str("\b \b", 3);
+        }
+        return;
+    }
+    if (c < 0x20 || c >= 0x80) {
+        return;   /* other control characters and non-ASCII bytes never enter the line */
+    }
     if (s_overflow) {
         return;   /* discard the rest of an over-long line */
     }
@@ -280,4 +349,8 @@ void cmd_feed(int c)
         return;
     }
     s_line[s_len++] = (char)c;
+    {
+        char ch = (char)c;
+        echo_str(&ch, 1);
+    }
 }

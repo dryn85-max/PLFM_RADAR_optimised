@@ -56,9 +56,6 @@ Follow-up work that is out of scope for the current plans.
     not record where the panic happened: store the faulting PC/LR (HardFault
     stacked frame) or the `Error_Handler` caller next to the latch and print it on
     the latched boot, so the next occurrence can be diagnosed.
-  - [ ] **Command line has no echo and no Backspace handling:** a corrected typo
-    reaches the parser as garbage (`status` then answered `ERR latched`). Handle
-    BS/DEL in `cmd_feed` and consider local echo.
 
 ## RTL track
 

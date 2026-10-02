@@ -45,6 +45,8 @@ B). Fork baseline: upstream `b46dd71`.
 | **Protocol unit tests restored as `host/test_radar_protocol.py`** (the non-Tk classes of the legacy Tk GUI test file), run in the CI Python job; the legacy file stays untouched and non-importable. | The restructure had dropped the only unit tests of `radar_protocol.py`; the Tk GUI itself is not used by Lite. | `09a29d8` |
 | **GitHub Pages is not enabled** (the upstream HTML site is archived in `legacy/docs-site/`). | Owner decision in the restructure final-review round; no Pages site for Lite. | reason not recorded beyond that |
 | **Firmware boot banner renamed to `AERIS-10 Lite G0B1 boot`.** | Owner request after the first bench run: the banner still carried the pre-restructure name. | this change |
+| **Console echo is on by default;** `echo on` / `echo off` switches it, `echo` alone reports `ECHO on|off`; accepted while a fault is latched (like `status`); the state is not persisted. | Owner decision after the first bench run: typed commands were invisible in `screen`. Spec `docs/superpowers/specs/2026-10-02-console-echo-backspace.md`. | this change |
+| **Command-line editing:** BS (0x08) and DEL (0x7F) delete the last character; all other control characters and ANSI escape sequences (arrow keys) are discarded and never enter the line. | Owner decision after the first bench run: a Backspace-corrected typo reached the parser as garbage (`status` was answered `ERR latched`). | this change |
 | **`DIAG` log lines end with `\r\n`** (were `\n` only). | Owner request after the first bench run: `screen` showed the log as a staircase; banner and command replies already used `\r\n`. | this change |
 
 ## Process decisions (earlier)

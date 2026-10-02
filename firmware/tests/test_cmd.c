@@ -395,15 +395,24 @@ static void test_status_temp_err(void)
 
 static void feed(const char *s) { while (*s) cmd_feed((unsigned char)*s++); }
 
+/* Existing feed tests assert the TX stream is the reply only: switch echo off first. */
+static void quiet(void)
+{
+    feed("echo off\r");
+    mock_reset();
+}
+
 static void test_feed_line_assembly(void)
 {
     fresh();
+    quiet();
     feed("status\r\n");                               /* CRLF: one reply, blank line ignored */
     TT_ASSERT(strncmp(mock_uart_tx, "STATUS ", 7) == 0);
     TT_ASSERT(strstr(mock_uart_tx, "\r\n") != NULL);
     TT_ASSERT_EQ(0, strstr(mock_uart_tx, "\r\n")[2]);   /* nothing after the single reply */
     mock_reset();
     cmd_init(&g_agc);
+    quiet();
     feed("foo\n");
     TT_ASSERT(strcmp(mock_uart_tx, "ERR unknown\r\n") == 0);
     mock_reset();
@@ -420,6 +429,7 @@ static void test_feed_too_long(void)
     char line[80];
     int i;
     fresh();
+    quiet();
     for (i = 0; i < 63; i++) line[i] = 'x';
     line[63] = '\0';
     feed(line);                                       /* exactly 63: accepted, unknown command */
@@ -427,6 +437,7 @@ static void test_feed_too_long(void)
     TT_ASSERT(strcmp(mock_uart_tx, "ERR unknown\r\n") == 0);
     mock_reset();
     cmd_init(&g_agc);
+    quiet();
     for (i = 0; i < 64; i++) line[i] = 'x';
     line[64] = '\0';
     feed(line);                                       /* 64: too long */
@@ -434,6 +445,7 @@ static void test_feed_too_long(void)
     TT_ASSERT(strcmp(mock_uart_tx, "ERR too_long\r\n") == 0);
     mock_reset();
     cmd_init(&g_agc);
+    quiet();
     feed("beam 0 0 ");                                /* long junk then a valid line after it */
     for (i = 0; i < 100; i++) cmd_feed('9');
     feed("\r\n");
@@ -445,6 +457,250 @@ static void test_feed_too_long(void)
     TT_ASSERT(strcmp(run("0123456789012345678901234567890123456789012345678901234567890123"),
                      "ERR too_long") == 0);
 }
+
+/* ---- console echo and line editing ---- */
+
+static int tx_eq(const char *s)
+{
+    if (strcmp(mock_uart_tx, s) != 0) {
+        printf("  TX expected \"%s\", got \"%s\"\n", s, mock_uart_tx);
+        return 0;
+    }
+    return 1;
+}
+
+static void tx_clear(void) { mock_reset(); }
+
+static void test_echo_default_on(void)
+{
+    fresh();
+    feed("st");
+    TT_ASSERT(tx_eq("st"));
+    feed("atus\r");
+    TT_ASSERT(strncmp(mock_uart_tx, "status\r\nSTATUS ", 15) == 0);
+}
+
+static void test_echo_crlf_and_lf(void)
+{
+    fresh();
+    feed("foo\r\n");                                  /* LF after CR ignored: one line, no blank echo */
+    TT_ASSERT(tx_eq("foo\r\nERR unknown\r\n"));
+    tx_clear();
+    feed("foo\n");                                    /* LF alone ends a line */
+    TT_ASSERT(tx_eq("foo\r\nERR unknown\r\n"));
+    tx_clear();
+    feed("\r\n\r\n");                                 /* blank lines: echo CRLF, LF after CR ignored */
+    TT_ASSERT(tx_eq("\r\n\r\n"));
+    tx_clear();
+    feed("\n\n");                                     /* LF after LF is a separate (blank) line */
+    TT_ASSERT(tx_eq("\r\n\r\n"));
+    tx_clear();
+    feed("status\r");
+    feed("\ntx\r");                                   /* LF right after CR is swallowed, next line works */
+    TT_ASSERT(strstr(mock_uart_tx, "tx\r\nOK\r\n") != NULL);
+    TT_ASSERT(strstr(mock_uart_tx, "\r\n\r\n") == NULL);
+}
+
+static void test_edit_backspace_del(void)
+{
+    fresh();
+    feed("stx\x7f" "atus\r");
+    TT_ASSERT(strstr(mock_uart_tx, "stx\b \batus\r\nSTATUS ") == mock_uart_tx);
+    tx_clear();
+    feed("stx\x08" "atus\r");
+    TT_ASSERT(strstr(mock_uart_tx, "stx\b \batus\r\nSTATUS ") == mock_uart_tx);
+    tx_clear();
+    feed("\x08\x7f\x08");                             /* empty line: nothing */
+    TT_ASSERT(tx_eq(""));
+    feed("\x7f" "tx\x08\x08\x08\x08rx\r");            /* extra BS stop at length 0 */
+    TT_ASSERT(tx_eq("tx\b \b\b \brx\r\nOK\r\n"));
+    TT_ASSERT_EQ(ADAR_MODE_SPI_RX, adar_get_mode(0));
+}
+
+static void test_edit_backspace_echo_off(void)
+{
+    fresh();
+    feed("echo off\r");
+    tx_clear();
+    feed("stx\x7f" "atus\r");
+    TT_ASSERT(strncmp(mock_uart_tx, "STATUS ", 7) == 0);   /* edited, but no echo at all */
+    TT_ASSERT(strchr(mock_uart_tx, '\b') == NULL);
+}
+
+static void test_edit_backspace_overflow(void)
+{
+    int i;
+    fresh();
+    feed("echo off\r");
+    tx_clear();
+    for (i = 0; i < 64; i++) cmd_feed('x');           /* 64th char: overflow */
+    feed("\x7f\x7f\x08");                             /* BS during overflow: ignored */
+    feed("\r");
+    TT_ASSERT(tx_eq("ERR too_long\r\n"));
+    tx_clear();
+    feed("echo on\r");
+    tx_clear();
+    for (i = 0; i < 64; i++) cmd_feed('x');
+    feed("\x7f");
+    TT_ASSERT_EQ(63, (int)strlen(mock_uart_tx));       /* 63 echoed, 64th not, BS silent */
+    feed("\r");
+    TT_ASSERT(tx_eq("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nERR too_long\r\n"));
+    tx_clear();
+    feed("tx\r");                                     /* recovered */
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+}
+
+static void test_edit_backspace_at_63(void)
+{
+    int i;
+    fresh();
+    for (i = 0; i < 63; i++) cmd_feed('x');
+    tx_clear();
+    feed("\x7f");                                     /* full line, BS works, not overflow */
+    TT_ASSERT(tx_eq("\b \b"));
+    feed("x\r");
+    TT_ASSERT(strstr(mock_uart_tx, "ERR unknown\r\n") != NULL);
+}
+
+static void test_control_chars_dropped(void)
+{
+    fresh();
+    feed("\x01\x07\x09\x1f\x80\xff\xc3");
+    TT_ASSERT(tx_eq(""));
+    feed("tx\x01\x09\x80\r");
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));                  /* never entered the line */
+}
+
+static void test_escape_sequences_exact(void)
+{
+    fresh();
+    feed("t\x1b[A" "x\r");
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+    tx_clear();
+    feed("t\x1b[1;5Cx\r");
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+    tx_clear();
+    feed("t\x1bOPx\r");
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+    tx_clear();
+    feed("t\x1bzx\r");                                /* ESC + one byte */
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+    tx_clear();
+    feed("t\x1b\x7f" "x\r");                          /* ESC + DEL: DEL is the sequence byte, not an edit */
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+}
+
+static void test_escape_cr_aborts(void)
+{
+    fresh();
+    feed("tx\x1b[1\r");                               /* CR inside CSI ends the line normally */
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+    tx_clear();
+    feed("tx\x1b\r");                                 /* CR right after ESC */
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+    tx_clear();
+    feed("tx\x1bO\n");                                /* LF inside SS3 */
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+    tx_clear();
+    feed("tx\x1b\x1b[Ax\r");                          /* ESC ESC: second ESC is the one byte; "[Ax" is text */
+    TT_ASSERT(tx_eq("tx[Ax\r\nERR unknown\r\n"));
+    tx_clear();
+    feed("rx\r");                                     /* state machine back to normal */
+    TT_ASSERT(tx_eq("rx\r\nOK\r\n"));
+}
+
+static void test_echo_overlong_not_echoed(void)
+{
+    int i;
+    fresh();
+    for (i = 0; i < 63; i++) cmd_feed('x');
+    TT_ASSERT_EQ(63, (int)strlen(mock_uart_tx));
+    cmd_feed('y');
+    cmd_feed('z');
+    TT_ASSERT_EQ(63, (int)strlen(mock_uart_tx));       /* beyond CMD_MAX_LINE: silent */
+}
+
+static void test_echo_command(void)
+{
+    fresh();
+    feed("echo\r");
+    TT_ASSERT(tx_eq("echo\r\nECHO on\r\n"));
+    tx_clear();
+    feed("echo off\r");
+    TT_ASSERT(tx_eq("echo off\r\nOK\r\n"));            /* line end is echoed before the switch applies */
+    tx_clear();
+    feed("echo\r");
+    TT_ASSERT(tx_eq("ECHO off\r\n"));
+    tx_clear();
+    feed("tx\r");
+    TT_ASSERT(tx_eq("OK\r\n"));                        /* no echo, no CRLF echo */
+    tx_clear();
+    feed("echo on\n");
+    TT_ASSERT(tx_eq("OK\r\n"));                        /* echo turns on after the line was read */
+    tx_clear();
+    feed("tx\r");
+    TT_ASSERT(tx_eq("tx\r\nOK\r\n"));
+    tx_clear();
+    feed("echo maybe\r");
+    TT_ASSERT(strstr(mock_uart_tx, "ERR args\r\n") != NULL);
+    tx_clear();
+    feed("echo on x\r");
+    TT_ASSERT(strstr(mock_uart_tx, "ERR args\r\n") != NULL);
+    tx_clear();
+    feed("echo off x y z\r");
+    TT_ASSERT(strstr(mock_uart_tx, "ERR args\r\n") != NULL);
+    tx_clear();
+    feed("echo ON\r");                                /* case-sensitive */
+    TT_ASSERT(strstr(mock_uart_tx, "ERR args\r\n") != NULL);
+}
+
+static void test_echo_cmd_exec_direct(void)
+{
+    fresh();
+    expect("echo", "ECHO on");
+    expect("echo off", "OK");
+    expect("echo", "ECHO off");
+    expect("echo on", "OK");
+    expect("echo 1", "ERR args");
+    expect("echo on off", "ERR args");
+}
+
+static void test_echo_latched(void)
+{
+    fresh();
+    feed("stop\r");
+    tx_clear();
+    feed("echo off\r");
+    TT_ASSERT(strstr(mock_uart_tx, "OK\r\n") != NULL);
+    tx_clear();
+    feed("tx\r");
+    TT_ASSERT(tx_eq("ERR latched\r\n"));
+    tx_clear();
+    feed("status\r");
+    TT_ASSERT(strncmp(mock_uart_tx, "STATUS ", 7) == 0);
+    tx_clear();
+    feed("echo\r");
+    TT_ASSERT(tx_eq("ECHO off\r\n"));
+    tx_clear();
+    feed("echo bad\r");
+    TT_ASSERT(tx_eq("ERR args\r\n"));
+}
+
+static void test_init_resets_echo(void)
+{
+    fresh();
+    feed("echo off\r");
+    cmd_init(&g_agc);
+    tx_clear();
+    feed("x");
+    TT_ASSERT(tx_eq("x"));
+    feed("\x1b[");                                    /* init also clears a half-received escape and CR flag */
+    cmd_init(&g_agc);
+    tx_clear();
+    feed("\ntx\r");                                   /* leading LF is a line end, not swallowed */
+    TT_ASSERT(tx_eq("\r\ntx\r\nOK\r\n"));
+}
+
 
 int main(void)
 {
@@ -470,5 +726,19 @@ int main(void)
     TT_RUN(test_status_temp_err);
     TT_RUN(test_feed_line_assembly);
     TT_RUN(test_feed_too_long);
+    TT_RUN(test_echo_default_on);
+    TT_RUN(test_echo_crlf_and_lf);
+    TT_RUN(test_edit_backspace_del);
+    TT_RUN(test_edit_backspace_echo_off);
+    TT_RUN(test_edit_backspace_overflow);
+    TT_RUN(test_edit_backspace_at_63);
+    TT_RUN(test_control_chars_dropped);
+    TT_RUN(test_escape_sequences_exact);
+    TT_RUN(test_escape_cr_aborts);
+    TT_RUN(test_echo_overlong_not_echoed);
+    TT_RUN(test_echo_command);
+    TT_RUN(test_echo_cmd_exec_direct);
+    TT_RUN(test_echo_latched);
+    TT_RUN(test_init_resets_echo);
     return TT_RESULT();
 }
