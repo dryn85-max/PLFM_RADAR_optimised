@@ -33,7 +33,9 @@ def _find_repo_root() -> Path:
     for parent in here.parents:
         if (parent / "pyproject.toml").is_file():
             return parent
-    raise RuntimeError(f"repository root (pyproject.toml) not found above {here}")
+    # ImportError (not RuntimeError) so `import v7` degrades gracefully
+    # (SoftwareFPGA/replay disabled) when host/ is used outside the repository.
+    raise ImportError(f"repository root (pyproject.toml) not found above {here}")
 
 
 _REPO_ROOT = _find_repo_root()

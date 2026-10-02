@@ -20,18 +20,22 @@ import numpy as np
 
 
 def _find_repo_root():
-    here = os.path.abspath(__file__)
-    d = os.path.dirname(here)
+    """Directory containing pyproject.toml, or None when host/ is used outside the repo."""
+    d = os.path.dirname(os.path.abspath(__file__))
     while True:
         if os.path.isfile(os.path.join(d, "pyproject.toml")):
             return d
         parent = os.path.dirname(d)
         if parent == d:
-            raise RuntimeError("repository root (pyproject.toml) not found")
+            return None
         d = parent
 
 
 _REPO_ROOT = _find_repo_root()
+_NO_REPO = _REPO_ROOT is None
+if _NO_REPO:
+    # Nonexistent path: co-sim data checks fail and the dependent tests skip.
+    _REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_no_repo")
 
 # =============================================================================
 # Test: v7.models
@@ -497,6 +501,7 @@ class TestWaveformConfig(unittest.TestCase):
 # Test: v7.software_fpga.SoftwareFPGA
 # =============================================================================
 
+@unittest.skipIf(_NO_REPO, "software_fpga needs the repository (fpga/tb/cosim golden reference)")
 class TestSoftwareFPGA(unittest.TestCase):
     """SoftwareFPGA register interface and signal chain."""
 
@@ -600,6 +605,7 @@ class TestSoftwareFPGA(unittest.TestCase):
         self.assertEqual(fpga.agc_holdoff, 0x0F)
 
 
+@unittest.skipIf(_NO_REPO, "software_fpga needs the repository (fpga/tb/cosim golden reference)")
 class TestSoftwareFPGASignalChain(unittest.TestCase):
     """SoftwareFPGA.process_chirps with real co-sim data."""
 
@@ -671,6 +677,7 @@ class TestSoftwareFPGASignalChain(unittest.TestCase):
         self.assertEqual(frame_cfar.magnitude.shape, (64, 32))
 
 
+@unittest.skipIf(_NO_REPO, "software_fpga needs the repository (fpga/tb/cosim golden reference)")
 class TestQuantizeRawIQ(unittest.TestCase):
     """quantize_raw_iq utility function."""
 
@@ -798,6 +805,7 @@ class TestReplayEngineCosim(unittest.TestCase):
             engine.get_frame(-1)
 
 
+@unittest.skipIf(_NO_REPO, "software_fpga needs the repository (fpga/tb/cosim golden reference)")
 class TestReplayEngineRawIQ(unittest.TestCase):
     """ReplayEngine loading from raw IQ .npy cube."""
 
