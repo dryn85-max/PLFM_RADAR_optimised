@@ -15,3 +15,6 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # 1 ms scheduler tick.
 CONFIG_FREERTOS_HZ=1000
+
+# Main task stack: Wi-Fi start-up runs in app_main.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144

@@ -4,7 +4,9 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "http_srv.h"
 #include "ld2410_task.h"
+#include "wifi_mgr.h"
 
 #define RING_BYTES_PSRAM (4u * 1024u * 1024u)
 #define RING_BYTES_INTERNAL (32u * 1024u)
@@ -39,5 +41,19 @@ void app_main(void)
     err = ld2410_start(ring, ring_bytes);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ld2410_start failed: %s", esp_err_to_name(err));
+    }
+
+    /* Wi-Fi after the sensor task so the LD2410C is not delayed by the 15 s STA attempt. */
+    err = wifi_mgr_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wifi_mgr_start failed: %s", esp_err_to_name(err));
+    }
+    err = wifi_mgr_boot_monitor_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BOOT monitor failed: %s", esp_err_to_name(err));
+    }
+    err = http_srv_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "http_srv_start failed: %s", esp_err_to_name(err));
     }
 }
