@@ -1,7 +1,7 @@
 #!/bin/bash
 # ===========================================================================
 # FPGA Regression Test Runner for AERIS-10 Radar
-# Phase 0: Vivado-style lint (catches issues iverilog silently accepts)
+# Phase 0: lint + vendor-neutrality + resource gates (catches issues iverilog silently accepts)
 # Phase 1+: Compile and run all verified iverilog testbenches
 #
 # Usage:  ./run_regression.sh [--quick] [--skip-lint]
@@ -57,24 +57,22 @@ NC='\033[0m' # No Color
 # ===========================================================================
 
 # Production RTL file list (same as system TB minus testbench files)
-# Uses ADC stub for IBUFDS/BUFIO primitives that iverilog can't parse
 PROD_RTL=(
     radar_system_top.v
     radar_transmitter.v
     dac_interface_single.v
     plfm_chirp_controller.v
     radar_receiver_final.v
-    tb/ad9484_interface_400m_stub.v
-    ddc_400m.v
-    nco_400m_enhanced.v
+    adc_cmos_interface.v
+    ddc.v
+    nco.v
     cic_decimator_4x_enhanced.v
     cdc_modules.v
     fir_lowpass.v
-    ddc_input_interface.v
-    chirp_memory_loader_param.v
-    latency_buffer.v
     matched_filter_multi_segment.v
     matched_filter_processing_chain.v
+    frequency_matched_filter.v
+    ref_spectrum_rom.v
     range_bin_decimator.v
     doppler_processor.v
     xfft_16.v
@@ -89,14 +87,6 @@ PROD_RTL=(
     fpga_self_test.v
 )
 
-# Source-only RTL (not instantiated at top level, but should still be lint-clean)
-# Note: ad9484_interface_400m.v is excluded — it uses Xilinx primitives
-# (IBUFDS, BUFIO, BUFG, IDDR) that iverilog cannot compile. The production
-# design uses tb/ad9484_interface_400m_stub.v for simulation instead.
-EXTRA_RTL=(
-    frequency_matched_filter.v
-)
-
 # ---------------------------------------------------------------------------
 # Shared RTL file lists for integration / system tests
 # Centralised here so a new module only needs adding once.
@@ -106,11 +96,10 @@ EXTRA_RTL=(
 RECEIVER_RTL=(
     radar_receiver_final.v
     radar_mode_controller.v
-    tb/ad9484_interface_400m_stub.v
-    ddc_400m.v nco_400m_enhanced.v cic_decimator_4x_enhanced.v
-    cdc_modules.v fir_lowpass.v ddc_input_interface.v
-    chirp_memory_loader_param.v latency_buffer.v
+    adc_cmos_interface.v ddc.v nco.v cic_decimator_4x_enhanced.v
+    cdc_modules.v fir_lowpass.v
     matched_filter_multi_segment.v matched_filter_processing_chain.v
+    frequency_matched_filter.v ref_spectrum_rom.v
     range_bin_decimator.v doppler_processor.v xfft_16.v fft_engine.v
     rx_gain_control.v mti_canceller.v
 )
@@ -275,6 +264,44 @@ run_lint_static() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: classify a testbench's simulation output
+#   evaluate_output <name> <output>
+# Rules (no "it reached \$finish" fallback -- vvp always prints that):
+#   * [PASS...] / [FAIL...] markers are counted at any indentation.
+#   * Any [FAIL...] marker, or a failure summary such as "SOME TESTS FAILED",
+#     "3 TESTS FAILED", "2 TEST(S) FAILED", "1 PASSED, 2 FAILED", fails the test.
+#     (Per-count lines like "FAILED: 0 / 32" are not failure summaries.)
+#   * Otherwise the test passes only if it printed at least one [PASS...]
+#     marker or an explicit "ALL [N] TESTS PASSED" line; anything else is
+#     reported as UNKNOWN and counted as a failure.
+# ---------------------------------------------------------------------------
+evaluate_output() {
+    local name="$1"
+    local output="$2"
+    local test_pass test_fail fail_text success_text
+    test_pass=$(echo "$output" | grep -Ec '^[[:space:]]*\[PASS[^]]*\]' || true)
+    test_fail=$(echo "$output" | grep -Ec '^[[:space:]]*\[FAIL[^]]*\]' || true)
+    fail_text=$(echo "$output" | grep -Ec 'SOME TESTS FAILED|TESTS FAILED|TEST\(S\) FAILED|[1-9][0-9]* FAILED' || true)
+    success_text=$(echo "$output" | grep -Ec 'ALL ([0-9]+ )?TESTS PASSED' || true)
+
+    if [[ "$test_fail" -gt 0 || "$fail_text" -gt 0 ]]; then
+        echo -e "${RED}FAIL${NC} (pass=$test_pass, fail=$test_fail, failure summary lines=$fail_text)"
+        ERRORS="$ERRORS\n  $name: $test_fail [FAIL] marker(s), $fail_text failure summary line(s)"
+        FAIL=$((FAIL + 1))
+    elif [[ "$test_pass" -gt 0 ]]; then
+        echo -e "${GREEN}PASS${NC} ($test_pass checks)"
+        PASS=$((PASS + 1))
+    elif [[ "$success_text" -gt 0 ]]; then
+        echo -e "${GREEN}PASS${NC} (explicit ALL TESTS PASSED)"
+        PASS=$((PASS + 1))
+    else
+        echo -e "${YELLOW}UNKNOWN${NC} (no PASS/FAIL markers, no ALL TESTS PASSED line)"
+        ERRORS="$ERRORS\n  $name: no pass/fail markers in output"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Helper: compile and run a single testbench
 #   run_test <name> <vvp_path> <iverilog_args...>
 # ---------------------------------------------------------------------------
@@ -298,30 +325,29 @@ run_test() {
     local output
     output=$(${TIMEOUT_CMD:+$TIMEOUT_CMD 120} vvp "$vvp" 2>&1) || true
 
-    # Count PASS/FAIL in output (testbenches use explicit [PASS]/[FAIL] markers)
-    local test_pass test_fail
-    test_pass=$(echo "$output" | grep -Ec '^\[PASS([^]]*)\]' || true)
-    test_fail=$(echo "$output" | grep -Ec '^\[FAIL([^]]*)\]' || true)
+    evaluate_output "$name" "$output"
+    rm -f "$vvp"
+}
 
-    if [[ "$test_fail" -gt 0 ]]; then
-        echo -e "${RED}FAIL${NC} (pass=$test_pass, fail=$test_fail)"
-        ERRORS="$ERRORS\n  $name: $test_fail failure(s)"
+# ---------------------------------------------------------------------------
+# Helper: compile WITHOUT -DSIMULATION (exercises the synthesizable branches)
+# ---------------------------------------------------------------------------
+run_test_nosim() {
+    local name="$1"
+    local vvp="$2"
+    shift 2
+    local args=("$@")
+
+    printf "  %-45s " "$name"
+    if ! iverilog -g2001 -o "$vvp" "${args[@]}" 2>/tmp/iverilog_err_$$; then
+        echo -e "${RED}COMPILE FAIL${NC}"
+        ERRORS="$ERRORS\n  $name: compile error ($(head -1 /tmp/iverilog_err_$$))"
         FAIL=$((FAIL + 1))
-    elif [[ "$test_pass" -gt 0 ]]; then
-        echo -e "${GREEN}PASS${NC} ($test_pass checks)"
-        PASS=$((PASS + 1))
-    else
-        # No PASS/FAIL markers — check for clean completion
-        if echo "$output" | grep -qi 'finish\|complete\|done'; then
-            echo -e "${GREEN}PASS${NC} (completed)"
-            PASS=$((PASS + 1))
-        else
-            echo -e "${YELLOW}UNKNOWN${NC} (no PASS/FAIL markers)"
-            ERRORS="$ERRORS\n  $name: no pass/fail markers in output"
-            FAIL=$((FAIL + 1))
-        fi
+        return
     fi
-
+    local output
+    output=$(${TIMEOUT_CMD:+$TIMEOUT_CMD 300} vvp "$vvp" 2>&1) || true
+    evaluate_output "$name" "$output"
     rm -f "$vvp"
 }
 
@@ -335,24 +361,52 @@ echo "iverilog: $(iverilog -V 2>&1 | head -1)"
 echo ""
 
 # ===========================================================================
-# PHASE 0: LINT (Vivado-class error detection)
+# PHASE 0: LINT, vendor-neutrality and resource gates
 # ===========================================================================
 if [[ "$SKIP_LINT" -eq 0 ]]; then
-    echo "--- PHASE 0: LINT (Vivado-class checks) ---"
+    echo "--- PHASE 0: LINT, vendor-neutrality and resource gates ---"
 
     # Layer A: iverilog -Wall on full production design
     run_lint_iverilog "production" "${PROD_RTL[@]}"
 
-    # Layer A: standalone modules not in top-level hierarchy
-    for extra in "${EXTRA_RTL[@]}"; do
-        if [[ -f "$extra" ]]; then
-            run_lint_iverilog "$(basename "$extra" .v)" "$extra"
-        fi
-    done
-
     # Layer B: custom static regex checks
-    ALL_RTL=("${PROD_RTL[@]}" "${EXTRA_RTL[@]}")
+    ALL_RTL=("${PROD_RTL[@]}")
     run_lint_static "${ALL_RTL[@]}"
+
+    # Layer C: vendor primitives / synthesis attributes must not appear in pipeline files
+    printf "  %-45s " "Vendor primitive / attribute grep gate"
+    VENDOR_HITS=$(grep -nE "DSP48E1|xpm_memory|IBUFDS|IDDR|ODDR|MMCME2|PLLE2|BUFG|BUFIO|ASYNC_REG|USE_DSP|use_dsp|ram_style|rom_style|DONT_TOUCH|dont_touch|max_fanout|keep *=|\(\*[[:space:]]*[A-Za-z]" "${PROD_RTL[@]}" || true)
+    if [[ -n "$VENDOR_HITS" ]]; then
+        echo -e "${RED}FAIL${NC}"
+        echo "$VENDOR_HITS" | sed 's/^/    /'
+        LINT_ERR=$((LINT_ERR + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+
+    # Layer D: the pipeline must also compile WITHOUT -DSIMULATION (synthesizable branches)
+    printf "  %-45s " "iverilog -Wall (production, no SIMULATION)"
+    NOSIM_LOG="/tmp/iverilog_nosim_$$.log"
+    if iverilog -g2001 -Wall -o /dev/null "${PROD_RTL[@]}" 2>"$NOSIM_LOG"; then
+        echo -e "${GREEN}PASS${NC} ($(grep -c . "$NOSIM_LOG" || true) info warnings)"
+    else
+        echo -e "${RED}COMPILE ERROR${NC}"
+        sed 's/^/    /' "$NOSIM_LOG"
+        LINT_ERR=$((LINT_ERR + 1))
+    fi
+    rm -f "$NOSIM_LOG"
+
+    # Layer E: static multiplier / RAM budget (<=55 multipliers 18x18-equivalent, <=1 Mbit)
+    printf "  %-45s " "Resource budget (<=55 mult, <=1 Mbit RAM)"
+    RES_LOG="/tmp/resource_$$.log"
+    if python3 tb/golden/count_multipliers.py "${PROD_RTL[@]}" >"$RES_LOG" 2>&1; then
+        echo -e "${GREEN}PASS${NC} ($(grep 'TOTAL multipliers' "$RES_LOG" | sed 's/.*equivalents: //'); $(grep -o 'TOTAL RAM+ROM bits: [0-9]*' "$RES_LOG"))"
+    else
+        echo -e "${RED}FAIL${NC}"
+        sed 's/^/    /' "$RES_LOG"
+        LINT_ERR=$((LINT_ERR + 1))
+    fi
+    rm -f "$RES_LOG"
 
     echo ""
     if [[ "$LINT_ERR" -gt 0 ]]; then
@@ -388,7 +442,7 @@ run_test "Chirp Contract" \
     tb/tb_chirp_ctr_reg.vvp \
     tb/tb_chirp_contract.v plfm_chirp_controller.v
 
-run_test "Doppler Processor (DSP48)" \
+run_test "Doppler Processor" \
     tb/tb_doppler_reg.vvp \
     tb/tb_doppler_cosim.v doppler_processor.v xfft_16.v fft_engine.v
 
@@ -419,10 +473,9 @@ echo ""
 # ===========================================================================
 echo "--- PHASE 2: Integration Tests ---"
 
-run_test "DDC Chain (NCO→CIC→FIR)" \
-    tb/tb_ddc_reg.vvp \
-    tb/tb_ddc_cosim.v ddc_400m.v nco_400m_enhanced.v \
-    cic_decimator_4x_enhanced.v fir_lowpass.v cdc_modules.v
+run_test "DDC golden (a): NCO+mixer+CIC+FIR bit-exact" \
+    tb/tb_ddc_golden_reg.vvp \
+    tb/golden/tb_ddc_golden.v ddc.v nco.v cic_decimator_4x_enhanced.v fir_lowpass.v
 
 # Real-data co-simulation: committed golden hex vs RTL (exact match required).
 # These catch architecture mismatches (e.g. 32-pt → dual 16-pt Doppler FFT)
@@ -437,16 +490,28 @@ run_test "Full-Chain Real-Data (decim→Doppler, exact match)" \
     doppler_processor.v xfft_16.v fft_engine.v
 
 if [[ "$QUICK" -eq 0 ]]; then
-    # Golden generate
-    run_test "Receiver (golden generate)" \
+    # Golden generate: writes to a scratch file, never to the committed golden
+    GOLDEN_SCRATCH="$(mktemp "${TMPDIR:-/tmp}/golden_doppler_XXXXXX.mem")"
+    run_test "Receiver (golden generate, scratch output)" \
         tb/tb_rx_golden_reg.vvp \
-        -DGOLDEN_GENERATE \
+        -DGOLDEN_GENERATE "-DGOLDEN_OUT_PATH=\"$GOLDEN_SCRATCH\"" \
         tb/tb_radar_receiver_final.v "${RECEIVER_RTL[@]}"
 
-    # Golden compare
-    run_test "Receiver (golden compare)" \
+    rm -f "$GOLDEN_SCRATCH"
+
+    # Golden compare: bit-exact against the COMMITTED tb/golden/golden_doppler.mem
+    run_test "Receiver (golden compare vs committed)" \
         tb/tb_rx_compare_reg.vvp \
         tb/tb_radar_receiver_final.v "${RECEIVER_RTL[@]}"
+
+    # Golden (d): ADC -> DDC -> matched filter, range-peak displacement
+    run_test "Full-chain golden (d): range peak displacement" \
+        tb/tb_fullchain_golden_reg.vvp \
+        tb/golden/tb_fullchain_golden.v "${RECEIVER_RTL[@]}"
+
+    run_test_nosim "Full-chain golden (d), synthesizable chain" \
+        tb/tb_fullchain_golden_syn_reg.vvp \
+        tb/golden/tb_fullchain_golden.v "${RECEIVER_RTL[@]}"
 
     # Full system top (monitoring-only, legacy)
     run_test "System Top (radar_system_tb)" \
@@ -470,7 +535,7 @@ if [[ "$QUICK" -eq 0 ]]; then
         tb/tb_system_e2e.v "${SYSTEM_RTL[@]}"
 else
     echo "  (skipped receiver golden + system top + E2E — use without --quick)"
-    SKIP=$((SKIP + 6))
+    SKIP=$((SKIP + 8))
 fi
 
 echo ""
@@ -484,18 +549,53 @@ run_test "FFT Engine" \
     tb/tb_fft_reg.vvp \
     tb/tb_fft_engine.v fft_engine.v
 
-run_test "NCO 400MHz" \
-    tb/tb_nco_reg.vvp \
-    tb/tb_nco_400m.v nco_400m_enhanced.v
+run_test "FFT golden (c): 256-pt engine vs numpy" \
+    tb/tb_fft256_reg.vvp \
+    tb/golden/tb_fft256_golden.v fft_engine.v
 
-run_test "FIR Lowpass" \
+run_test "NCO (20 MHz IF, inferred accumulator)" \
+    tb/tb_nco_reg.vvp \
+    tb/tb_nco.v nco.v
+
+run_test "FIR Lowpass (folded, 4-phase)" \
     tb/tb_fir_reg.vvp \
     tb/tb_fir_lowpass.v fir_lowpass.v
 
-run_test "Matched Filter Chain" \
-    tb/tb_mf_reg.vvp \
-    tb/tb_matched_filter_processing_chain.v matched_filter_processing_chain.v \
-    fft_engine.v chirp_memory_loader_param.v
+run_test "FIR golden (b): folded == direct form" \
+    tb/tb_fir_golden_reg.vvp \
+    tb/golden/tb_fir_golden.v fir_lowpass.v
+
+run_test "Matched Filter Chain (behavioral branch)" \
+    tb/tb_mf_beh_reg.vvp \
+    tb/tb_mf_chain.v matched_filter_processing_chain.v fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test_nosim "Matched Filter Chain (synthesizable, no -DSIMULATION)" \
+    tb/tb_mf_syn_reg.vvp \
+    tb/tb_mf_chain.v matched_filter_processing_chain.v fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test "Matched Filter Segmenter (overlap-save stream)" \
+    tb/tb_mf_seg_reg.vvp \
+    tb/tb_mf_segmenter.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
+    fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test_nosim "Matched Filter Segmenter (synthesizable chain)" \
+    tb/tb_mf_seg_syn_reg.vvp \
+    tb/tb_mf_segmenter.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
+    fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test "Matched Filter 4 segments, continuous stream (behavioral)" \
+    tb/tb_mf_ms_beh_reg.vvp \
+    tb/tb_mf_multiseg.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
+    fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test_nosim "Matched Filter 4 segments, continuous stream (synth)" \
+    tb/tb_mf_ms_syn_reg.vvp \
+    tb/tb_mf_multiseg.v matched_filter_multi_segment.v matched_filter_processing_chain.v \
+    fft_engine.v ref_spectrum_rom.v frequency_matched_filter.v
+
+run_test "Reference spectrum ROM" \
+    tb/tb_ref_rom_reg.vvp \
+    tb/tb_ref_spectrum_rom.v ref_spectrum_rom.v
 
 echo ""
 
@@ -504,7 +604,7 @@ echo ""
 # ===========================================================================
 echo "--- PHASE 4: Infrastructure ---"
 
-run_test "CDC Modules (3 variants)" \
+run_test "CDC Modules (single-bit + handshake)" \
     tb/tb_cdc_reg.vvp \
     tb/tb_cdc_modules.v cdc_modules.v
 
@@ -523,6 +623,10 @@ run_test "Range Bin Decimator" \
 run_test "Radar Mode Controller" \
     tb/tb_rmc_reg.vvp \
     tb/tb_radar_mode_controller.v radar_mode_controller.v
+
+run_test "ADC CMOS Interface" \
+    tb/tb_adc_reg.vvp \
+    tb/tb_adc_cmos_interface.v adc_cmos_interface.v
 
 echo ""
 

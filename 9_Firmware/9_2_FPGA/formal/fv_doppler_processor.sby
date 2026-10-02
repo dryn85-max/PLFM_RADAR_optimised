@@ -23,5 +23,5 @@ prep -top fv_doppler_processor
 ../xfft_16.v
 ../fft_engine.v
 ../fft_twiddle_16.mem
-../fft_twiddle_1024.mem
+../fft_twiddle_256.mem
 fv_doppler_processor.v

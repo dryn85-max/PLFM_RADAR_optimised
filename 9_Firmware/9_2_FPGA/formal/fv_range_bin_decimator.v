@@ -70,7 +70,8 @@ module fv_range_bin_decimator (
     range_bin_decimator #(
         .INPUT_BINS        (INPUT_BINS),
         .OUTPUT_BINS       (OUTPUT_BINS),
-        .DECIMATION_FACTOR (DECIMATION_FACTOR)
+        .DECIMATION_FACTOR (DECIMATION_FACTOR),
+        .LOG2_DECIMATION   (3)
     ) dut (
         .clk              (clk),
         .reset_n          (reset_n),

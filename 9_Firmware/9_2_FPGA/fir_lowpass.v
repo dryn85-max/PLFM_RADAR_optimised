@@ -1,313 +1,176 @@
 `timescale 1ns / 1ps
-
-module fir_lowpass_parallel_enhanced (
-    input wire clk,
-    input wire reset_n,
-    input wire signed [17:0] data_in,
-    input wire data_valid,
-    output reg signed [17:0] data_out,
-    output reg data_out_valid,
-    output wire fir_ready,
-    output wire filter_overflow
+// ============================================================================
+// fir_lowpass.v — 32-tap symmetric low-pass FIR, folded and time-multiplexed
+//
+// Input rate: 25 MSPS on a 100 MHz clock = one valid sample every 4 clocks.
+// Symmetry (c[k] == c[31-k]) folds the 32 taps into 16 pre-added pairs, and
+// the 4 idle clocks between samples let 4 multipliers compute the 16 pairs
+// in 4 phases.  Total: 4 multipliers (17 x 18) per channel.
+//
+//   y[n] = sum_{k=0}^{15} c[k] * (x[n-k] + x[n-31+k])      (exact == direct form)
+//   data_out = saturate16( acc >>> 17 )                     (coefficients are Q1.17)
+//
+// Pipeline for a sample accepted at edge e (data_valid = 1):
+//   e      : delay line shift; run <= 1, phase <= 0
+//   e+1..4 : stage A  pre-adders for pairs 4p..4p+3 (p = phase), coeff regs
+//   e+2..5 : stage B  4 products (registered)
+//   e+3..6 : stage C  acc <= (p == 0 ? 0 : acc) + p0 + p1 + p2 + p3
+//   e+7    : stage D  data_out <= saturate(acc >>> 17), data_out_valid
+// Widths: pre-add 17, product 35, accumulator 35 + log2(32) = 40 bits
+// (no overflow possible: |acc| <= 2^16 * sum|c| < 2^36).
+//
+// Contract: data_valid must not be asserted more than once per 4 clocks
+// (fir_ready reports when a new sample may be accepted on the next edge).
+// The CIC in ddc.v guarantees this cadence.
+//
+// Resources: 4 multipliers, ~32*16 + 2*4*17 + 4*35 + 40 + ~40 flip-flops, 0 RAM.
+// ============================================================================
+module fir_lowpass #(
+    parameter DATA_W  = 16,
+    parameter COEFF_W = 18,
+    parameter TAPS    = 32
+)(
+    input  wire                     clk,
+    input  wire                     reset_n,
+    input  wire signed [DATA_W-1:0] data_in,
+    input  wire                     data_valid,
+    output reg  signed [DATA_W-1:0] data_out,
+    output reg                      data_out_valid,
+    output wire                     fir_ready,
+    output reg                      filter_overflow
 );
 
-parameter TAPS = 32;
-parameter COEFF_WIDTH = 18;
-parameter DATA_WIDTH = 18;
-parameter ACCUM_WIDTH = 36;
+localparam HALF   = TAPS / 2;            // 16 pairs
+localparam SUM_W  = DATA_W + 1;          // 17
+localparam PROD_W = SUM_W + COEFF_W;     // 35
+localparam ACC_W  = PROD_W + 5;          // 40 (+log2(TAPS) guard bits)
+localparam SHIFT  = COEFF_W - 1;         // 17
 
-// ============================================================================
-// Pipelined FIR filter for 100 MHz timing closure
-//
-// Problem: The original fully-combinatorial adder tree for 32 multiply products
-// created a 31-deep DSP48E1 PCOUT cascade chain taking 56.6ns (WNS = -48.325ns).
-//
-// Solution: 5-stage pipelined binary adder tree with registered outputs at
-// each level, plus BREG (coefficient register) and MREG (multiply output
-// register) stages for DSP48E1 absorption. Each stage performs at most one
-// pairwise addition (~1.7ns DSP hop), easily fitting in the 10ns clock period.
-//
-// Pipeline stages:
-//   Cycle 0: data_valid → shift delay line + latch coefficients (BREG)
-//   Cycle 1: Combinatorial multiply latched into mult_reg (MREG)
-//   Cycle 2: 16 pairwise sums of 32 multiply results (level 0)
-//   Cycle 3: 8 pairwise sums (level 1)
-//   Cycle 4: 4 pairwise sums (level 2)
-//   Cycle 5: 2 pairwise sums (level 3)
-//   Cycle 6: 1 final sum → accumulator_reg (level 4)
-//   Cycle 7: Output saturation/rounding
-//
-// Total latency: 9 cycles from data_valid to data_out_valid
-// (was 7 before BREG+MREG addition — +2 cycles for DSP48 pipelining)
-// Throughput: 1 sample per cycle (fully pipelined)
-// FIR runs at 100 MHz on data decimated 4:1 from 400 MHz — valid samples
-// arrive every ~4 cycles, so the 9-cycle latency is transparent.
-// ============================================================================
+localparam signed [ACC_W-1:0] OUT_MAX =  (1 << (DATA_W - 1)) - 1;
+localparam signed [ACC_W-1:0] OUT_MIN = -(1 << (DATA_W - 1));
 
-// Filter coefficients (symmetric: coeff[k] == coeff[31-k])
-reg signed [COEFF_WIDTH-1:0] coeff [0:TAPS-1];
-
-// Parallel delay line
-reg signed [DATA_WIDTH-1:0] delay_line [0:TAPS-1];
-
-// Parallel multiply results (combinatorial)
-wire signed [DATA_WIDTH+COEFF_WIDTH-1:0] mult_result [0:TAPS-1];
-
-// Pipelined adder tree registers
-// Level 0: 16 pairwise sums of 32 products
-reg signed [ACCUM_WIDTH-1:0] add_l0 [0:15];
-// Level 1: 8 pairwise sums
-// USE_DSP="no" forces pure additions to fabric CARRY4 chains, freeing DSP48E1
-// slices for the FFT butterfly multipliers that otherwise spill to 18-level
-// fabric carry chains causing timing violations on the XC7A50T (120 DSP budget).
-(* USE_DSP = "no" *) reg signed [ACCUM_WIDTH-1:0] add_l1 [0:7];
-// Level 2: 4 pairwise sums
-(* USE_DSP = "no" *) reg signed [ACCUM_WIDTH-1:0] add_l2 [0:3];
-// Level 3: 2 pairwise sums
-(* USE_DSP = "no" *) reg signed [ACCUM_WIDTH-1:0] add_l3 [0:1];
-// Level 4: final sum
-(* USE_DSP = "no" *) reg signed [ACCUM_WIDTH-1:0] accumulator_reg;
-
-// Valid pipeline: 9-stage shift register (was 7 before BREG+MREG addition)
-// [0]=BREG done, [1]=MREG done, [2]=L0 done, [3]=L1 done, [4]=L2 done,
-// [5]=L3 done, [6]=L4/accum done, [7]=output done, [8]=spare
-// The BREG and MREG stages add 2 cycles of latency.
-reg [8:0] valid_pipe;
-
-// Initialize coefficients
+// Coefficients, first half (c[k] == c[31-k])
+reg signed [COEFF_W-1:0] coeff [0:HALF-1];
 initial begin
-    // Proper low-pass filter coefficients
     coeff[ 0] = 18'sh00AD; coeff[ 1] = 18'sh00CE; coeff[ 2] = 18'sh3FD87; coeff[ 3] = 18'sh02A6;
     coeff[ 4] = 18'sh00E0; coeff[ 5] = 18'sh3F8C0; coeff[ 6] = 18'sh0A45; coeff[ 7] = 18'sh3FD82;
     coeff[ 8] = 18'sh3F0B5; coeff[ 9] = 18'sh1CAD; coeff[10] = 18'sh3EE59; coeff[11] = 18'sh3E821;
     coeff[12] = 18'sh4841; coeff[13] = 18'sh3B340; coeff[14] = 18'sh3E299; coeff[15] = 18'sh1FFFF;
-    coeff[16] = 18'sh1FFFF; coeff[17] = 18'sh3E299; coeff[18] = 18'sh3B340; coeff[19] = 18'sh4841;
-    coeff[20] = 18'sh3E821; coeff[21] = 18'sh3EE59; coeff[22] = 18'sh1CAD; coeff[23] = 18'sh3F0B5;
-    coeff[24] = 18'sh3FD82; coeff[25] = 18'sh0A45; coeff[26] = 18'sh3F8C0; coeff[27] = 18'sh00E0;
-    coeff[28] = 18'sh02A6; coeff[29] = 18'sh3FD87; coeff[30] = 18'sh00CE; coeff[31] = 18'sh00AD;
 end
 
-// ============================================================================
-// DSP48E1 PIPELINE REGISTERS (BREG + MREG)
-// ============================================================================
-// Vivado DRC warnings DPIP-1 (input not pipelined) and DPOP-2 (output not
-// pipelined) indicate that the DSP48E1 internal BREG and MREG pipeline stages
-// are not being used.
-//
-// Solution: Add explicit registered stages that Vivado can absorb into DSP48E1:
-//   BREG: coeff_reg[k] — registered copy of coeff[k], feeds DSP48 B-port
-//   MREG: mult_reg[k]  — registered multiply output, feeds DSP48 P-port
-//
-// With these registers, Vivado sets BREG=1 and MREG=1 inside DSP48E1,
-// eliminating 68 DPIP-1 + 35 DPOP-2 warnings and improving timing.
-//
-// Pipeline impact: +2 cycles latency (BREG + MREG). Total FIR latency
-// goes from 7 to 9 cycles. Still transparent since FIR input arrives
-// every ~4 clocks (100 MHz / 4:1 CIC decimation).
-// ============================================================================
+// Delay line (dline[0] = newest sample)
+reg signed [DATA_W-1:0] dline [0:TAPS-1];
+reg       run;
+reg [1:0] phase;
 
-// Registered coefficients (BREG — absorbed into DSP48E1 B-port register)
-reg signed [COEFF_WIDTH-1:0] coeff_reg [0:TAPS-1];
-
-// Registered multiply outputs (MREG — absorbed into DSP48E1 M-register)
-reg signed [DATA_WIDTH+COEFF_WIDTH-1:0] mult_reg [0:TAPS-1];
-
-// Combinatorial multiply (between BREG and MREG)
-wire signed [DATA_WIDTH+COEFF_WIDTH-1:0] mult_comb [0:TAPS-1];
-genvar k;
-generate
-    for (k = 0; k < TAPS; k = k + 1) begin : mult_gen
-        assign mult_comb[k] = delay_line[k] * coeff_reg[k];
-    end
-endgenerate
-
-// mult_result now comes from the registered multiply output (MREG stage)
-genvar m;
-generate
-    for (m = 0; m < TAPS; m = m + 1) begin : mult_alias
-        assign mult_result[m] = mult_reg[m];
-    end
-endgenerate
+// Stage A/B/C registers
+reg signed [SUM_W-1:0]   pre0, pre1, pre2, pre3;
+reg signed [COEFF_W-1:0] c0, c1, c2, c3;
+reg                      vA; reg [1:0] phA;
+reg signed [PROD_W-1:0]  p0, p1, p2, p3;
+reg                      vB; reg [1:0] phB;
+reg signed [ACC_W-1:0]   acc;
+reg                      vC;
 
 integer i;
 
-// ============================================================================
-// Pipeline Stage 0: Shift delay line on data_valid
-// Sync reset: enables DSP48E1 AREG/BREG absorption for delay_line registers
-// feeding the multipliers. Async reset (FDCE) prevented Vivado from using
-// the DSP48E1 internal A/B pipeline registers — the source of 2,522 DPIR-1
-// methodology warnings in Build 9. Converting to sync reset (FDRE) allows
-// Vivado to absorb these into DSP48E1 AREG/BREG, further reducing LUT count.
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        for (i = 0; i < TAPS; i = i + 1) begin
-            delay_line[i] <= 0;
-        end
-    end else if (data_valid) begin
-        for (i = TAPS-1; i > 0; i = i - 1) begin
-            delay_line[i] <= delay_line[i-1];
-        end
-        delay_line[0] <= data_in;
-    end
-end
+wire [4:0] base = {phase, 2'b00};   // 4 * phase
 
-// ============================================================================
-// Pipeline Stage 0b (BREG): Register coefficients
-// Runs on data_valid alongside delay_line shift.
-// Vivado absorbs into DSP48E1 B-port pipeline register (BREG=1).
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        for (i = 0; i < TAPS; i = i + 1) begin
-            coeff_reg[i] <= 0;
-        end
-    end else if (data_valid) begin
-        for (i = 0; i < TAPS; i = i + 1) begin
-            coeff_reg[i] <= coeff[i];
-        end
-    end
-end
+assign fir_ready = (!run) || (phase == 2'd3);
 
-// ============================================================================
-// Pipeline Stage 0c (MREG): Register multiply outputs
-// Captures combinatorial multiply results one cycle after BREG.
-// Vivado absorbs into DSP48E1 M-register (MREG=1).
-// ============================================================================
+// ---- Delay line + phase scheduler ----
 always @(posedge clk) begin
     if (!reset_n) begin
-        for (i = 0; i < TAPS; i = i + 1) begin
-            mult_reg[i] <= 0;
-        end
-    end else if (valid_pipe[0]) begin
-        for (i = 0; i < TAPS; i = i + 1) begin
-            mult_reg[i] <= mult_comb[i];
-        end
-    end
-end
-
-// ============================================================================
-// Pipeline Stage 1 (Level 0): Register 16 pairwise sums of 32 multiply results
-// Each addition is a single 36-bit add — one DSP48E1 hop (~1.7ns), fits 10ns.
-// Sync reset enables DSP48E1 absorption (fixes DPOR-1 warnings)
-// Now uses mult_result (from mult_reg/MREG stage) instead of combinatorial multiply.
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        for (i = 0; i < 16; i = i + 1) begin
-            add_l0[i] <= 0;
-        end
-    end else if (valid_pipe[1]) begin
-        for (i = 0; i < 16; i = i + 1) begin
-            // mult_result is (DATA_WIDTH + COEFF_WIDTH) = 36 bits = ACCUM_WIDTH,
-            // so no sign extension is needed. Direct assignment preserves the
-            // signed multiply result. (Fixes Vivado Synth 8-693 "zero replication
-            // count" warning from the original {0{sign_bit}} expression.)
-            add_l0[i] <= mult_result[2*i] + mult_result[2*i+1];
-        end
-    end
-end
-
-// ============================================================================
-// Pipeline Stage 2 (Level 1): 8 pairwise sums of 16 Level-0 results
-// Sync reset enables DSP48E1 absorption (fixes DPOR-1 warnings)
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        for (i = 0; i < 8; i = i + 1) begin
-            add_l1[i] <= 0;
-        end
-    end else if (valid_pipe[2]) begin
-        for (i = 0; i < 8; i = i + 1) begin
-            add_l1[i] <= add_l0[2*i] + add_l0[2*i+1];
-        end
-    end
-end
-
-// ============================================================================
-// Pipeline Stage 3 (Level 2): 4 pairwise sums of 8 Level-1 results
-// Sync reset enables DSP48E1 absorption (fixes DPOR-1 warnings)
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        for (i = 0; i < 4; i = i + 1) begin
-            add_l2[i] <= 0;
-        end
-    end else if (valid_pipe[3]) begin
-        for (i = 0; i < 4; i = i + 1) begin
-            add_l2[i] <= add_l1[2*i] + add_l1[2*i+1];
-        end
-    end
-end
-
-// ============================================================================
-// Pipeline Stage 4 (Level 3): 2 pairwise sums of 4 Level-2 results
-// Sync reset enables DSP48E1 absorption (fixes DPOR-1 warnings)
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        add_l3[0] <= 0;
-        add_l3[1] <= 0;
-    end else if (valid_pipe[4]) begin
-        add_l3[0] <= add_l2[0] + add_l2[1];
-        add_l3[1] <= add_l2[2] + add_l2[3];
-    end
-end
-
-// ============================================================================
-// Pipeline Stage 5 (Level 4): Final sum of 2 Level-3 results
-// Sync reset enables DSP48E1 absorption (fixes DPOR-1 warnings)
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        accumulator_reg <= 0;
-    end else if (valid_pipe[5]) begin
-        accumulator_reg <= add_l3[0] + add_l3[1];
-    end
-end
-
-// ============================================================================
-// Pipeline Stage 6: Output saturation/rounding (registered)
-// Sync reset enables DSP48E1 absorption (fixes DPOR-1 warnings)
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        data_out <= 0;
-        data_out_valid <= 0;
+        for (i = 0; i < TAPS; i = i + 1) dline[i] <= {DATA_W{1'b0}};
+        run   <= 1'b0;
+        phase <= 2'd0;
     end else begin
-        data_out_valid <= valid_pipe[6];
-        
-        if (valid_pipe[6]) begin
-            // Output saturation logic
-            if (accumulator_reg > (2**(ACCUM_WIDTH-2)-1)) begin
-                data_out <= (2**(DATA_WIDTH-1))-1;
-            end else if (accumulator_reg < -(2**(ACCUM_WIDTH-2))) begin
-                data_out <= -(2**(DATA_WIDTH-1));
+        if (data_valid) begin
+            for (i = TAPS-1; i > 0; i = i - 1) dline[i] <= dline[i-1];
+            dline[0] <= data_in;
+            run   <= 1'b1;
+            phase <= 2'd0;
+        end else if (run) begin
+            phase <= phase + 2'd1;
+            if (phase == 2'd3) run <= 1'b0;
+        end
+    end
+end
+
+// ---- Stage A: pre-adders (folding) ----
+always @(posedge clk) begin
+    if (!reset_n) begin
+        vA <= 1'b0; phA <= 2'd0;
+        pre0 <= 0; pre1 <= 0; pre2 <= 0; pre3 <= 0;
+        c0 <= 0; c1 <= 0; c2 <= 0; c3 <= 0;
+    end else begin
+        vA  <= run;
+        phA <= phase;
+        pre0 <= dline[base + 0] + dline[TAPS - 1 - base - 0];
+        pre1 <= dline[base + 1] + dline[TAPS - 1 - base - 1];
+        pre2 <= dline[base + 2] + dline[TAPS - 1 - base - 2];
+        pre3 <= dline[base + 3] + dline[TAPS - 1 - base - 3];
+        c0 <= coeff[base + 0];
+        c1 <= coeff[base + 1];
+        c2 <= coeff[base + 2];
+        c3 <= coeff[base + 3];
+    end
+end
+
+// ---- Stage B: 4 multipliers ----
+always @(posedge clk) begin
+    if (!reset_n) begin
+        vB <= 1'b0; phB <= 2'd0;
+        p0 <= 0; p1 <= 0; p2 <= 0; p3 <= 0;
+    end else begin
+        vB  <= vA;
+        phB <= phA;
+        p0  <= pre0 * c0;
+        p1  <= pre1 * c1;
+        p2  <= pre2 * c2;
+        p3  <= pre3 * c3;
+    end
+end
+
+// ---- Stage C: accumulate the 4 phases ----
+always @(posedge clk) begin
+    if (!reset_n) begin
+        acc <= {ACC_W{1'b0}};
+        vC  <= 1'b0;
+    end else begin
+        vC <= vB & (phB == 2'd3);
+        if (vB) begin
+            if (phB == 2'd0)
+                acc <= p0 + p1 + p2 + p3;
+            else
+                acc <= acc + p0 + p1 + p2 + p3;
+        end
+    end
+end
+
+// ---- Stage D: scale + saturate ----
+wire signed [ACC_W-1:0] acc_sh = acc >>> SHIFT;
+
+always @(posedge clk) begin
+    if (!reset_n) begin
+        data_out        <= {DATA_W{1'b0}};
+        data_out_valid  <= 1'b0;
+        filter_overflow <= 1'b0;
+    end else begin
+        data_out_valid <= vC;
+        if (vC) begin
+            if (acc_sh > OUT_MAX) begin
+                data_out <= OUT_MAX[DATA_W-1:0];
+                filter_overflow <= 1'b1;
+            end else if (acc_sh < OUT_MIN) begin
+                data_out <= OUT_MIN[DATA_W-1:0];
+                filter_overflow <= 1'b1;
             end else begin
-                // Round and truncate (keep middle bits)
-                data_out <= accumulator_reg[ACCUM_WIDTH-2:DATA_WIDTH-1];
+                data_out <= acc_sh[DATA_W-1:0];
+                filter_overflow <= 1'b0;
             end
         end
     end
 end
-
-// ============================================================================
-// Valid pipeline shift register (9-stage for BREG+MREG+5-level adder+output)
-// Sync reset — no DSP48 involvement but keeps reset style consistent with datapath
-// ============================================================================
-always @(posedge clk) begin
-    if (!reset_n) begin
-        valid_pipe <= 9'b000000000;
-    end else begin
-        valid_pipe <= {valid_pipe[7:0], data_valid};
-    end
-end
-
-// Always ready to accept new data (fully pipelined)
-assign fir_ready = 1'b1;
-
-// Overflow detection
-assign filter_overflow = (accumulator_reg > (2**(ACCUM_WIDTH-2)-1)) || 
-                         (accumulator_reg < -(2**(ACCUM_WIDTH-2)));
 
 endmodule

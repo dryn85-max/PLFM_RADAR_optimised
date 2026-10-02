@@ -3,7 +3,7 @@
 // tb_radar_receiver_final.v -- P0 Integration Test for radar_receiver_final
 //
 // Tests the full RX pipeline from ADC input to Doppler output:
-//   ad9484_interface (stub) -> CDC -> DDC -> ddc_input_interface
+//   adc_cmos_interface -> DDC
 //     -> matched_filter_multi_segment -> range_bin_decimator
 //     -> doppler_processor_optimized -> doppler_output
 //
@@ -11,15 +11,20 @@
 // TWO MODES (compile-time define):
 //
 //   1. GOLDEN_GENERATE mode  (-DGOLDEN_GENERATE):
-//      Dumps all Doppler output samples to golden reference files.
-//      Run once on known-good RTL:
+//      Dumps all Doppler output samples to a SCRATCH file (never the
+//      committed golden): -DGOLDEN_OUT_PATH='"<path>"', default
+//      tb/golden/golden_doppler.generated.mem (untracked).  Blessing a new
+//      golden is a deliberate act: point GOLDEN_OUT_PATH at
+//      tb/golden/golden_doppler.mem, check two runs give the same md5, commit.
+//      Run on known-good RTL:
 //        iverilog -g2001 -DSIMULATION -DGOLDEN_GENERATE -o tb_golden_gen.vvp \
 //          <src files> tb/tb_radar_receiver_final.v
 //        mkdir -p tb/golden
 //        vvp tb_golden_gen.vvp
 //
 //   2. Default mode (no GOLDEN_GENERATE):
-//      Loads golden files, compares each Doppler output against reference,
+//      Loads the COMMITTED tb/golden/golden_doppler.mem, compares each Doppler
+//      output bit-exactly against it,
 //      and runs physics-based bounds checks.
 //        iverilog -g2001 -DSIMULATION -o tb_radar_receiver_final.vvp \
 //          <src files> tb/tb_radar_receiver_final.v
@@ -31,7 +36,7 @@
 //
 // TAP POINTS:
 //   Tap 1 (DDC output)     - bounds checking only (CDC jitter -> non-deterministic)
-//     Signals: dut.ddc_out_i [17:0], dut.ddc_out_q [17:0], dut.ddc_valid_i
+//     Signals: dut.ddc_out_i [17:0], dut.ddc_out_q [17:0], dut.ddc_valid
 //   Tap 2 (Doppler output) - golden compared (deterministic after MF buffering)
 //     Signals: doppler_output[31:0], doppler_valid, doppler_bin[4:0],
 //              range_bin_out[5:0]
@@ -40,9 +45,8 @@
 //   2048 entries of 32-bit hex, indexed by range_bin*32 + doppler_bin
 //
 // Strategy:
-//   - Uses behavioral stub for ad9484_interface_400m (no Xilinx primitives)
 //   - Overrides radar_mode_controller timing params for fast simulation
-//   - Feeds 120 MHz tone at ADC input (IF frequency -> DDC passband)
+//   - Feeds 20 MHz tone at ADC input (IF frequency -> DDC passband)
 //   - Verifies structural correctness + golden comparison + bounds checks
 //
 // Convention: check task, VCD dump, CSV output, pass/fail summary
@@ -54,36 +58,28 @@ module tb_radar_receiver_final;
 // CLOCK AND RESET
 // ============================================================================
 reg clk_100m;       // 100 MHz system clock
-reg clk_400m;       // 400 MHz ADC clock
 reg reset_n;
 
 // 100 MHz: period = 10 ns
 initial clk_100m = 0;
 always #5 clk_100m = ~clk_100m;
 
-// 400 MHz: period = 2.5 ns
-initial clk_400m = 0;
-always #1.25 clk_400m = ~clk_400m;
-
 // ============================================================================
 // ADC STIMULUS
 // ============================================================================
-// Feed a 120 MHz tone (IF frequency) sampled at 400 MHz
-// Phase increment per sample: 120/400 * 65536 = 19660.8
-// This produces a strong DC component after DDC downconversion
-reg [7:0] adc_data;
-reg [15:0] phase_acc;  // 16-bit phase accumulator for precision
-localparam [15:0] PHASE_INC = 16'd19661;  // 120/400 * 65536
+// Feed a 20 MHz tone (IF) sampled at 100 MHz: phase step = 0.2 * 65536 = 13107.
+// phase_acc[15:4] is a 12-bit sawtooth with strong energy at the IF.
+reg [11:0] adc_data;
+reg [15:0] phase_acc;
+localparam [15:0] PHASE_INC = 16'd13107;
 
-always @(posedge clk_400m or negedge reset_n) begin
+always @(posedge clk_100m or negedge reset_n) begin
     if (!reset_n) begin
         phase_acc <= 16'd0;
-        adc_data <= 8'd128;  // Mid-scale
+        adc_data  <= 12'd2048;
     end else begin
         phase_acc <= phase_acc + PHASE_INC;
-        // Use phase_acc[15:8] directly as pseudo-sinusoidal data
-        // A sawtooth/triangle wave has energy at IF -- good enough for integration test
-        adc_data <= phase_acc[15:8];
+        adc_data  <= phase_acc[15:4];
     end
 end
 
@@ -136,12 +132,10 @@ radar_receiver_final dut (
     .clk(clk_100m),
     .reset_n(reset_n),
 
-    // ADC "LVDS" -- stub treats adc_d_p as single-ended data
-    .adc_d_p(adc_data),
-    .adc_d_n(~adc_data),       // Complement (ignored by stub)
-    .adc_dco_p(clk_400m),      // 400 MHz clock
-    .adc_dco_n(~clk_400m),     // Complement (ignored by stub)
+    .adc_data(adc_data),
+    .adc_ovr(1'b0),
     .adc_pwdn(),
+    .adc_overrange(),
 
     .chirp_counter(chirp_counter),
     .tx_frame_start(tx_frame_start),
@@ -180,7 +174,7 @@ radar_receiver_final dut (
 // Reduce radar_mode_controller timing to keep simulation tractable.
 // Real values: LONG_CHIRP=3000, LONG_LISTEN=13700, GUARD=17540,
 //              SHORT_CHIRP=50, SHORT_LISTEN=17450  (total ~51740 per chirp)
-// Need enough DDC samples to fill MF buffer (896) plus latency buffer (3187).
+// Need enough DDC samples to fill the MF segment (256 at 25 MSPS = 1024 clk).
 // At ~1 DDC sample per sys_clk, we need at least ~5000 sys_clk per chirp.
 // Use moderately reduced values: ~5000 cycles per chirp pair
 defparam dut.rmc.LONG_CHIRP_CYCLES   = 500;
@@ -215,7 +209,7 @@ endtask
 // GOLDEN MEMORY DECLARATIONS AND LOAD/STORE LOGIC
 // ============================================================================
 localparam GOLDEN_ENTRIES   = 2048;  // 64 range bins * 32 Doppler bins
-localparam GOLDEN_TOLERANCE = 2;     // +/- 2 LSB tolerance for comparison
+localparam GOLDEN_TOLERANCE = 0;     // bit-exact: the receiver output is deterministic
 
 reg [31:0] golden_doppler [0:2047];
 
@@ -265,7 +259,7 @@ initial begin
 end
 
 always @(posedge clk_100m) begin
-    if (reset_n && dut.ddc_valid_i) begin
+    if (reset_n && dut.ddc_valid) begin
         ddc_energy_acc <= ddc_energy_acc
             + ($signed(dut.ddc_out_i) * $signed(dut.ddc_out_i))
             + ($signed(dut.ddc_out_q) * $signed(dut.ddc_out_q));
@@ -490,10 +484,10 @@ end
 always @(posedge clk_100m) begin
     // Multi-segment FSM state changes
     if (dut.mf_dual.state != mf_state_prev) begin
-        $display("[MF_DBG t=%0t] multi_seg state: %0d -> %0d (seg=%0d, wr_ptr=%0d, rd_ptr=%0d, samples=%0d)",
+        $display("[MF_DBG t=%0t] multi_seg state: %0d -> %0d (seg=%0d, wr_ptr=%0d, rd_ptr=%0d, window=%0d)",
                  $time, mf_state_prev, dut.mf_dual.state,
                  dut.mf_dual.current_segment, dut.mf_dual.buffer_write_ptr,
-                 dut.mf_dual.buffer_read_ptr, dut.mf_dual.chirp_samples_collected);
+                 dut.mf_dual.buffer_read_ptr, dut.mf_dual.window_len);
         mf_state_prev = dut.mf_dual.state;
     end
     // Processing chain state changes
@@ -519,17 +513,17 @@ end
 // ============================================================================
 // Simulation timeout calculation:
 // 1. DDC pipeline fill: ~4 sys_clk cycles
-// 2. MF overlap-save buffer fill: 896 valid DDC samples
-// 3. Latency buffer priming: 3187 valid_in assertions
-// 4. 1024 MF outputs -> range_bin_decimator -> 64 decimated outputs
+// 2. MF overlap-save buffer fill: 256 valid DDC samples per segment
+// 3. Reference spectra come from the ROM (no priming)
+// 4. 4 x 256 MF outputs -> range_bin_decimator -> 64 decimated outputs
 // 5. 32 chirps of decimated data -> Doppler FFT
 //
 // With shortened mode controller timing (~600 cycles per chirp pair),
-// DDC output rate depends on how many 400MHz samples per chirp period
-// produce valid 100MHz outputs (CIC 4x decimation = ~1 per 4 clk_400m).
+// DDC output rate depends on how many 100MHz samples per chirp period
+// produce valid baseband outputs (CIC 4x decimation = 1 per 4 clk_100m).
 //
 // Conservative estimate: ~500K 100MHz cycles for the full pipeline.
-// ~4050 cycles/chirp x 32 chirps = ~130K, plus latency buffer priming,
+// ~4050 cycles/chirp x 32 chirps = ~130K,
 // plus Doppler processing time. Set generous timeout.
 
 localparam SIM_TIMEOUT = 2_000_000;  // 2M cycles -- full pipeline with multi-segment drain
@@ -575,9 +569,20 @@ initial begin
 
     // ---- DUMP GOLDEN FILE (generate mode only) ----
 `ifdef GOLDEN_GENERATE
-    $writememh("tb/golden/golden_doppler.mem", golden_doppler);
-    $display("[GOLDEN_GENERATE] Wrote tb/golden/golden_doppler.mem (%0d entries captured)",
+    // Generate NEVER writes the committed golden file: the committed
+    // tb/golden/golden_doppler.mem is the reference that default (compare)
+    // mode checks against.  To bless a new golden after a legitimate output
+    // change, run generate with -DGOLDEN_OUT_PATH='"tb/golden/golden_doppler.mem"'
+    // and commit the result deliberately.
+`ifdef GOLDEN_OUT_PATH
+    $writememh(`GOLDEN_OUT_PATH, golden_doppler);
+    $display("[GOLDEN_GENERATE] Wrote %0s (%0d entries captured)",
+             `GOLDEN_OUT_PATH, doppler_output_count);
+`else
+    $writememh("tb/golden/golden_doppler.generated.mem", golden_doppler);
+    $display("[GOLDEN_GENERATE] Wrote tb/golden/golden_doppler.generated.mem (%0d entries captured)",
              doppler_output_count);
+`endif
 `endif
 
     // ================================================================
@@ -685,7 +690,9 @@ initial begin
     // CHECK G1: All golden comparisons match
     if (golden_compare_count > 0) begin
         check(golden_mismatch_count == 0,
-              "G1: All Doppler outputs match golden reference within tolerance");
+              "G1: All Doppler outputs match committed golden reference");
+        check(golden_compare_count == GOLDEN_ENTRIES,
+              "G1b: Every golden entry (64 x 32) was compared");
     end else begin
         check(0, "G1: All Doppler outputs match golden reference (NO COMPARISONS)");
     end

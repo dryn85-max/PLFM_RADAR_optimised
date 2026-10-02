@@ -85,7 +85,7 @@ fft_engine #(
     .N(N),
     .LOG2N(LOG2N),
     .DATA_W(16),
-    .INTERNAL_W(32),
+    .INTERNAL_W(24),
     .TWIDDLE_W(16),
     .TWIDDLE_FILE("fft_twiddle_16.mem")
 ) fft_core (

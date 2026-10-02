@@ -109,8 +109,8 @@ end
 // Memory Declaration - FIXED SIZE
 // ==============================================
 localparam MEM_DEPTH = RANGE_BINS * CHIRPS_PER_FRAME;
-(* ram_style = "block" *) reg [DATA_WIDTH-1:0] doppler_i_mem [0:MEM_DEPTH-1];
-(* ram_style = "block" *) reg [DATA_WIDTH-1:0] doppler_q_mem [0:MEM_DEPTH-1];
+reg [DATA_WIDTH-1:0] doppler_i_mem [0:MEM_DEPTH-1];
+reg [DATA_WIDTH-1:0] doppler_q_mem [0:MEM_DEPTH-1];
 
 // ==============================================
 // Control Registers

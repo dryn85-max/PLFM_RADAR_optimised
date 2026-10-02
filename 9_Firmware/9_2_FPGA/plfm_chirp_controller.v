@@ -68,7 +68,7 @@ reg [15:0] sample_counter;
 wire chirp__toggling, elevation__toggling, azimuth__toggling;
 
 // LUTs for chirp waveforms
-(* ram_style = "block" *) reg [7:0] long_chirp_lut [0:3599];  // T1_SAMPLES-1
+reg [7:0] long_chirp_lut [0:3599];  // T1_SAMPLES-1
 reg [7:0] short_chirp_lut [0:59];   // T2_SAMPLES-1
 
 // Registered BRAM read output (sync-only for BRAM inference)

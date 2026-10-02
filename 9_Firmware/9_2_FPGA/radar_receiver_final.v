@@ -1,15 +1,14 @@
 `timescale 1ns / 1ps
 
 module radar_receiver_final (
-    input wire clk,           // 100MHz    
-	 input wire reset_n,
-    
-	// ADC Physical Interface (LVDS Inputs)
-    input wire [7:0] adc_d_p,        // ADC Data P (LVDS)
-    input wire [7:0] adc_d_n,        // ADC Data N (LVDS)
-    input wire adc_dco_p,            // Data Clock Output P (400MHz LVDS)
-    input wire adc_dco_n,            // Data Clock Output N (400MHz LVDS)
-	 output wire adc_pwdn,
+    input wire clk,           // processing clock = ADC data clock (nominal 100 MHz)
+    input wire reset_n,
+
+    // ADC CMOS parallel interface (12-bit offset binary, one sample per clk)
+    input wire [11:0] adc_data,
+    input wire        adc_ovr,            // ADC over-range pin
+    output wire       adc_pwdn,
+    output wire       adc_overrange,      // sticky, cleared at every Doppler frame end
     
     // Chirp counter from transmitter (for matched filter indexing)
     input wire [5:0] chirp_counter,
@@ -67,9 +66,9 @@ module radar_receiver_final (
     input wire [2:0]  host_dc_notch_width,   // DC notch: zero Doppler bins within ±width of DC
 
     // ADC raw data tap (clk_100m domain, post-DDC, for self-test / debug)
-    output wire [15:0] dbg_adc_i,            // DDC output I (16-bit signed, 100 MHz)
-    output wire [15:0] dbg_adc_q,            // DDC output Q (16-bit signed, 100 MHz)
-    output wire        dbg_adc_valid,        // DDC output valid (100 MHz)
+    output wire [15:0] dbg_adc_i,            // DDC output I (16-bit signed, 25 MSPS)
+    output wire [15:0] dbg_adc_q,            // DDC output Q (16-bit signed, 25 MSPS)
+    output wire        dbg_adc_valid,        // DDC output valid (25 MSPS strobe)
 
     // AGC status outputs (for status readback / STM32 outer loop)
     output wire [7:0]  agc_saturation_count, // Per-frame clipped sample count
@@ -89,11 +88,6 @@ wire mc_new_chirp;
 wire mc_new_elevation;
 wire mc_new_azimuth;
 
-wire [1:0] segment_request;
-wire mem_request;
-wire [15:0] ref_i, ref_q;
-wire mem_ready;
-
 wire [15:0] adc_i_scaled, adc_q_scaled;
 wire adc_valid_sync;
 
@@ -103,10 +97,6 @@ wire gc_valid;
 wire [7:0] gc_saturation_count;  // Diagnostic: per-frame clipped sample counter
 wire [7:0] gc_peak_magnitude;    // Diagnostic: per-frame peak magnitude
 wire [3:0] gc_current_gain;      // Diagnostic: effective gain_shift
-
-// Reference signals for the processing chain
-wire [15:0] long_chirp_real, long_chirp_imag;
-wire [15:0] short_chirp_real, short_chirp_imag;
 
 // ========== DOPPLER PROCESSING SIGNALS ==========
 wire [31:0] range_data_32bit;
@@ -170,73 +160,42 @@ radar_mode_controller rmc (
     .scanning(rmc_scanning),
     .scan_complete(rmc_scan_complete)
 );
-wire clk_400m;
-
-// NOTE: lvds_to_cmos_400m removed — ad9484_interface_400m now provides
-// the buffered 400MHz DCO clock via adc_dco_bufg, avoiding duplicate
-// IBUFDS instantiations on the same LVDS clock pair.
-
-// 1. ADC + CDC + Digital Gain
-
-// CMOS Output Interface (400MHz Domain)
-wire [7:0] adc_data_cmos;  // 8-bit ADC data (CMOS, from ad9484_interface_400m)
-wire adc_valid;            // Data valid signal
-
-// ADC power-down control (directly tie low = ADC always on)
+// 1. ADC capture (single edge, clk = ADC DCO) and power-down (always on)
+wire [11:0] adc_sample;
+wire        adc_sample_valid;
 assign adc_pwdn = 1'b0;
 
-ad9484_interface_400m adc (
-	.adc_d_p(adc_d_p),
-	.adc_d_n(adc_d_n),
-	.adc_dco_p(adc_dco_p),
-	.adc_dco_n(adc_dco_n),
-	.sys_clk(clk),
-	.reset_n(reset_n),
-	.adc_data_400m(adc_data_cmos),
-	.adc_data_valid_400m(adc_valid),
-	.adc_dco_bufg(clk_400m)
-);
-
-// NOTE: The cdc_adc_to_processing instance that was here used src_clk=dst_clk=clk_400m
-// (same clock domain — no crossing). Gray-code CDC on same-clock with fast-changing
-// ADC data corrupts samples because Gray coding only guarantees safe transfer of
-// values that change by 1 LSB at a time. The real 400MHz→100MHz CDC crossing is
-// handled inside ddc_400m_enhanced via CIC decimation + CDC_FIR instances.
-// Removed: cdc_adc_to_processing instance. ADC data now goes directly to DDC.
-
-// 2. DDC Input Interface
-wire signed [17:0] ddc_out_i;
-wire signed [17:0] ddc_out_q;
-
-wire ddc_valid_i;
-wire ddc_valid_q;
-
-ddc_400m_enhanced ddc(
-    .clk_400m(clk_400m),           // 400MHz clock from ADC DCO
-    .clk_100m(clk),           // 100MHz system clock //used by the 2 FIR
+adc_cmos_interface #(.DATA_W(12)) adc_if (
+    .adc_clk(clk),
     .reset_n(reset_n),
-    .adc_data(adc_data_cmos),     // ADC data at 400MHz (direct from ADC interface)
-    .adc_data_valid_i(adc_valid),     // Valid at 400MHz
-    .adc_data_valid_q(adc_valid),     // Valid at 400MHz
-    .baseband_i(ddc_out_i), // I output at 100MHz
-    .baseband_q(ddc_out_q), // Q output at 100MHz  
-    .baseband_valid_i(ddc_valid_i),     // Valid at 100MHz
-	 .baseband_valid_q(ddc_valid_q),
- 	 .mixers_enable(1'b1)
+    .adc_data(adc_data),
+    .adc_ovr(adc_ovr),
+    .overrange_clear(doppler_frame_done),
+    .sample(adc_sample),
+    .sample_valid(adc_sample_valid),
+    .overrange(adc_overrange)
 );
 
-ddc_input_interface ddc_if (
+// 2. DDC: NCO (20 MHz) + mixer + CIC (R=4) + FIR -> 25 MSPS complex baseband
+wire signed [15:0] ddc_out_i;
+wire signed [15:0] ddc_out_q;
+wire ddc_valid;
+
+ddc #(.ADC_W(12), .OUT_W(16)) ddc_inst (
     .clk(clk),
     .reset_n(reset_n),
-    .ddc_i(ddc_out_i),
-    .ddc_q(ddc_out_q),
-    .valid_i(ddc_valid_i),
-    .valid_q(ddc_valid_q),
-    .adc_i(adc_i_scaled),
-    .adc_q(adc_q_scaled),
-    .adc_valid(adc_valid_sync),
-    .data_sync_error()
+    .mixers_enable(1'b1),
+    .adc_data(adc_sample),
+    .adc_valid(adc_sample_valid),
+    .baseband_i(ddc_out_i),
+    .baseband_q(ddc_out_q),
+    .baseband_valid(ddc_valid)
 );
+
+// DDC output is already 16-bit at 25 MSPS - no rescaling stage
+assign adc_i_scaled   = ddc_out_i;
+assign adc_q_scaled   = ddc_out_q;
+assign adc_valid_sync = ddc_valid;
 
 // 2b. Digital Gain Control with AGC
 // Host-configurable power-of-2 shift between DDC output and matched filter.
@@ -266,57 +225,7 @@ rx_gain_control gain_ctrl (
     .current_gain(gc_current_gain)
 );
 
-// 3. Dual Chirp Memory Loader
-wire [9:0] sample_addr_from_chain;
-
-chirp_memory_loader_param chirp_mem (
-    .clk(clk),
-    .reset_n(reset_n),
-    .segment_select(segment_request),
-    .mem_request(mem_request),
-    .use_long_chirp(use_long_chirp),
-	 .sample_addr(sample_addr_from_chain),
-    .ref_i(ref_i),
-    .ref_q(ref_q),
-    .mem_ready(mem_ready)
-);
-
-// Sample address generator
-reg [9:0] sample_addr_reg;
-always @(posedge clk or negedge reset_n) begin
-    if (!reset_n) begin
-        sample_addr_reg <= 0;
-    end else if (mem_request) begin
-        sample_addr_reg <= sample_addr_reg + 1;
-        if (sample_addr_reg == 1023) sample_addr_reg <= 0;
-    end
-end
-// sample_addr_wire removed — was unused implicit wire (synthesis warning)
-
-// 4. CRITICAL: Reference Chirp Latency Buffer
-// This aligns reference data with FFT output (2159 cycle delay)
-wire [15:0] delayed_ref_i, delayed_ref_q;
-wire mem_ready_delayed;
-
-latency_buffer #(
-    .DATA_WIDTH(32),  // 16-bit I + 16-bit Q
-	.LATENCY(3187)
-) ref_latency_buffer (
-    .clk(clk),
-    .reset_n(reset_n),
-    .data_in({ref_i, ref_q}),
-    .valid_in(mem_request),
-    .data_out({delayed_ref_i, delayed_ref_q}),
-    .valid_out(mem_ready_delayed)
-);
-
-// Assign delayed reference signals
-assign long_chirp_real = delayed_ref_i;
-assign long_chirp_imag = delayed_ref_q;
-assign short_chirp_real = delayed_ref_i;
-assign short_chirp_imag = delayed_ref_q;
-
-// 5. Dual Chirp Matched Filter
+// Matched filter range-profile wires
 
 wire signed [15:0] range_profile_i;
 wire signed [15:0] range_profile_q;
@@ -327,36 +236,36 @@ assign range_profile_i_out = range_profile_i;
 assign range_profile_q_out = range_profile_q;
 assign range_profile_valid_out = range_valid;
 
-matched_filter_multi_segment mf_dual (
+wire mf_overrun;
+// 3. Matched filter: 256-point overlap-save segments, reference spectra in ROM
+matched_filter_multi_segment #(
+    .N_FFT(256), .LOG2N(8), .OVERLAP(32),
+    .LONG_CHIRP_SAMPLES(750), .SHORT_CHIRP_SAMPLES(13), .LONG_SEGMENTS(4)
+) mf_dual (
     .clk(clk),
     .reset_n(reset_n),
-    .ddc_i({{2{gc_i[15]}}, gc_i}),
-    .ddc_q({{2{gc_q[15]}}, gc_q}),
+    .ddc_i(gc_i),
+    .ddc_q(gc_q),
     .ddc_valid(gc_valid),
     .use_long_chirp(use_long_chirp),
     .chirp_counter(chirp_counter),
     .mc_new_chirp(mc_new_chirp),
     .mc_new_elevation(mc_new_elevation),
     .mc_new_azimuth(mc_new_azimuth),
-	 .long_chirp_real(delayed_ref_i),      // From latency buffer
-    .long_chirp_imag(delayed_ref_q),
-    .short_chirp_real(delayed_ref_i),     // Same for short chirp
-    .short_chirp_imag(delayed_ref_q),
-    .segment_request(segment_request),
-    .mem_request(mem_request),
-	 .sample_addr_out(sample_addr_from_chain),
-    .mem_ready(mem_ready),
     .pc_i_w(range_profile_i),
     .pc_q_w(range_profile_q),
-    .pc_valid_w(range_valid)
+    .pc_valid_w(range_valid),
+    .status(),
+    .mf_overrun(mf_overrun)   // sticky: chirp arrived while the previous one was processed (not yet host-visible)
 );
 
 // ========== CRITICAL: RANGE BIN DECIMATOR ==========
-// Convert 1024 range bins to 64 bins for Doppler
+// Convert 256 range bins to 64 bins for Doppler
 range_bin_decimator #(
-    .INPUT_BINS(1024),
+    .INPUT_BINS(256),
     .OUTPUT_BINS(64),
-    .DECIMATION_FACTOR(16)
+    .DECIMATION_FACTOR(4),
+    .LOG2_DECIMATION(2)
 ) range_decim (
     .clk(clk),
     .reset_n(reset_n),
@@ -459,34 +368,6 @@ doppler_processor_optimized #(
 // connected to doppler_proc ports above
 
 // ========== STATUS ==========
-
-// ========== DEBUG AND VERIFICATION ==========
-reg [31:0] frame_counter;
-reg [5:0] chirps_in_current_frame;
-
-always @(posedge clk or negedge reset_n) begin
-    if (!reset_n) begin
-        frame_counter <= 0;
-        chirps_in_current_frame <= 0;
-    end else begin
-        // Count chirps in current frame
-        if (range_data_valid && decimated_range_bin == 0) begin
-            // First range bin of a chirp
-            chirps_in_current_frame <= chirps_in_current_frame + 1;
-        end
-        
-        // Detect frame completion
-        if (new_chirp_frame) begin
-            frame_counter <= frame_counter + 1;
-            `ifdef SIMULATION
-            $display("[TOP] Frame %0d started. Previous frame had %0d chirps", 
-                     frame_counter, chirps_in_current_frame);
-            `endif
-            chirps_in_current_frame <= 0;
-        end
-    end
-end
-
 
 // ========== ADC DEBUG TAP (for self-test / bring-up) ==========
 assign dbg_adc_i     = adc_i_scaled;

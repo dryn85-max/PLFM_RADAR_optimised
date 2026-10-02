@@ -82,6 +82,80 @@ module tb_range_bin_decimator;
         end
     end
 
+
+    // ════════════════════════════════════════════════════════════
+    // 256 -> 64 averaging (the receiver's configuration, factor 4):
+    // second DUT with LOG2_DECIMATION = 2, mode 10, full-range data.
+    // ════════════════════════════════════════════════════════════
+    reg         a_reset_n;
+    reg  signed [15:0] a_i_in, a_q_in;
+    reg         a_valid_in;
+    wire signed [15:0] a_i_out, a_q_out;
+    wire        a_valid_out;
+    wire [5:0]  a_bin_idx;
+    wire        a_wd;
+    integer     a_cnt, a_err, a_order_err, a_done;
+    integer     a_n, a_k, a_sum_i, a_sum_q, a_exp_i, a_exp_q;
+    reg signed [15:0] a_ref_i [0:255];
+    reg signed [15:0] a_ref_q [0:255];
+
+    range_bin_decimator #(
+        .INPUT_BINS(256), .OUTPUT_BINS(64), .DECIMATION_FACTOR(4), .LOG2_DECIMATION(2)
+    ) uut_avg (
+        .clk(clk), .reset_n(a_reset_n),
+        .range_i_in(a_i_in), .range_q_in(a_q_in), .range_valid_in(a_valid_in),
+        .range_i_out(a_i_out), .range_q_out(a_q_out), .range_valid_out(a_valid_out),
+        .range_bin_index(a_bin_idx),
+        .decimation_mode(2'b10), .start_bin(10'd0),
+        .watchdog_timeout(a_wd)
+    );
+
+    always @(posedge clk) begin
+        #1;
+        if (a_valid_out && a_cnt < 64) begin
+            a_sum_i = 0; a_sum_q = 0;
+            for (a_k = 0; a_k < 4; a_k = a_k + 1) begin
+                a_sum_i = a_sum_i + a_ref_i[a_cnt*4 + a_k];
+                a_sum_q = a_sum_q + a_ref_q[a_cnt*4 + a_k];
+            end
+            a_exp_i = a_sum_i >>> 2;   // floor(sum / 4)
+            a_exp_q = a_sum_q >>> 2;
+            if (a_i_out !== a_exp_i[15:0] || a_q_out !== a_exp_q[15:0]) a_err = a_err + 1;
+            if (a_bin_idx !== a_cnt[5:0]) a_order_err = a_order_err + 1;
+            a_cnt = a_cnt + 1;
+        end else if (a_valid_out) begin
+            a_err = a_err + 1;     // more than 64 outputs
+        end
+    end
+
+    initial begin
+        a_reset_n = 0; a_valid_in = 0; a_i_in = 0; a_q_in = 0;
+        a_cnt = 0; a_err = 0; a_order_err = 0; a_done = 0;
+        // full-range data: extremes, negatives, pseudo-random mix
+        for (a_n = 0; a_n < 256; a_n = a_n + 1) begin
+            case (a_n % 8)
+                0: begin a_ref_i[a_n] = 16'sh7FFF; a_ref_q[a_n] = 16'sh8000; end
+                1: begin a_ref_i[a_n] = 16'sh7FFF; a_ref_q[a_n] = 16'sh8000; end
+                2: begin a_ref_i[a_n] = 16'sh8000; a_ref_q[a_n] = 16'sh7FFF; end
+                3: begin a_ref_i[a_n] = 16'sh7FFF; a_ref_q[a_n] = 16'sh7FFF; end
+                default: begin
+                    a_ref_i[a_n] = (a_n * 7919 + 123) % 65536 - 32768;
+                    a_ref_q[a_n] = 100 - ((a_n * 104729) % 4001);
+                end
+            endcase
+        end
+        repeat (4) @(posedge clk);
+        a_reset_n = 1;
+        @(posedge clk); #1;
+        for (a_n = 0; a_n < 256; a_n = a_n + 1) begin
+            a_i_in = a_ref_i[a_n]; a_q_in = a_ref_q[a_n]; a_valid_in = 1'b1;
+            @(posedge clk); #1;
+        end
+        a_valid_in = 1'b0;
+        repeat (20) @(posedge clk);
+        a_done = 1;
+    end
+
     // ── Check task ─────────────────────────────────────────────
     task check;
         input cond;
@@ -833,6 +907,12 @@ module tb_range_bin_decimator;
         // Just wait 512 clocks doing nothing — should NOT trigger watchdog
         repeat (512) @(posedge clk); #1;
         check(wd_pulse_count == 0, "15d: No watchdog timeout while idle");
+
+        // ── 256 -> 64 averaging, mode 10 (receiver configuration) ──
+        wait (a_done == 1);
+        check(a_cnt == 64, "16a: 256/4 averaging emits 64 bins");
+        check(a_err == 0,  "16b: 256/4 averaging = floor(sum/4), full-range data");
+        check(a_order_err == 0, "16c: 256/4 averaging bin indices 0..63 in order");
 
         // ════════════════════════════════════════════════════════
         // Summary

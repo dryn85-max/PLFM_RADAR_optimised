@@ -1,9 +1,129 @@
 `timescale 1ns / 1ps
 
+
+// ============================================================================
+// cdc_handshake stress harness: back-to-back traffic, data-integrity scoreboard.
+//   HOLD_VALID=1 : src_valid held permanently high, src_data changes every
+//                  src_clk; the accepted words (src_valid && src_ready at a
+//                  src_clk edge) are the reference sequence.
+//   HOLD_VALID=0 : valid/ready producer with random gaps, value = running index.
+//   DST_BP=1     : destination applies random back-pressure on dst_ready.
+// Every word delivered at the destination must equal the next accepted word, in
+// order, with no duplicates, no gaps and no tearing.  The two domains are
+// released from reset at different times.
+// ============================================================================
+module hs_stress #(
+    parameter SRC_PERIOD = 8.333,
+    parameter DST_PERIOD = 10.0,
+    parameter HOLD_VALID = 1,
+    parameter DST_BP     = 0,
+    parameter NWORDS     = 300,
+    parameter SEED       = 1
+)(
+    output reg         done,
+    output reg [31:0]  errors,
+    output reg [31:0]  n_sent,
+    output reg [31:0]  n_recv
+);
+    reg src_clk, dst_clk, src_rst_n, dst_rst_n;
+    reg [31:0] src_data;
+    reg        src_valid;
+    wire       src_ready, dst_valid;
+    wire [31:0] dst_data;
+    reg        dst_ready;
+    reg [31:0] sent [0:NWORDS+15];
+    integer    seed_a, seed_b;
+    reg [31:0] ctr;
+    integer    r;
+
+    initial begin
+        src_clk = 0; dst_clk = 0; src_rst_n = 0; dst_rst_n = 0;
+        src_data = 0; src_valid = 0; dst_ready = 0; done = 0;
+        errors = 0; n_sent = 0; n_recv = 0; ctr = 32'h1000;
+        seed_a = SEED; seed_b = SEED + 77;
+    end
+    always #(SRC_PERIOD/2.0) src_clk = ~src_clk;
+    always #(DST_PERIOD/2.0) dst_clk = ~dst_clk;
+
+    cdc_handshake #(.WIDTH(32)) dut (
+        .src_clk(src_clk), .dst_clk(dst_clk),
+        .src_reset_n(src_rst_n), .dst_reset_n(dst_rst_n),
+        .src_data(src_data), .src_valid(src_valid), .src_ready(src_ready),
+        .dst_data(dst_data), .dst_valid(dst_valid), .dst_ready(dst_ready)
+    );
+
+    // Source side producer + accepted-word log
+    always @(posedge src_clk) begin
+        if (!src_rst_n) begin
+            src_valid <= 1'b0;
+            src_data  <= 32'd0;
+            ctr       <= 32'h1000;
+        end else if (HOLD_VALID) begin
+            src_valid <= (n_sent < NWORDS);
+            ctr       <= ctr + 32'd1;
+            src_data  <= ctr;
+            if (src_valid && src_ready) begin
+                sent[n_sent] = src_data;
+                n_sent = n_sent + 1;
+            end
+        end else begin
+            if (src_valid && src_ready) begin
+                sent[n_sent] = src_data;
+                n_sent = n_sent + 1;
+                ctr <= ctr + 32'd1;
+                src_data <= (ctr + 32'd1) * 32'h01010101;
+                r = $random(seed_a);
+                src_valid <= (n_sent < NWORDS) && (r[1:0] != 2'b00);
+            end else if (!src_valid) begin
+                r = $random(seed_a);
+                src_data  <= ctr * 32'h01010101;
+                src_valid <= (n_sent < NWORDS) && (r[1:0] != 2'b00);
+            end
+        end
+    end
+
+    // Destination consumer + scoreboard
+    always @(posedge dst_clk) begin
+        if (!dst_rst_n) begin
+            dst_ready <= 1'b0;
+        end else begin
+            if (DST_BP) begin
+                r = $random(seed_b);
+                dst_ready <= r[0];
+            end else
+                dst_ready <= 1'b1;
+            if (dst_valid && dst_ready) begin
+                if (n_recv >= n_sent) begin
+                    errors = errors + 1;   // word from nowhere (duplicate)
+                end else if (dst_data !== sent[n_recv]) begin
+                    errors = errors + 1;   // tear / gap / reorder
+                end
+                n_recv = n_recv + 1;
+            end
+        end
+    end
+
+    initial begin
+        #100;       src_rst_n = 1;
+        #37;        dst_rst_n = 1;
+        wait (n_sent >= NWORDS);
+        #3000;      // drain + look for late duplicates
+        done = 1;
+    end
+    // timeout so a stuck handshake is reported rather than hanging the run
+    initial begin
+        #2000000;
+        if (!done) begin
+            errors = errors + 1000;
+            done = 1;
+        end
+    end
+endmodule
+
 module tb_cdc_modules;
 
     // ── Clock periods (reflecting real system) ─────────────────
-    localparam SRC_CLK_PERIOD = 2.5;    // 400 MHz (ADC domain)
+    localparam SRC_CLK_PERIOD = 2.5;    // fast source clock (4:1 ratio to the 100 MHz processing domain)
     localparam DST_CLK_PERIOD = 10.0;   // 100 MHz (processing domain)
     // For handshake tests, use different ratio
     localparam HS_SRC_PERIOD  = 10.0;   // 100 MHz
@@ -30,35 +150,6 @@ module tb_cdc_modules;
             end
         end
     endtask
-
-    // ════════════════════════════════════════════════════════════
-    // MODULE 1: cdc_adc_to_processing (Gray-code multi-bit CDC)
-    // ════════════════════════════════════════════════════════════
-    reg         m1_src_clk;
-    reg         m1_dst_clk;
-    reg         m1_src_reset_n;
-    reg         m1_dst_reset_n;
-    reg  [7:0]  m1_src_data;
-    reg         m1_src_valid;
-    wire [7:0]  m1_dst_data;
-    wire        m1_dst_valid;
-
-    always #(SRC_CLK_PERIOD/2) m1_src_clk = ~m1_src_clk;
-    always #(DST_CLK_PERIOD/2) m1_dst_clk = ~m1_dst_clk;
-
-    cdc_adc_to_processing #(
-        .WIDTH(8),
-        .STAGES(3)
-    ) uut_m1 (
-        .src_clk     (m1_src_clk),
-        .dst_clk     (m1_dst_clk),
-        .src_reset_n (m1_src_reset_n),
-        .dst_reset_n (m1_dst_reset_n),
-        .src_data    (m1_src_data),
-        .src_valid   (m1_src_valid),
-        .dst_data    (m1_dst_data),
-        .dst_valid   (m1_dst_valid)
-    );
 
     // ════════════════════════════════════════════════════════════
     // MODULE 2: cdc_single_bit
@@ -103,7 +194,8 @@ module tb_cdc_modules;
     ) uut_m3 (
         .src_clk  (m3_src_clk),
         .dst_clk  (m3_dst_clk),
-        .reset_n  (m3_reset_n),
+        .src_reset_n(m3_reset_n),
+        .dst_reset_n(m3_reset_n),
         .src_data (m3_src_data),
         .src_valid(m3_src_valid),
         .src_ready(m3_src_ready),
@@ -112,349 +204,35 @@ module tb_cdc_modules;
         .dst_ready(m3_dst_ready)
     );
 
+    // ── Stress instances (all run concurrently with the directed tests) ──
+    wire st0_done, st1_done, st2_done, st3_done, st4_done, st5_done;
+    wire [31:0] st0_err, st1_err, st2_err, st3_err, st4_err, st5_err;
+    wire [31:0] st0_sent, st1_sent, st2_sent, st3_sent, st4_sent, st5_sent;
+    wire [31:0] st0_recv, st1_recv, st2_recv, st3_recv, st4_recv, st5_recv;
+    hs_stress #(.SRC_PERIOD(8.333), .DST_PERIOD(10.0),  .HOLD_VALID(1), .DST_BP(0), .SEED(1))
+        st0 (.done(st0_done), .errors(st0_err), .n_sent(st0_sent), .n_recv(st0_recv));
+    hs_stress #(.SRC_PERIOD(10.0),  .DST_PERIOD(8.333), .HOLD_VALID(1), .DST_BP(0), .SEED(2))
+        st1 (.done(st1_done), .errors(st1_err), .n_sent(st1_sent), .n_recv(st1_recv));
+    hs_stress #(.SRC_PERIOD(8.333), .DST_PERIOD(10.0),  .HOLD_VALID(0), .DST_BP(0), .SEED(3))
+        st2 (.done(st2_done), .errors(st2_err), .n_sent(st2_sent), .n_recv(st2_recv));
+    hs_stress #(.SRC_PERIOD(10.0),  .DST_PERIOD(8.333), .HOLD_VALID(0), .DST_BP(0), .SEED(4))
+        st3 (.done(st3_done), .errors(st3_err), .n_sent(st3_sent), .n_recv(st3_recv));
+    hs_stress #(.SRC_PERIOD(8.333), .DST_PERIOD(10.0),  .HOLD_VALID(1), .DST_BP(1), .SEED(5))
+        st4 (.done(st4_done), .errors(st4_err), .n_sent(st4_sent), .n_recv(st4_recv));
+    hs_stress #(.SRC_PERIOD(10.0),  .DST_PERIOD(8.333), .HOLD_VALID(0), .DST_BP(1), .SEED(6))
+        st5 (.done(st5_done), .errors(st5_err), .n_sent(st5_sent), .n_recv(st5_recv));
+
     // ── Main test sequence ─────────────────────────────────────
     initial begin
         $dumpfile("tb_cdc_modules.vcd");
         $dumpvars(0, tb_cdc_modules);
 
         // Init all clocks and signals
-        m1_src_clk   = 0; m1_dst_clk   = 0;
-        m1_src_reset_n = 0; m1_dst_reset_n = 0;
-        m1_src_data  = 0; m1_src_valid  = 0;
         m2_src_clk   = 0; m2_dst_clk   = 0; m2_reset_n   = 0;
         m2_src_signal = 0;
         m3_src_clk   = 0; m3_dst_clk   = 0; m3_reset_n   = 0;
         m3_src_data  = 0; m3_src_valid  = 0; m3_dst_ready = 0;
         pass_count   = 0; fail_count   = 0; test_num     = 0;
-
-        // ════════════════════════════════════════════════════════
-        // SECTION A: cdc_adc_to_processing tests
-        // ════════════════════════════════════════════════════════
-        $display("\n=== Section A: cdc_adc_to_processing (Gray-code CDC) ===");
-
-        // ── A1: Reset behaviour ────────────────────────────────
-        $display("\n--- A1: Reset Behaviour (split-domain reset) ---");
-        m1_src_reset_n = 0; m1_dst_reset_n = 0;
-        #100;  // let both clocks run
-        check(m1_dst_valid === 1'b0, "M1: dst_valid = 0 during reset");
-        check(m1_dst_data === 8'd0, "M1: dst_data = 0 during reset");
-
-        // Release reset
-        @(posedge m1_dst_clk);
-        m1_src_reset_n = 1; m1_dst_reset_n = 1;
-        @(posedge m1_src_clk);
-
-        // ── A2: Single value transfer ──────────────────────────
-        $display("\n--- A2: Single Value Transfer ---");
-        m1_src_data  = 8'hA5;
-        m1_src_valid = 1;
-        @(posedge m1_src_clk); #1;
-        m1_src_valid = 0;
-
-        // Wait for CDC propagation (3 stages × dst_clk + margin)
-        begin : a2_wait
-            integer wait_cycles;
-            reg saw_valid;
-            saw_valid = 0;
-            for (wait_cycles = 0; wait_cycles < 20; wait_cycles = wait_cycles + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_valid) begin
-                    saw_valid = 1;
-                    disable a2_wait;
-                end
-            end
-        end
-        check(m1_dst_valid === 1'b1, "M1: dst_valid asserts after CDC");
-        check(m1_dst_data === 8'hA5, "M1: data 0xA5 transferred correctly");
-
-        // ── A3: Multiple sequential values ─────────────────────
-        $display("\n--- A3: Multiple Sequential Values ---");
-        m1_src_reset_n = 0; m1_dst_reset_n = 0;
-        #100;
-        m1_src_reset_n = 1; m1_dst_reset_n = 1;
-        @(posedge m1_src_clk);
-
-        begin : a3_block
-            reg [7:0] received_values [0:31];
-            integer rx_count;
-            integer tx_count;
-            integer total_wait;
-            reg all_received;
-
-            rx_count = 0;
-
-            // Send 8 values, one per src_clk cycle
-            // At 400:100 ratio, src sends 4x faster than dst can sample
-            // Gray-code CDC may miss intermediate values — that's expected.
-            // What matters is that received values are VALID (not corrupted).
-            for (tx_count = 0; tx_count < 8; tx_count = tx_count + 1) begin
-                m1_src_data  = tx_count * 37 + 10;  // 10, 47, 84, 121, 158, 195, 232, 13
-                m1_src_valid = 1;
-                @(posedge m1_src_clk); #1;
-            end
-            m1_src_valid = 0;
-
-            // Collect outputs
-            for (total_wait = 0; total_wait < 40; total_wait = total_wait + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_valid) begin
-                    received_values[rx_count] = m1_dst_data;
-                    rx_count = rx_count + 1;
-                end
-            end
-
-            $display("  Sent 8 values at 400MHz, received %0d valid values at 100MHz",
-                     rx_count);
-            check(rx_count > 0, "M1: At least one value received from burst");
-
-            // Verify last received value matches last sent value
-            // (The CDC should eventually stabilize to the last written value)
-            if (rx_count > 0) begin
-                // Check that every received value is one of the sent values
-                begin : verify_received
-                    reg [7:0] sent_vals [0:7];
-                    reg found;
-                    integer j, k;
-                    reg all_valid;
-
-                    for (j = 0; j < 8; j = j + 1) begin
-                        sent_vals[j] = j * 37 + 10;
-                    end
-
-                    all_valid = 1;
-                    for (j = 0; j < rx_count; j = j + 1) begin
-                        found = 0;
-                        for (k = 0; k < 8; k = k + 1) begin
-                            if (received_values[j] === sent_vals[k]) found = 1;
-                        end
-                        if (!found) begin
-                            all_valid = 0;
-                            $display("  [WARN] Received value 0x%02x not in sent set",
-                                     received_values[j]);
-                        end
-                    end
-                    check(all_valid, "M1: All received values are valid (no corruption)");
-                end
-            end else begin
-                check(1'b0, "M1: All received values are valid (no corruption)");
-            end
-        end
-
-        // ── A4: Slow sender (one value every 4 dst_clk cycles) ─
-        $display("\n--- A4: Slow Sender ---");
-        m1_src_reset_n = 0; m1_dst_reset_n = 0;
-        #100;
-        m1_src_reset_n = 1; m1_dst_reset_n = 1;
-        @(posedge m1_src_clk);
-
-        begin : a4_block
-            reg [7:0] expected_vals [0:7];
-            reg [7:0] got_vals [0:7];
-            integer tx_idx, rx_idx, wait_cnt;
-            reg all_match;
-
-            rx_idx = 0;
-
-            for (tx_idx = 0; tx_idx < 4; tx_idx = tx_idx + 1) begin
-                expected_vals[tx_idx] = (tx_idx + 1) * 50;  // 50, 100, 150, 200
-                m1_src_data  = expected_vals[tx_idx];
-                m1_src_valid = 1;
-                @(posedge m1_src_clk); #1;
-                m1_src_valid = 0;
-
-                // Wait long enough for CDC to propagate
-                for (wait_cnt = 0; wait_cnt < 15; wait_cnt = wait_cnt + 1) begin
-                    @(posedge m1_dst_clk); #1;
-                    if (m1_dst_valid && rx_idx < 8) begin
-                        got_vals[rx_idx] = m1_dst_data;
-                        rx_idx = rx_idx + 1;
-                    end
-                end
-            end
-
-            $display("  Slow send: sent 4, received %0d", rx_idx);
-            check(rx_idx == 4, "M1: All 4 slow-sent values received");
-
-            all_match = 1;
-            for (i = 0; i < rx_idx && i < 4; i = i + 1) begin
-                if (got_vals[i] !== expected_vals[i]) begin
-                    all_match = 0;
-                    $display("  [WARN] Slow rx[%0d]: got 0x%02x, exp 0x%02x",
-                             i, got_vals[i], expected_vals[i]);
-                end
-            end
-            check(all_match, "M1: Slow-sent values match exactly");
-        end
-
-        // ── A5: Split-Domain Reset — Src resets while dst stays active ──
-        $display("\n--- A5: Split-Domain Reset (src resets, dst active) ---");
-        m1_src_reset_n = 0; m1_dst_reset_n = 0;
-        m1_src_data = 0; m1_src_valid = 0;
-        #100;
-
-        // Release dst_reset_n first, src stays in reset
-        m1_dst_reset_n = 1;
-        begin : a5_dst_idle
-            integer wait_cycles;
-            reg saw_valid;
-            saw_valid = 0;
-            for (wait_cycles = 0; wait_cycles < 10; wait_cycles = wait_cycles + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_valid) saw_valid = 1;
-            end
-            check(!saw_valid, "M1: dst_valid stays 0 while src is in reset");
-        end
-
-        // Now release src_reset_n
-        m1_src_reset_n = 1;
-        @(posedge m1_src_clk);
-
-        // Send data and verify transfer works after staggered reset
-        m1_src_data  = 8'h3C;
-        m1_src_valid = 1;
-        @(posedge m1_src_clk); #1;
-        m1_src_valid = 0;
-
-        begin : a5_wait
-            integer wait_cycles;
-            for (wait_cycles = 0; wait_cycles < 20; wait_cycles = wait_cycles + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_valid) disable a5_wait;
-            end
-        end
-        check(m1_dst_valid === 1'b1, "M1: dst_valid asserts after staggered src reset release");
-        check(m1_dst_data === 8'h3C, "M1: data 0x3C correct after staggered src reset");
-
-        // ── A6: Split-Domain Reset — Dst resets while src stays active ──
-        // KEY test: catches the original P0 bug where a single reset from
-        // the src domain was used to reset dst-domain registers.
-        $display("\n--- A6: Split-Domain Reset (dst resets, src active) ---");
-        m1_src_reset_n = 1; m1_dst_reset_n = 1;
-        m1_src_data = 0; m1_src_valid = 0;
-        @(posedge m1_src_clk);
-
-        // Send data and verify it arrives (baseline)
-        m1_src_data  = 8'hF0;
-        m1_src_valid = 1;
-        @(posedge m1_src_clk); #1;
-        m1_src_valid = 0;
-
-        begin : a6_baseline
-            integer wait_cycles;
-            for (wait_cycles = 0; wait_cycles < 20; wait_cycles = wait_cycles + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_valid) disable a6_baseline;
-            end
-        end
-        check(m1_dst_data === 8'hF0, "M1: Baseline data 0xF0 received before dst-only reset");
-
-        // Assert ONLY dst_reset_n (src keeps running)
-        m1_dst_reset_n = 0;
-        begin : a6_check_reset
-            integer wait_cycles;
-            reg dst_cleared;
-            dst_cleared = 0;
-            for (wait_cycles = 0; wait_cycles < 10; wait_cycles = wait_cycles + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_data === 8'd0 && m1_dst_valid === 1'b0)
-                    dst_cleared = 1;
-            end
-            check(dst_cleared, "M1: dst_data=0 and dst_valid=0 after dst-only reset");
-        end
-
-        // Deassert dst_reset_n
-        m1_dst_reset_n = 1;
-        repeat (3) @(posedge m1_dst_clk);
-
-        // Send new data from src, verify it arrives correctly
-        m1_src_data  = 8'h55;
-        m1_src_valid = 1;
-        @(posedge m1_src_clk); #1;
-        m1_src_valid = 0;
-
-        begin : a6_recovery
-            integer wait_cycles;
-            for (wait_cycles = 0; wait_cycles < 20; wait_cycles = wait_cycles + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_valid) disable a6_recovery;
-            end
-        end
-        check(m1_dst_valid === 1'b1, "M1: dst_valid asserts after dst-only reset recovery");
-        check(m1_dst_data === 8'h55, "M1: data 0x55 correct after dst-only reset recovery");
-
-        // ── A7: Staggered Reset Deassertion ────────────────────
-        $display("\n--- A7: Staggered Reset Deassertion ---");
-        m1_src_reset_n = 0; m1_dst_reset_n = 0;
-        m1_src_data = 0; m1_src_valid = 0;
-        #100;
-
-        // Release src_reset_n first, start sending data immediately
-        m1_src_reset_n = 1;
-        @(posedge m1_src_clk);
-        m1_src_data  = 8'hBB;
-        m1_src_valid = 1;
-        @(posedge m1_src_clk); #1;
-        m1_src_valid = 0;
-
-        // Wait 50ns with dst_reset_n still asserted
-        #50;
-
-        // Release dst_reset_n
-        m1_dst_reset_n = 1;
-
-        // Let sync chain clear through a few dst_clk cycles first
-        repeat (5) @(posedge m1_dst_clk);
-
-        // Src sends another value so dst can capture it fresh
-        @(posedge m1_src_clk);
-        m1_src_data  = 8'hCC;
-        m1_src_valid = 1;
-        @(posedge m1_src_clk); #1;
-        m1_src_valid = 0;
-
-        begin : a7_wait
-            integer wait_cycles;
-            for (wait_cycles = 0; wait_cycles < 40; wait_cycles = wait_cycles + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_valid) disable a7_wait;
-            end
-        end
-        check(m1_dst_valid === 1'b1, "M1: dst_valid asserts after staggered deassertion");
-        // Accept either 0xBB (if pipeline retained) or 0xCC (if fresh capture)
-        check(m1_dst_data === 8'hBB || m1_dst_data === 8'hCC,
-              "M1: Data not corrupted after staggered deassertion");
-
-        // ── A8: Port Connectivity Check ────────────────────────
-        $display("\n--- A8: Port Connectivity Check ---");
-        m1_src_reset_n = 0; m1_dst_reset_n = 0;
-        m1_src_data = 0; m1_src_valid = 0;
-        #100;
-        m1_src_reset_n = 1; m1_dst_reset_n = 1;
-        repeat (5) @(posedge m1_dst_clk); #1;
-
-        // After reset deassertion, outputs should not be X or Z
-        check(m1_dst_data !== 8'bxxxxxxxx, "M1: dst_data is not X after reset");
-        check(m1_dst_data !== 8'bzzzzzzzz, "M1: dst_data is not Z after reset");
-        check(m1_dst_valid !== 1'bx, "M1: dst_valid is not X after reset");
-        check(m1_dst_valid !== 1'bz, "M1: dst_valid is not Z after reset");
-
-        // After a transfer, check again
-        m1_src_data  = 8'h99;
-        m1_src_valid = 1;
-        @(posedge m1_src_clk); #1;
-        m1_src_valid = 0;
-
-        begin : a8_wait
-            integer wait_cycles;
-            for (wait_cycles = 0; wait_cycles < 20; wait_cycles = wait_cycles + 1) begin
-                @(posedge m1_dst_clk); #1;
-                if (m1_dst_valid) disable a8_wait;
-            end
-        end
-        check(m1_dst_data !== 8'bxxxxxxxx, "M1: dst_data is not X after transfer");
-        check(m1_dst_data !== 8'bzzzzzzzz, "M1: dst_data is not Z after transfer");
-        check(m1_dst_valid !== 1'bx, "M1: dst_valid is not X after transfer");
-        check(m1_dst_valid !== 1'bz, "M1: dst_valid is not Z after transfer");
 
         // ════════════════════════════════════════════════════════
         // SECTION B: cdc_single_bit tests
@@ -512,7 +290,7 @@ module tb_cdc_modules;
         @(posedge m2_dst_clk);
 
         // A single src_clk pulse may or may not be captured
-        // At 400:100 ratio, 1 src_clk pulse = 2.5ns, dst_clk period = 10ns
+        // At the 4:1 source:destination ratio, 1 src_clk pulse = 2.5ns, dst_clk period = 10ns
         // A single src_clk pulse might be missed — that's expected behavior
         m2_src_signal = 1;
         @(posedge m2_src_clk); #1;
@@ -526,7 +304,7 @@ module tb_cdc_modules;
                 @(posedge m2_dst_clk); #1;
                 if (m2_dst_signal) saw_pulse = 1;
             end
-            // Single src_clk pulse at 400MHz might be too short for 100MHz dst
+            // A single 2.5 ns src_clk pulse might be too short for the 10 ns dst clock
             // This is a known limitation of single-bit synchronizers
             $display("  Single src_clk pulse captured: %b (may miss — expected for narrow pulse)",
                      saw_pulse);
@@ -873,6 +651,24 @@ module tb_cdc_modules;
         end
         check(m3_dst_valid === 1'b1, "M3: dst_valid asserts for post-recovery transfer");
         check(m3_dst_data === 32'hABCD0000, "M3: data 0xABCD0000 correct after reset recovery");
+
+        // ════════════════════════════════════════════════════════
+        // SECTION D: cdc_handshake back-to-back stress (data integrity)
+        // ════════════════════════════════════════════════════════
+        $display("\n=== Section D: cdc_handshake stress ===");
+        wait (st0_done && st1_done && st2_done && st3_done && st4_done && st5_done);
+        check(st0_err == 0 && st0_recv == st0_sent && st0_sent >= 300,
+              "M3 120>100 held valid: ordered, no dup/gap/tear");
+        check(st1_err == 0 && st1_recv == st1_sent && st1_sent >= 300,
+              "M3 100>120 held valid: ordered, no dup/gap/tear");
+        check(st2_err == 0 && st2_recv == st2_sent && st2_sent >= 300,
+              "M3 120>100 valid/ready: every word in order");
+        check(st3_err == 0 && st3_recv == st3_sent && st3_sent >= 300,
+              "M3 100>120 valid/ready: every word in order");
+        check(st4_err == 0 && st4_recv == st4_sent && st4_sent >= 300,
+              "M3 120>100 held valid + dst backpressure");
+        check(st5_err == 0 && st5_recv == st5_sent && st5_sent >= 300,
+              "M3 100>120 valid/ready + dst backpressure");
 
         // ════════════════════════════════════════════════════════
         // Summary

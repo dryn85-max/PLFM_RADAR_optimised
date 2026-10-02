@@ -18,6 +18,7 @@
  *   T9: range_bin_out tracks range_bin_in
  *   T10: Back-to-back chirps (3+ chirps, verify continuous operation)
  *   T11: Negative input values handled correctly
+ *   T12: 2-clock latency; back-to-back (every-clock) streaming, all bins exact
  */
 
 module tb_mti_canceller;
@@ -158,10 +159,40 @@ task capture_chirp;
     end
 endtask
 
+
 integer i;
 reg all_zero;
 reg all_match;
 reg signed [DATA_W-1:0] expected;
+
+// T12 monitor: latency and value check (expected diff for chirp 1 and 2 = 100, -50)
+reg vin_d1, vin_d2;
+reg dut_t12_active;
+initial dut_t12_active = 0;
+reg lat_ok;
+integer lat_cnt, c, mon_chirp, mon_n;
+always @(posedge clk) begin
+    vin_d2 <= vin_d1;
+    vin_d1 <= range_valid_in;
+end
+initial begin vin_d1 = 0; vin_d2 = 0; lat_ok = 1; lat_cnt = 0; mon_chirp = 0; mon_n = 0; end
+always @(posedge clk) begin
+    if (dut_t12_active) begin
+        if (range_valid_out !== vin_d2) lat_ok <= 1'b0;
+        if (range_valid_out === 1'b1) begin
+            lat_cnt <= lat_cnt + 1;
+            if (mon_chirp == 0) begin
+                if (range_i_out !== 0 || range_q_out !== 0) all_match <= 1'b0;
+            end else begin
+                if (range_i_out !== 100 || range_q_out !== -50) all_match <= 1'b0;
+            end
+            if (range_bin_out !== mon_n[5:0]) all_match <= 1'b0;
+            if (mon_n == NUM_BINS - 1) begin mon_n <= 0; mon_chirp <= mon_chirp + 1; end
+            else mon_n <= mon_n + 1;
+        end
+    end
+end
+
 
 initial begin
     $dumpfile("tb_mti_canceller.vcd");
@@ -462,6 +493,87 @@ initial begin
 
     check(11, "T11.1: Negative inputs: diff I = 2000", cap_i[0] == 16'sd2000);
     check(11, "T11.2: Negative inputs: diff Q = 500", cap_q[0] == 16'sd500);
+
+    // ================================================================
+    // T12: Fixed 2-clock latency, back-to-back (valid every clock) streaming
+    // ================================================================
+    do_reset;
+    mti_enable = 1'b1;
+    lat_ok = 1'b1;
+    all_match = 1'b1;
+    lat_cnt = 0; mon_chirp = 0; mon_n = 0;
+    dut_t12_active = 1'b1;
+    // Chirp 1 (muted) then chirp 2 and 3, one bin per clock, no gaps
+    for (c = 0; c < 3; c = c + 1) begin
+        for (i = 0; i < NUM_BINS; i = i + 1) begin
+            @(posedge clk);
+            range_i_in <= 100 * c + 7 * i;
+            range_q_in <= -(50 * c) - 3 * i;
+            range_valid_in <= 1'b1;
+            range_bin_in <= i[5:0];
+        end
+        @(posedge clk);
+        range_valid_in <= 1'b0;
+        repeat (4) @(posedge clk);
+    end
+    dut_t12_active = 1'b0;
+    check(12, "T12.1: latency exactly 2 clocks", lat_ok && lat_cnt == 3 * NUM_BINS);
+    check(12, "T12.2: back-to-back diff exact", all_match);
+
+    // ================================================================
+    // T13: Saturation corners, both signs, both channels, exact boundary
+    // Eight (prev, cur) pairs in bins 0..7; Q uses the pair of bin (b+1)%8,
+    // so I and Q exercise different corners at once.  Removing either clamp
+    // (positive or negative), the Q clamp, or an off-by-one at +-32767/-32768
+    // makes one of these fail.
+    // ================================================================
+    do_reset;
+    mti_enable = 1'b1;
+    begin : t13_block
+        reg signed [DATA_W-1:0] t13_prev [0:7];
+        reg signed [DATA_W-1:0] t13_cur  [0:7];
+        reg signed [DATA_W-1:0] t13_exp  [0:7];
+        integer b, bad_i, bad_q;
+        t13_prev[0] = -16'sd32000; t13_cur[0] =  16'sd32000; t13_exp[0] =  16'sd32767; // +64000
+        t13_prev[1] =  16'sd32000; t13_cur[1] = -16'sd32000; t13_exp[1] = -16'sd32768; // -64000
+        t13_prev[2] = -16'sd1;     t13_cur[2] =  16'sd32766; t13_exp[2] =  16'sd32767; // exactly MAX
+        t13_prev[3] = -16'sd1;     t13_cur[3] =  16'sd32767; t13_exp[3] =  16'sd32767; // MAX+1
+        t13_prev[4] =  16'sd1;     t13_cur[4] = -16'sd32767; t13_exp[4] = -16'sd32768; // exactly MIN
+        t13_prev[5] =  16'sd2;     t13_cur[5] = -16'sd32767; t13_exp[5] = -16'sd32768; // MIN-1
+        t13_prev[6] = -16'sd32768; t13_cur[6] =  16'sd32767; t13_exp[6] =  16'sd32767; // +65535
+        t13_prev[7] =  16'sd32767; t13_cur[7] = -16'sd32768; t13_exp[7] = -16'sd32768; // -65535
+        // chirp 1 (history)
+        fork
+            begin
+                for (b = 0; b < NUM_BINS; b = b + 1)
+                    feed_sample(b[5:0], (b < 8) ? t13_prev[b] : 16'sd0,
+                                        (b < 8) ? t13_prev[(b+1)%8] : 16'sd0);
+            end
+            capture_chirp;
+        join
+        // chirp 2
+        fork
+            begin
+                for (b = 0; b < NUM_BINS; b = b + 1)
+                    feed_sample(b[5:0], (b < 8) ? t13_cur[b] : 16'sd0,
+                                        (b < 8) ? t13_cur[(b+1)%8] : 16'sd0);
+            end
+            capture_chirp;
+        join
+        bad_i = 0; bad_q = 0;
+        for (b = 0; b < 8; b = b + 1) begin
+            if (cap_i[b] !== t13_exp[b]) begin
+                bad_i = bad_i + 1;
+                $display("  T13 I bin %0d: got %0d expected %0d", b, cap_i[b], t13_exp[b]);
+            end
+            if (cap_q[b] !== t13_exp[(b+1)%8]) begin
+                bad_q = bad_q + 1;
+                $display("  T13 Q bin %0d: got %0d expected %0d", b, cap_q[b], t13_exp[(b+1)%8]);
+            end
+        end
+        check(13, "T13.1: I sat corners", bad_i == 0);
+        check(13, "T13.2: Q sat corners", bad_q == 0);
+    end
 
     // ================================================================
     // SUMMARY

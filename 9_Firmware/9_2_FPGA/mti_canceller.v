@@ -5,34 +5,25 @@
  *
  * Moving Target Indication (MTI) — 2-pulse canceller for ground clutter removal.
  *
- * Sits between the range bin decimator and the Doppler processor in the
- * AERIS-10 receiver chain. Subtracts the previous chirp's range profile
- * from the current chirp's profile, implementing H(z) = 1 - z^{-1} in
- * slow-time. This places a null at zero Doppler (DC), removing stationary
- * ground clutter while passing moving targets through.
+ * Sits between the range bin decimator and the Doppler processor.  Subtracts
+ * the previous chirp's range profile from the current one, H(z) = 1 - z^-1 in
+ * slow time: a null at zero Doppler removes stationary clutter.
  *
- * Signal chain position:
- *   Range Bin Decimator → [MTI Canceller] → Doppler Processor
+ * Algorithm, for each range bin r:
+ *   out[r] = sat16( cur[r] - prev[r] );   prev[r] <= cur[r]
+ * On the first chirp after reset/enable the output is zero (muted) because
+ * there is no previous chirp.  When mti_enable = 0 the module passes data
+ * through (same 2-clock latency).
  *
- * Algorithm:
- *   For each range bin r (0..NUM_RANGE_BINS-1):
- *     mti_out_i[r] = current_i[r] - previous_i[r]
- *     mti_out_q[r] = current_q[r] - previous_q[r]
+ * Implementation (RAM-inferable history):
+ *   clock 1: register the input (cur_*), read prev[range_bin_in] synchronously
+ *   clock 2: output = cur - prev_rd (saturated); write prev[cur_bin] <= cur
+ * The write happens one clock after the read of the same address, so there is
+ * never a same-cycle read/write collision on the history RAM.  The arrays are
+ * written in their own always block without reset (block RAM / LUT RAM).
  *
- * The previous chirp's 64 range bins are stored in a small BRAM.
- * On the very first chirp after reset (or enable), there is no previous
- * data — output is zero (muted) for that first chirp.
- *
- * When mti_enable=0, the module is a transparent pass-through with zero
- * latency penalty (data goes straight through combinationally registered).
- *
- * Resources:
- *   - 2 BRAM18 (64 x 16-bit I + 64 x 16-bit Q) or distributed RAM
- *   - ~30 LUTs (subtract + mux)
- *   - ~40 FFs (pipeline + control)
- *   - 0 DSP48
- *
- * Clock domain: clk (100 MHz)
+ * Resources: 2 x 64 x 16 bit RAM (2048 bits), small subtract/saturate/mux
+ * logic, 0 multipliers.
  */
 
 module mti_canceller #(
@@ -42,71 +33,71 @@ module mti_canceller #(
     input wire clk,
     input wire reset_n,
 
-    // ========== INPUT (from range bin decimator) ==========
     input wire signed [DATA_WIDTH-1:0] range_i_in,
     input wire signed [DATA_WIDTH-1:0] range_q_in,
     input wire                         range_valid_in,
     input wire [5:0]                   range_bin_in,
 
-    // ========== OUTPUT (to Doppler processor) ==========
     output reg signed [DATA_WIDTH-1:0] range_i_out,
     output reg signed [DATA_WIDTH-1:0] range_q_out,
     output reg                         range_valid_out,
     output reg [5:0]                   range_bin_out,
 
-    // ========== CONFIGURATION ==========
-    input wire mti_enable,   // 1=MTI active, 0=pass-through
+    input wire mti_enable,
 
-    // ========== STATUS ==========
-    output reg mti_first_chirp  // 1 during first chirp (output muted)
+    output reg mti_first_chirp
 );
 
-// ============================================================================
-// PREVIOUS CHIRP BUFFER (64 x 16-bit I, 64 x 16-bit Q)
-// ============================================================================
-// Small enough for distributed RAM on XC7A200T (64 entries).
-// Using separate I/Q arrays for clean read/write.
-
+// ---- Previous-chirp history (RAM) ----
 reg signed [DATA_WIDTH-1:0] prev_i [0:NUM_RANGE_BINS-1];
 reg signed [DATA_WIDTH-1:0] prev_q [0:NUM_RANGE_BINS-1];
 
-// Track whether we have valid previous data
+// Stage 1 registers
+reg signed [DATA_WIDTH-1:0] cur_i, cur_q;
+reg                         cur_valid;
+reg [5:0]                   cur_bin;
+reg signed [DATA_WIDTH-1:0] prev_i_rd, prev_q_rd;
+
+// Synchronous read (stage 1)
+always @(posedge clk) begin
+    prev_i_rd <= prev_i[range_bin_in];
+    prev_q_rd <= prev_q[range_bin_in];
+end
+
+// Write port (stage 2): store the current chirp for the next one
+always @(posedge clk) begin
+    if (cur_valid) begin
+        prev_i[cur_bin] <= cur_i;
+        prev_q[cur_bin] <= cur_q;
+    end
+end
+
+always @(posedge clk or negedge reset_n) begin
+    if (!reset_n) begin
+        cur_i <= 0; cur_q <= 0; cur_valid <= 1'b0; cur_bin <= 6'd0;
+    end else begin
+        cur_i     <= range_i_in;
+        cur_q     <= range_q_in;
+        cur_valid <= range_valid_in;
+        cur_bin   <= range_bin_in;
+    end
+end
+
+// ---- Difference with saturation ----
+wire signed [DATA_WIDTH:0] diff_i_full = {cur_i[DATA_WIDTH-1], cur_i} - {prev_i_rd[DATA_WIDTH-1], prev_i_rd};
+wire signed [DATA_WIDTH:0] diff_q_full = {cur_q[DATA_WIDTH-1], cur_q} - {prev_q_rd[DATA_WIDTH-1], prev_q_rd};
+
+localparam signed [DATA_WIDTH:0] MAXP =  (1 << (DATA_WIDTH - 1)) - 1;
+localparam signed [DATA_WIDTH:0] MINN = -(1 << (DATA_WIDTH - 1));
+
+wire signed [DATA_WIDTH-1:0] diff_i_sat = (diff_i_full > MAXP) ? MAXP[DATA_WIDTH-1:0] :
+                                          (diff_i_full < MINN) ? MINN[DATA_WIDTH-1:0] : diff_i_full[DATA_WIDTH-1:0];
+wire signed [DATA_WIDTH-1:0] diff_q_sat = (diff_q_full > MAXP) ? MAXP[DATA_WIDTH-1:0] :
+                                          (diff_q_full < MINN) ? MINN[DATA_WIDTH-1:0] : diff_q_full[DATA_WIDTH-1:0];
+
+// ---- Stage 2: output ----
 reg has_previous;
 
-// ============================================================================
-// MTI PROCESSING
-// ============================================================================
-
-// Read previous chirp data (combinational)
-wire signed [DATA_WIDTH-1:0] prev_i_rd = prev_i[range_bin_in];
-wire signed [DATA_WIDTH-1:0] prev_q_rd = prev_q[range_bin_in];
-
-// Compute difference with saturation
-// Subtraction can produce DATA_WIDTH+1 bits; saturate back to DATA_WIDTH.
-wire signed [DATA_WIDTH:0] diff_i_full = {range_i_in[DATA_WIDTH-1], range_i_in}
-                                        - {prev_i_rd[DATA_WIDTH-1], prev_i_rd};
-wire signed [DATA_WIDTH:0] diff_q_full = {range_q_in[DATA_WIDTH-1], range_q_in}
-                                        - {prev_q_rd[DATA_WIDTH-1], prev_q_rd};
-
-// Saturate to DATA_WIDTH bits
-wire signed [DATA_WIDTH-1:0] diff_i_sat;
-wire signed [DATA_WIDTH-1:0] diff_q_sat;
-
-assign diff_i_sat = (diff_i_full > $signed({{2{1'b0}}, {(DATA_WIDTH-1){1'b1}}}))
-                  ? $signed({1'b0, {(DATA_WIDTH-1){1'b1}}})           // +max
-                  : (diff_i_full < $signed({{2{1'b1}}, {(DATA_WIDTH-1){1'b0}}}))
-                  ? $signed({1'b1, {(DATA_WIDTH-1){1'b0}}})           // -max
-                  : diff_i_full[DATA_WIDTH-1:0];
-
-assign diff_q_sat = (diff_q_full > $signed({{2{1'b0}}, {(DATA_WIDTH-1){1'b1}}}))
-                  ? $signed({1'b0, {(DATA_WIDTH-1){1'b1}}})
-                  : (diff_q_full < $signed({{2{1'b1}}, {(DATA_WIDTH-1){1'b0}}}))
-                  ? $signed({1'b1, {(DATA_WIDTH-1){1'b0}}})
-                  : diff_q_full[DATA_WIDTH-1:0];
-
-// ============================================================================
-// MAIN LOGIC
-// ============================================================================
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin
         range_i_out     <= {DATA_WIDTH{1'b0}};
@@ -116,51 +107,30 @@ always @(posedge clk or negedge reset_n) begin
         has_previous    <= 1'b0;
         mti_first_chirp <= 1'b1;
     end else begin
-        // Default: no valid output
         range_valid_out <= 1'b0;
-
-        if (range_valid_in) begin
-            // Always store current sample as "previous" for next chirp
-            prev_i[range_bin_in] <= range_i_in;
-            prev_q[range_bin_in] <= range_q_in;
-
-            // Output path
-            range_bin_out <= range_bin_in;
-
+        if (cur_valid) begin
+            range_bin_out   <= cur_bin;
+            range_valid_out <= 1'b1;
             if (!mti_enable) begin
-                // Pass-through mode: no MTI processing
-                range_i_out     <= range_i_in;
-                range_q_out     <= range_q_in;
-                range_valid_out <= 1'b1;
-                // Reset first-chirp state when MTI is disabled
+                range_i_out     <= cur_i;
+                range_q_out     <= cur_q;
                 has_previous    <= 1'b0;
                 mti_first_chirp <= 1'b1;
             end else if (!has_previous) begin
-                // First chirp after enable: mute output (no subtraction possible).
-                // Still emit valid=1 with zero data so Doppler processor gets
-                // the expected number of samples per frame.
-                range_i_out     <= {DATA_WIDTH{1'b0}};
-                range_q_out     <= {DATA_WIDTH{1'b0}};
-                range_valid_out <= 1'b1;
-
-                // After last range bin of first chirp, mark previous as valid
-                if (range_bin_in == NUM_RANGE_BINS - 1) begin
+                range_i_out <= {DATA_WIDTH{1'b0}};
+                range_q_out <= {DATA_WIDTH{1'b0}};
+                if (cur_bin == NUM_RANGE_BINS - 1) begin
                     has_previous    <= 1'b1;
                     mti_first_chirp <= 1'b0;
                 end
             end else begin
-                // Normal MTI: subtract previous from current
-                range_i_out     <= diff_i_sat;
-                range_q_out     <= diff_q_sat;
-                range_valid_out <= 1'b1;
+                range_i_out <= diff_i_sat;
+                range_q_out <= diff_q_sat;
             end
         end
     end
 end
 
-// ============================================================================
-// MEMORY INITIALIZATION (simulation only)
-// ============================================================================
 `ifdef SIMULATION
 integer init_k;
 initial begin

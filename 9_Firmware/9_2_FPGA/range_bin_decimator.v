@@ -3,12 +3,14 @@
 /**
  * range_bin_decimator.v
  *
- * Reduces 1024 range bins from the matched filter output down to 64 bins
- * for the Doppler processor. Supports multiple decimation modes:
+ * Reduces INPUT_BINS range bins from the matched filter output down to
+ * OUTPUT_BINS bins for the Doppler processor.  Defaults 1024 -> 64 (factor 16);
+ * the receiver instantiates it as 256 -> 64 (factor 4, LOG2_DECIMATION 2).
+ * Supports multiple decimation modes:
  *
  *   Mode 2'b00: Simple decimation (take every Nth sample)
  *   Mode 2'b01: Peak detection (select max-magnitude sample from each group)
- *   Mode 2'b10: Averaging (sum group and divide by N)
+ *   Mode 2'b10: Averaging (sum group, arithmetic shift right by LOG2_DECIMATION)
  *   Mode 2'b11: Reserved
  *
  * Interface contract (from radar_receiver_final.v line 229):
@@ -24,16 +26,19 @@
  *   input samples before beginning decimation. This allows selecting a
  *   region of interest within the 1024 range bins (e.g., to focus on
  *   near-range or far-range targets). When start_bin = 0 (default),
- *   all 1024 bins are processed starting from bin 0.
+ *   all INPUT_BINS bins are processed starting from bin 0.
  *
  * Clock domain: clk (100 MHz)
- * Decimation: 1024 → 64 (factor of 16)
+ * Decimation: INPUT_BINS → OUTPUT_BINS (default 1024 → 64, factor 16).
+ * DECIMATION_FACTOR must equal 2**LOG2_DECIMATION and be <= 16 (the group
+ * sum has 4 guard bits, group_sample_count is 4 bits wide).
  */
 
 module range_bin_decimator #(
     parameter INPUT_BINS        = 1024,
     parameter OUTPUT_BINS       = 64,
-    parameter DECIMATION_FACTOR = 16
+    parameter DECIMATION_FACTOR = 16,
+    parameter LOG2_DECIMATION   = 4     // log2(DECIMATION_FACTOR); averaging shift
 ) (
     input wire clk,
     input wire reset_n,
@@ -70,6 +75,18 @@ module range_bin_decimator #(
 // clocks while in ST_PROCESS or ST_SKIP, return to ST_IDLE to prevent hang.
 // 256 clocks at 100MHz = 2.56us, well beyond normal inter-sample gap.
 localparam WATCHDOG_LIMIT = 10'd256;
+
+`ifdef SIMULATION
+// Parameter consistency (no $clog2 in this code base: the shift is explicit)
+initial begin
+    if ((1 << LOG2_DECIMATION) != DECIMATION_FACTOR)
+        $display("[FAIL] range_bin_decimator: DECIMATION_FACTOR (%0d) != 2**LOG2_DECIMATION (%0d)",
+                 DECIMATION_FACTOR, 1 << LOG2_DECIMATION);
+    if (DECIMATION_FACTOR > 16)
+        $display("[FAIL] range_bin_decimator: DECIMATION_FACTOR (%0d) exceeds 16 (sum/counter width)",
+                 DECIMATION_FACTOR);
+end
+`endif
 
 // ============================================================================
 // INTERNAL SIGNALS
@@ -120,7 +137,8 @@ assign cur_mag = {1'b0, abs_i} + {1'b0, abs_q};
 // ============================================================================
 // AVERAGING (Mode 10)
 // ============================================================================
-// Accumulate I and Q separately, then divide by DECIMATION_FACTOR (>>4)
+// Accumulate I and Q separately, then divide by DECIMATION_FACTOR
+// (arithmetic shift right by LOG2_DECIMATION; floor rounding)
 reg signed [19:0] sum_i, sum_q;  // 16 + 4 guard bits for sum of 16 values
 
 // ============================================================================
@@ -331,9 +349,9 @@ always @(posedge clk or negedge reset_n) begin
                 range_i_out <= peak_i;
                 range_q_out <= peak_q;
             end
-            2'b10: begin  // Averaging (sum >> 4 = divide by 16)
-                range_i_out <= sum_i[19:4];
-                range_q_out <= sum_q[19:4];
+            2'b10: begin  // Averaging (sum >>> LOG2_DECIMATION = divide by DECIMATION_FACTOR)
+                range_i_out <= sum_i >>> LOG2_DECIMATION;
+                range_q_out <= sum_q >>> LOG2_DECIMATION;
             end
             default: begin
                 range_i_out <= 16'd0;

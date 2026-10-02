@@ -29,11 +29,11 @@
  *   iverilog -g2001 -DSIMULATION -o tb/tb_system_e2e.vvp \
  *     tb/tb_system_e2e.v radar_system_top.v \
  *     radar_transmitter.v dac_interface_single.v plfm_chirp_controller.v \
- *     radar_receiver_final.v tb/ad9484_interface_400m_stub.v \
- *     ddc_400m.v nco_400m_enhanced.v cic_decimator_4x_enhanced.v \
- *     cdc_modules.v fir_lowpass.v ddc_input_interface.v \
- *     chirp_memory_loader_param.v latency_buffer.v \
+ *     radar_receiver_final.v adc_cmos_interface.v \
+ *     ddc.v nco.v cic_decimator_4x_enhanced.v \
+ *     cdc_modules.v fir_lowpass.v \
  *     matched_filter_multi_segment.v matched_filter_processing_chain.v \
+ *     ref_spectrum_rom.v frequency_matched_filter.v \
  *     range_bin_decimator.v doppler_processor.v xfft_16.v fft_engine.v \
  *     usb_data_interface.v edge_detector.v radar_mode_controller.v
  *
@@ -48,10 +48,15 @@ module tb_system_e2e;
 // ============================================================================
 parameter CLK_100M_PERIOD  = 10.0;   // 100 MHz = 10 ns
 parameter CLK_120M_PERIOD  = 8.333;  // 120 MHz
+`ifdef USB_MODE_1
+// USB_MODE=1: the same TB clock models the FT2232H CLKOUT (60 MHz, 245 sync
+// FIFO mode); radar_system_top routes ft601_clk_in to the FT2232H interface.
+parameter FT601_CLK_PERIOD = 16.667; // 60 MHz (async to clk_100m)
+`else
 parameter FT601_CLK_PERIOD = 10.0;   // 100 MHz (async to clk_100m)
-parameter ADC_DCO_PERIOD   = 2.5;    // 400 MHz
+`endif
 
-// Simulation budget: tuned for iverilog performance with 400MHz ADC clock.
+// Simulation budget: tuned for iverilog performance.
 // Keep short — iverilog is ~10x slower than compiled simulators.
 parameter SIM_TIMEOUT_NS = 800_000;
 
@@ -83,16 +88,11 @@ endtask
 reg clk_100m;
 reg clk_120m_dac;
 reg ft601_clk_in;
-reg adc_dco_p, adc_dco_n;
 
 initial begin clk_100m     = 0; forever #(CLK_100M_PERIOD/2)  clk_100m     = ~clk_100m;     end
 initial begin clk_120m_dac = 0; forever #(CLK_120M_PERIOD/2)  clk_120m_dac = ~clk_120m_dac; end
 // FT601 clock: offset by 1.7ns to ensure truly async w.r.t. clk_100m
 initial begin ft601_clk_in = 0; #1.7; forever #(FT601_CLK_PERIOD/2) ft601_clk_in = ~ft601_clk_in; end
-initial begin
-    adc_dco_p = 0; adc_dco_n = 1;
-    forever #(ADC_DCO_PERIOD/2) begin adc_dco_p = ~adc_dco_p; adc_dco_n = ~adc_dco_n; end
-end
 
 // ============================================================================
 // DUT SIGNALS
@@ -100,8 +100,7 @@ end
 reg        reset_n;
 
 // ADC
-reg  [7:0] adc_d_p;
-reg  [7:0] adc_d_n;
+reg  [11:0] adc_data;
 
 // STM32 control
 reg        stm32_new_chirp;
@@ -153,6 +152,15 @@ reg  [1:0]  ft601_srb;
 reg  [1:0]  ft601_swb;
 wire        ft601_clk_out;
 
+// FT2232H interface (USB_MODE=1 only; tied off inside the DUT in USB_MODE=0)
+wire [7:0]  ft_data;
+wire        ft_rxf_n;
+wire        ft_txe_n;
+wire        ft_rd_n;
+wire        ft_wr_n;
+wire        ft_oe_n;
+wire        ft_siwu;
+
 // Status
 wire [5:0]  current_elevation;
 wire [5:0]  current_azimuth;
@@ -185,6 +193,65 @@ reg        bfm_rx_driving;
 reg [31:0] bfm_rx_data_out;
 
 assign bfm_rx_empty = (bfm_rx_wr_ptr == bfm_rx_rd_ptr);
+
+`ifdef USB_MODE_1
+// ---- FT2232H BFM (245 synchronous FIFO, 8-bit) ----
+// Each FIFO entry is one byte (bits [7:0]); a command is 4 bytes
+// {opcode, addr, value[15:8], value[7:0]} (usb_data_interface_ft2232h.v).
+// RXF# is low while bytes are queued. The host drives ft_data while the DUT
+// holds OE# low; the DUT samples a byte on every ft_clk edge with RD# low,
+// and the BFM advances to the next byte on that same edge.
+// FT601 bus is tied off inside the DUT in this mode.
+assign ft601_data = 32'hzzzz_zzzz;
+assign ft_data    = !ft_oe_n ? bfm_rx_fifo[bfm_rx_rd_ptr][7:0] : 8'hzz;
+assign ft_rxf_n   = bfm_rx_empty;
+assign ft_txe_n   = ft601_txe;   // same polarity: 1 = host TX FIFO full
+
+always @(posedge ft601_clk_in or negedge reset_n) begin
+    if (!reset_n) begin
+        bfm_rx_rd_ptr   <= 0;
+        bfm_rx_driving  <= 0;
+        bfm_rx_data_out <= 32'd0;
+    end else if (!ft_rd_n && !bfm_rx_empty) begin
+        bfm_rx_rd_ptr <= bfm_rx_rd_ptr + 1;
+    end
+end
+
+initial ft601_rxf = 1'b1;  // FT601 unused in USB_MODE=1
+
+// Task: Inject a USB command (4 bytes) into the BFM FIFO
+task bfm_send_cmd;
+    input [7:0] opcode;
+    input [7:0] addr;
+    input [15:0] value;
+    integer w;
+    begin
+        bfm_rx_fifo[bfm_rx_wr_ptr] = {24'd0, opcode};
+        bfm_rx_wr_ptr = bfm_rx_wr_ptr + 1;
+        bfm_rx_fifo[bfm_rx_wr_ptr] = {24'd0, addr};
+        bfm_rx_wr_ptr = bfm_rx_wr_ptr + 1;
+        bfm_rx_fifo[bfm_rx_wr_ptr] = {24'd0, value[15:8]};
+        bfm_rx_wr_ptr = bfm_rx_wr_ptr + 1;
+        bfm_rx_fifo[bfm_rx_wr_ptr] = {24'd0, value[7:0]};
+        bfm_rx_wr_ptr = bfm_rx_wr_ptr + 1;
+        // The read FSM only starts when the write FSM is idle (an 11-byte
+        // data packet can hold the bus for ~12 ft_clk cycles), so wait for
+        // the 4 bytes to be consumed (bounded: 200 ft_clk cycles).
+        w = 0;
+        while (!bfm_rx_empty && w < 200) begin
+            @(posedge ft601_clk_in);
+            w = w + 1;
+        end
+        // Then DEASSERT(1) + PROCESS(1) ft_clk cycles + toggle CDC into
+        // clk_100m (~5 clk_100m cycles).
+        #200;
+    end
+endtask
+`else
+// FT2232H inputs idle in USB_MODE=0 (interface not instantiated)
+assign ft_data  = 8'hzz;
+assign ft_rxf_n = 1'b1;
+assign ft_txe_n = 1'b1;
 
 // BFM drives ft601_data during read operations (active low OE from DUT)
 assign ft601_data = (!ft601_oe_n && !bfm_rx_driving) ? 32'hzzzz_zzzz :
@@ -232,6 +299,7 @@ task bfm_send_cmd;
         #200;  // 200ns = 20 clk_100m cycles — generous margin
     end
 endtask
+`endif
 
 // Write capture buffer
 reg [31:0] usb_wr_capture [0:1023];
@@ -239,22 +307,90 @@ integer    usb_wr_count;
 integer    usb_wr_header_count;
 integer    usb_wr_footer_count;
 
+`ifdef USB_MODE_1
+// FT2232H data packet = 11 bytes (usb_data_interface_ft2232h.v write FSM):
+//   byte 0: HEADER 0xAA, bytes 1-4: range, 5-8: doppler, 9: detection,
+//   byte 10: FOOTER 0x55.
+// Status packet = 26 bytes: 0xBB, 24 status bytes, 0x55 footer.
+// The host FIFO accepts a byte on each ft_clk edge with WR# and TXE# low.
+// usb_wr_pkt_pos tracks the byte index inside the current packet, so payload
+// bytes equal to 0xAA/0x55/0xBB are not counted; usb_wr_count counts bytes.
+reg [4:0]  usb_wr_pkt_pos;
+reg        usb_wr_in_status;
+
 always @(posedge ft601_clk_in) begin
     if (!reset_n) begin
         usb_wr_count        <= 0;
         usb_wr_header_count <= 0;
         usb_wr_footer_count <= 0;
+        usb_wr_pkt_pos      <= 5'd0;
+        usb_wr_in_status    <= 1'b0;
+    end else if (!ft_wr_n && !ft_txe_n) begin
+        if (usb_wr_count < 1024)
+            usb_wr_capture[usb_wr_count] <= {24'd0, ft_data};
+        usb_wr_count <= usb_wr_count + 1;
+        if (usb_wr_pkt_pos == 5'd0) begin
+            if (ft_data == 8'hBB) begin
+                usb_wr_in_status <= 1'b1;
+                usb_wr_pkt_pos   <= 5'd1;
+            end else begin
+                usb_wr_in_status <= 1'b0;
+                if (ft_data == 8'hAA)
+                    usb_wr_header_count <= usb_wr_header_count + 1;
+                usb_wr_pkt_pos <= 5'd1;
+            end
+        end else if (usb_wr_in_status) begin
+            usb_wr_pkt_pos <= (usb_wr_pkt_pos == 5'd25) ? 5'd0
+                                                         : usb_wr_pkt_pos + 5'd1;
+        end else begin
+            if (usb_wr_pkt_pos == 5'd10 && ft_data == 8'h55)
+                usb_wr_footer_count <= usb_wr_footer_count + 1;
+            usb_wr_pkt_pos <= (usb_wr_pkt_pos == 5'd10) ? 5'd0
+                                                         : usb_wr_pkt_pos + 5'd1;
+        end
+    end
+end
+`else
+// FT601 data packet = 3 x 32-bit writes (usb_data_interface.v write FSM):
+//   word 0: {HEADER 0xAA, range[31:8]}                       BE=1111
+//   word 1: {range[7:0], doppler_real, doppler_imag[15:8]}    BE=1111
+//   word 2: {doppler_imag[7:0], detection, FOOTER 0x55, pad}  BE=1110
+// Status packets (0xBB marker ... 0x55 footer, both BE=0001) are not data
+// packets and are excluded. usb_wr_pkt_pos tracks the word index inside the
+// current data packet so payload bytes equal to 0xAA/0x55 are not counted.
+reg [1:0]  usb_wr_pkt_pos;
+reg        usb_wr_in_status;
+
+always @(posedge ft601_clk_in) begin
+    if (!reset_n) begin
+        usb_wr_count        <= 0;
+        usb_wr_header_count <= 0;
+        usb_wr_footer_count <= 0;
+        usb_wr_pkt_pos      <= 2'd0;
+        usb_wr_in_status    <= 1'b0;
     end else if (!ft601_wr_n && !ft601_txe) begin
         if (usb_wr_count < 1024)
             usb_wr_capture[usb_wr_count] <= ft601_data;
         usb_wr_count <= usb_wr_count + 1;
-        // Count headers and footers
-        if (ft601_data[7:0] == 8'hAA && ft601_be == 4'b0001)
-            usb_wr_header_count <= usb_wr_header_count + 1;
-        if (ft601_data[7:0] == 8'h55 && ft601_be == 4'b0001)
-            usb_wr_footer_count <= usb_wr_footer_count + 1;
+        if (ft601_be == 4'b0001 && ft601_data[7:0] == 8'hBB) begin
+            usb_wr_in_status <= 1'b1;
+        end else if (usb_wr_in_status) begin
+            if (ft601_be == 4'b0001 && ft601_data[7:0] == 8'h55)
+                usb_wr_in_status <= 1'b0;
+        end else begin
+            // Count data-packet headers and footers at their word positions
+            if (usb_wr_pkt_pos == 2'd0 && ft601_be == 4'b1111 &&
+                ft601_data[31:24] == 8'hAA)
+                usb_wr_header_count <= usb_wr_header_count + 1;
+            if (usb_wr_pkt_pos == 2'd2 && ft601_be == 4'b1110 &&
+                ft601_data[15:8] == 8'h55)
+                usb_wr_footer_count <= usb_wr_footer_count + 1;
+            usb_wr_pkt_pos <= (usb_wr_pkt_pos == 2'd2) ? 2'd0
+                                                        : usb_wr_pkt_pos + 2'd1;
+        end
     end
 end
+`endif
 
 // ============================================================================
 // SAFETY MONITORS (continuous checks)
@@ -375,7 +511,11 @@ end
 
 // Track USB writes during backpressure
 always @(posedge ft601_clk_in) begin
+`ifdef USB_MODE_1
+    if (reset_n && !ft_wr_n && ft_txe_n)
+`else
     if (reset_n && !ft601_wr_n && ft601_txe)
+`endif
         obs_usb_backpressure_writes = obs_usb_backpressure_writes + 1;
 end
 
@@ -423,11 +563,10 @@ radar_system_top #(
     .stm32_cs_adar3_1v8(stm32_cs_adar3_1v8),
     .stm32_cs_adar4_1v8(stm32_cs_adar4_1v8),
 
-    .adc_d_p(adc_d_p),
-    .adc_d_n(adc_d_n),
-    .adc_dco_p(adc_dco_p),
-    .adc_dco_n(adc_dco_n),
+    .adc_data(adc_data),
+    .adc_ovr(1'b0),
     .adc_pwdn(adc_pwdn),
+    .adc_overrange(),
 
     .stm32_new_chirp(stm32_new_chirp),
     .stm32_new_elevation(stm32_new_elevation),
@@ -447,6 +586,14 @@ radar_system_top #(
     .ft601_srb(ft601_srb),
     .ft601_swb(ft601_swb),
     .ft601_clk_out(ft601_clk_out),
+
+    .ft_data(ft_data),
+    .ft_rxf_n(ft_rxf_n),
+    .ft_txe_n(ft_txe_n),
+    .ft_rd_n(ft_rd_n),
+    .ft_wr_n(ft_wr_n),
+    .ft_oe_n(ft_oe_n),
+    .ft_siwu(ft_siwu),
 
     .current_elevation(current_elevation),
     .current_azimuth(current_azimuth),
@@ -496,20 +643,19 @@ endtask
 
 // Drive ADC with a sinusoid-like pattern (simple ramp for stimulus)
 integer adc_phase;
+reg [7:0] adc_hi;
 initial begin
-    adc_d_p = 8'h80;
-    adc_d_n = 8'h7F;
+    adc_data = 12'h800;
     adc_phase = 0;
     forever begin
-        @(posedge adc_dco_p);
+        @(posedge clk_100m);
         if (reset_n) begin
             // Simple ramp + mid-scale offset to generate non-trivial data
-            adc_d_p = 8'h80 + ((adc_phase * 7) & 8'h3F) - 8'h20;
-            adc_d_n = ~adc_d_p;
+            adc_hi   = 8'h80 + ((adc_phase * 7) & 8'h3F) - 8'h20;
+            adc_data <= {adc_hi, 4'h0};
             adc_phase = adc_phase + 1;
         end else begin
-            adc_d_p = 8'h80;
-            adc_d_n = 8'h7F;
+            adc_data <= 12'h800;
         end
     end
 end
@@ -524,7 +670,7 @@ integer saved_range_count;
 integer saved_doppler_count;
 
 initial begin
-    // VCD dump disabled by default for performance (400MHz ADC = huge trace).
+    // VCD dump disabled by default for performance (long run = huge trace).
     // Uncomment for debug: $dumpfile("tb/tb_system_e2e.vcd");
     // $dumpvars(0, tb_system_e2e);
 
@@ -578,9 +724,14 @@ initial begin
     check(usb_wr_count == 0,
           "G1.2: No USB writes during reset");
 
-    // G1.3: ft601_wr_n is deasserted (high) after reset
+    // G1.3: USB write strobe is deasserted (high) after reset
+`ifdef USB_MODE_1
+    check(ft_wr_n == 1,
+          "G1.3: ft_wr_n == 1 after reset");
+`else
     check(ft601_wr_n == 1,
           "G1.3: ft601_wr_n == 1 after reset");
+`endif
 
     // G1.4: ADC power-down is low (ADC always on)
     check(adc_pwdn == 0,
@@ -822,7 +973,7 @@ initial begin
     // G7.3: Verify CDC path for TX chirp counter (120MHz→100MHz)
     // In the AERIS-10 architecture, STM32 toggles drive the TX chirp
     // controller (120MHz domain). The chirp counter is CDC'd to 100MHz
-    // via Gray-code synchronizer. Verify the CDC'd counter is non-zero.
+    // via the cdc_handshake module. Verify the CDC'd counter is non-zero.
     // Note: RX mode controller STM32 inputs are hardwired to 0 in
     // radar_receiver_final.v, so RX-side counters don't advance in
     // STM32-driven mode — this is a known architectural decision.

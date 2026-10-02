@@ -114,6 +114,7 @@ module fv_cdc_handshake;
     wire             fv_src_busy;
     wire             fv_dst_ack;
     wire             fv_dst_req_sync;
+    wire             fv_src_ack_sync;
     wire [1:0]       fv_src_ack_sync_chain;
     wire [1:0]       fv_dst_req_sync_chain;
     wire [WIDTH-1:0] fv_src_data_reg_hs;
@@ -167,7 +168,8 @@ module fv_cdc_handshake;
     ) dut (
         .src_clk  (src_clk),
         .dst_clk  (dst_clk),
-        .reset_n  (reset_n),
+        .src_reset_n(reset_n),
+        .dst_reset_n(reset_n),
         .src_data (src_data),
         .src_valid(src_valid),
         .src_ready(src_ready),
@@ -177,6 +179,7 @@ module fv_cdc_handshake;
         .fv_src_busy          (fv_src_busy),
         .fv_dst_ack           (fv_dst_ack),
         .fv_dst_req_sync      (fv_dst_req_sync),
+        .fv_src_ack_sync      (fv_src_ack_sync),
         .fv_src_ack_sync_chain(fv_src_ack_sync_chain),
         .fv_dst_req_sync_chain(fv_dst_req_sync_chain),
         .fv_src_data_reg_hs   (fv_src_data_reg_hs)
@@ -225,13 +228,13 @@ module fv_cdc_handshake;
     wire dut_initialized = reset_n && src_reset_done && dst_reset_done;
 
     // ================================================================
-    // PROPERTY 1: src_ready == !src_busy
-    // src_ready is defined as !src_busy in the RTL. Verify this
-    // structural invariant holds.
+    // PROPERTY 1: src_ready == !src_busy && !src_ack_sync
+    // A new request may start only when the request is low AND the
+    // synchronised acknowledge has returned low (four-phase return to zero).
     // ================================================================
     always @(posedge formal_clk) begin
         if (dut_initialized) begin
-            assert(src_ready == !fv_src_busy);
+            assert(src_ready == (!fv_src_busy && !fv_src_ack_sync));
         end
     end
 
@@ -409,6 +412,56 @@ module fv_cdc_handshake;
         if (dut_initialized) begin
             assert(fv_src_ack_sync_chain <= 2'b11);
             assert(fv_dst_req_sync_chain <= 2'b11);
+        end
+    end
+
+
+    // ================================================================
+    // PROPERTY 8: End-to-end data integrity (in order, no loss, no
+    // duplicate, no tearing).
+    // Every word accepted at the source (src_valid && src_ready on a
+    // src_posedge) is recorded; the next word that appears at the
+    // destination (dst_valid rising on a dst_posedge) must equal it.
+    // The four-phase protocol serialises transfers, so one outstanding
+    // word is enough: a second accept before delivery, or a delivery with
+    // nothing outstanding (duplicate), is a failure.
+    //
+    // NOTE: written for the fixed protocol (src_ready = !busy && !ack);
+    // NOT YET RUN -- sby is not installed in the authoring environment.
+    // The simulation stress test in tb/tb_cdc_modules.v is the evidence
+    // currently available.
+    // ================================================================
+    reg [WIDTH-1:0] fv_exp_data    = 0;
+    reg             fv_exp_pending = 1'b0;
+    reg             fv_dst_valid_q = 1'b0;
+
+    always @(posedge formal_clk) begin
+        if (!reset_n) begin
+            fv_exp_pending <= 1'b0;
+            fv_dst_valid_q <= 1'b0;
+        end else begin
+            if (src_posedge && src_valid && src_ready) begin
+                fv_exp_data    <= src_data;
+                fv_exp_pending <= 1'b1;
+            end
+            if (dst_posedge) begin
+                fv_dst_valid_q <= dst_valid;
+                if (dst_valid && !fv_dst_valid_q)
+                    fv_exp_pending <= 1'b0;
+            end
+        end
+    end
+
+    always @(posedge formal_clk) begin
+        if (dut_initialized) begin
+            // no second accept while a word is still undelivered
+            if (src_posedge && src_valid && src_ready)
+                assert(!fv_exp_pending);
+            // delivery must match the accepted word, and must not be a duplicate
+            if (dst_posedge && dst_valid && !fv_dst_valid_q) begin
+                assert(fv_exp_pending);
+                assert(dst_data == fv_exp_data);
+            end
         end
     end
 

@@ -5,8 +5,8 @@ module edge_detector_enhanced (
     output wire rising_falling_edge
 );
 
-(* ASYNC_REG = "TRUE" *) reg signal_in_prev;
-(* ASYNC_REG = "TRUE" *) reg signal_in_prev2;
+reg signal_in_prev;
+reg signal_in_prev2;
 
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin

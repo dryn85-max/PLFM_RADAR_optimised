@@ -69,7 +69,9 @@ jobs:
         working-directory: 9_Firmware/9_1_Microcontroller/tests
 
   # ===========================================================================
-  # FPGA RTL Regression (25 testbenches + lint)
+  # FPGA RTL Regression (38 testbenches + lint + vendor-neutrality/resource gates)
+  # Golden vectors under 9_Firmware/9_2_FPGA/tb/golden are committed; the
+  # generators (numpy) are re-run here to make sure they still reproduce them.
   # ===========================================================================
   fpga-regression:
     name: FPGA Regression
@@ -78,11 +80,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
       - name: Install Icarus Verilog
         run: sudo apt-get update && sudo apt-get install -y iverilog
 
+      - name: Regenerate golden vectors and check they are unchanged
+        working-directory: 9_Firmware/9_2_FPGA
+        run: |
+          uv run python tb/golden/gen_twiddle_rom.py 256
+          uv run python tb/golden/gen_ref_spectrum.py
+          uv run python tb/golden/gen_ddc_golden.py
+          uv run python tb/golden/gen_fir_golden.py
+          uv run python tb/golden/gen_fft_golden.py
+          uv run python tb/golden/gen_mf_chain_golden.py
+          uv run python tb/golden/gen_fullchain_golden.py
+          git diff --exit-code -- .
+
       - name: Run full FPGA regression
         run: bash run_regression.sh
+        working-directory: 9_Firmware/9_2_FPGA
+
+      # The receiver golden compare checks against the committed
+      # tb/golden/golden_doppler.mem, and golden generate writes to a scratch
+      # file, so the regression must leave tb/golden untouched.
+      # (tb/cosim/*.csv are rewritten by the regression and ignored here.)
+      - name: Check the regression did not rewrite committed golden files
+        run: git diff --exit-code -- tb/golden
         working-directory: 9_Firmware/9_2_FPGA
 
   # ===========================================================================
@@ -114,3 +145,32 @@ jobs:
           uv run pytest
           9_Firmware/tests/cross_layer/test_cross_layer_contract.py
           -v --tb=short
+
+  # ===========================================================================
+  # STM32G0B1 firmware (9_1_Microcontroller/g0b1): host tests + ARM cross-build
+  # ===========================================================================
+  mcu-g0b1:
+    name: MCU G0B1 Firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
+
+      - name: Host tests (ADAR_COUNT=1 and 4)
+        run: make test
+        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+
+      - name: Build default (ADAR_COUNT=1, DIAG=1)
+        run: make
+        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+
+      - name: Build DIAG=0
+        run: make DIAG=0 clean all
+        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+
+      - name: Build ADAR_COUNT=4
+        run: make ADAR_COUNT=4 clean all
+        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
