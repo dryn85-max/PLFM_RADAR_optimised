@@ -60,9 +60,8 @@ Tick items on the bench; record anything unexpected in `BACKLOG.md`.
 - [ ] `cd firmware && make test && make`, then `make flash` (ST-LINK).
   Source: [firmware/README.md, Build, flash, test](../firmware/README.md#build-flash-test).
 - [ ] Open the ST-LINK virtual COM port, 115200 8N1 (USART2, PA2/PA3). Capture the
-  log with `python tools/uart_capture.py -p <port>` (the docstring of that
-  upstream tool says USART3; the Lite firmware uses USART2, so give the port
-  explicitly, **VERIFY** that the tool's log format matches `diag_log.h`).
+  log with `python tools/uart_capture.py -p <port>` (give the port explicitly;
+  **VERIFY** that the tool's log format matches `diag_log.h`).
 - [ ] The boot log must report the placeholder PLL tables; `status` must answer
   (`STATUS lock=0 ... fault=1` until the PLL is real). Source: firmware/README.md
   "Warnings", "Serial command interface".

@@ -2,7 +2,7 @@
 """
 AERIS-10 UART Diagnostic Capture Tool
 
-Captures STM32 DIAG output from USART3 (115200 8N1) and writes to both
+Captures STM32 DIAG output from USART2 (ST-LINK VCP, 115200 8N1) and writes to both
 the terminal and a timestamped log file. Designed for board-day bring-up.
 
 DIAG output format (from diag_log.h):

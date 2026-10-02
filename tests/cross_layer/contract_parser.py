@@ -30,7 +30,7 @@ FPGA_DIR = REPO_ROOT / "fpga"
 MCU_DIR = REPO_ROOT / "firmware"            # STM32G0B1 (active MCU)
 MCU_CORE_DIR = MCU_DIR / "Core"
 # Xilinx constraints are legacy-only (not built or tested).
-XDC_DIR = REPO_ROOT / "legacy" / "9_Firmware" / "9_2_FPGA" / "constraints"
+XDC_DIR = REPO_ROOT / "legacy" / "9_Firmware" / "9_2_FPGA" / "constraints"  # path-gate: legacy-ref
 
 
 # ===================================================================

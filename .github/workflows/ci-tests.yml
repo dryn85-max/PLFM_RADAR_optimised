@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
+      - name: Path gate (no references to the old layout)
+        run: bash tools/check_paths.sh
+
       - name: Ruff lint (whole repo)
         run: uv run ruff check .
 
