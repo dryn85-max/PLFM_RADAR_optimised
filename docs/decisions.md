@@ -61,6 +61,7 @@ B). Fork baseline: upstream `b46dd71`.
 | **ESP-IDF v5.5.5 is pinned** (`espressif/idf:v5.5.5`). | Latest v5.5 patch release on Docker Hub on 2026-10-02. | this change |
 | **The ESP32 build is verified by CI on a draft PR** (job `esp32-mvp`). | The agent container has no Docker or ESP-IDF (and no `sfw`), so only the host tests run locally; `idf.py build` runs in CI. | this change |
 | **Recording protocol v2 with `boot_id`** (batch header 20 B; file records type 2 = reboot). A changed `boot_id` resets the recorder's sequence baseline: no gap record, and the recorder reconnects from sequence 0 of the new boot. | Coordinator fix: the sequence restarts at 0 after an ESP32 reboot, so a recorder resuming from the old sequence would drop the new boot's frames as "older" or log a false gap. | this change |
+| **Wi-Fi scan list on /wifi implemented** (owner decision after the final review found it missing). Scan on every GET of `/wifi` (about 2 s, brief AP disruption accepted); no-credentials mode now runs AP+STA with an idle STA so the driver can scan. | Spec R6 requires a scan list; it was not implemented. | this change |
 
 ## Process decisions (earlier)
 

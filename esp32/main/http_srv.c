@@ -1,5 +1,6 @@
 #include "http_srv.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -9,6 +10,7 @@
 #include "lwip/sockets.h"
 
 #include "wifi_form.h"
+#include "wifi_scan.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "http";
@@ -27,17 +29,39 @@ static void on_session_close(httpd_handle_t hd, int sockfd)
     close(sockfd);
 }
 
-static const char WIFI_PAGE[] =
+static const char WIFI_HEAD[] =
     "<!doctype html><html><head><meta charset=\"utf-8\">"
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<title>AERIS-10 Lite Wi-Fi</title></head><body>"
     "<h1>Wi-Fi setup</h1>"
+    "<p>Nearby networks (tap one to fill the SSID) - <a href=\"/wifi\">rescan</a></p>";
+
+static const char WIFI_NO_SCAN[] =
+    "<p>Scan unavailable, enter SSID manually.</p>";
+static const char WIFI_NONE[] = "<p>No networks found. Enter SSID manually.</p>";
+
+static const char WIFI_FORM[] =
     "<form method=\"post\" action=\"/wifi\">"
-    "<p><label>SSID<br><input name=\"ssid\" maxlength=\"32\" required></label></p>"
+    "<p><label>SSID<br><input id=\"ssid\" name=\"ssid\" maxlength=\"32\" required></label></p>"
     "<p><label>Password (empty = open network, otherwise 8-64 characters)<br>"
     "<input name=\"password\" type=\"password\" maxlength=\"64\"></label></p>"
     "<p><button type=\"submit\">Save and reboot</button></p>"
-    "</form></body></html>";
+    "</form>"
+    "<script>document.querySelectorAll('a[data-s]').forEach(function(a){"
+    "a.onclick=function(){document.getElementById('ssid').value=a.dataset.s;return false}})"
+    "</script></body></html>";
+
+/* One rendered entry at a time; only the single httpd task runs wifi_get, so a static buffer is
+ * safe and keeps the 6 KB httpd stack free. */
+static char s_entry[WSC_ENTRY_MAX];
+
+#define SEND(str)                                                                   \
+    do {                                                                            \
+        if (httpd_resp_send_chunk(req, (str), HTTPD_RESP_USE_STRLEN) != ESP_OK) {   \
+            free(recs);                                                             \
+            return ESP_FAIL;                                                        \
+        }                                                                           \
+    } while (0)
 
 bool http_srv_req_on_ap(httpd_req_t *req)
 {
@@ -71,8 +95,36 @@ bool http_srv_req_on_ap(httpd_req_t *req)
 static esp_err_t wifi_get(httpd_req_t *req)
 {
     if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+
+    /* Scan before sending anything: blocks this task for about 2 s and briefly disrupts the AP. */
+    wsc_rec *recs = malloc(sizeof *recs * WSC_RAW_MAX);
+    size_t n = 0;
+    esp_err_t serr = ESP_ERR_NO_MEM;
+    if (recs != NULL) {
+        serr = wifi_mgr_scan(recs, WSC_RAW_MAX, &n);
+        if (serr != ESP_OK) {
+            ESP_LOGW(TAG, "scan failed: %s", esp_err_to_name(serr));
+            n = 0;
+        }
+        n = wsc_prepare(recs, n, WSC_LIST_MAX);
+    }
+
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, WIFI_PAGE, HTTPD_RESP_USE_STRLEN);
+    SEND(WIFI_HEAD);
+    if (serr != ESP_OK) {
+        SEND(WIFI_NO_SCAN);
+    } else if (n == 0) {
+        SEND(WIFI_NONE);
+    } else {
+        SEND("<ul>");
+        for (size_t i = 0; i < n; i++) {
+            if (wsc_render_entry(s_entry, sizeof s_entry, &recs[i]) > 0) SEND(s_entry);
+        }
+        SEND("</ul>");
+    }
+    SEND(WIFI_FORM);
+    free(recs);
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 static void restart_cb(void *arg)

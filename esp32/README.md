@@ -90,6 +90,19 @@ page; only the AP password line is printed.
   otherwise 8-64 characters). It saves to NVS and reboots. It is served **only
   to clients connected to the AP** (the request's local address must be the AP
   IP); requests from the STA side get 404.
+- Opening `/wifi` first scans for networks (active scan, about 2 s) and lists
+  them above the form: SSID (HTML-escaped), signal in dBm, channel and
+  open/secured, strongest first, one entry per SSID, at most 20, hidden
+  networks skipped. Tapping an entry fills the SSID field (a few lines of
+  inline JavaScript, no external resources); the field can still be typed by
+  hand for hidden networks. SSIDs that are not valid UTF-8 or contain control
+  characters are shown with `?` and are not tappable. **The scan briefly
+  disrupts the AP for the connected phone (the radio leaves channel 1 while
+  scanning) and the page takes 2-3 s to load.** If the scan cannot run (for
+  example a STA connect attempt is in progress) the page says "Scan
+  unavailable, enter SSID manually"; "rescan" reloads the page. Without stored
+  credentials the radio runs in AP+STA mode with the STA idle, because the
+  driver cannot scan in AP-only mode.
 - On boot with stored credentials the ESP32 connects as a station (15 s
   timeout). If it connects, only STA is active and the AP is off (so `/wifi` is
   not reachable until the credentials are erased). If it does not connect, the

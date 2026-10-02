@@ -6,13 +6,18 @@
  *                        backoff (2 s doubling to 30 s).
  *      not connected  -> WIFI_MODE_APSTA: the AP "AERIS-MVP-XXXX" (XXXX = last two bytes of the AP
  *                        MAC) comes up so the setup page stays reachable, STA keeps retrying.
- *  - No credentials: WIFI_MODE_AP only.
+ *  - No credentials: WIFI_MODE_APSTA with the STA idle (never connects), so the setup page can
+ *    scan: the driver cannot scan in WIFI_MODE_AP. Staying in APSTA (instead of switching around
+ *    each scan) avoids a mode change under connected clients and needs no restore logic.
+ *  - wifi_mgr_scan() is skipped while a STA connect attempt is in flight (the scan would abort
+ *    it); the retry timer in turn waits while a scan runs. Both are serialised by s_scan_lock.
  *  - The AP is WPA2-PSK, channel 1, max 4 clients, password printed on the console at every boot.
  *  - Wi-Fi driver storage is RAM, so credentials exist only in our NVS keys. The STA password is
  *    never logged. */
 #include "wifi_mgr.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -25,11 +30,13 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mdns.h"
 #include "nvs.h"
 
 #include "wifi_form.h"
+#include "wifi_scan.h"
 
 #define NVS_NS "wifi"
 #define KEY_SSID "ssid"
@@ -54,6 +61,11 @@ static EventGroupHandle_t s_events;
 static esp_timer_handle_t s_retry_timer;
 static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 static volatile bool s_sta_wanted;
+static volatile bool s_sta_connecting; /* esp_wifi_connect() issued, no CONNECTED/DISCONNECTED yet */
+static SemaphoreHandle_t s_scan_lock;  /* held during a scan and while issuing a connect */
+
+#define SCAN_ACTIVE_MS 120 /* per channel; 13 channels ~ 1.6 s plus the channel switches */
+#define RETRY_DEFER_MS 1000
 
 esp_netif_t *wifi_mgr_ap_netif(void) { return s_ap_netif; }
 
@@ -112,7 +124,14 @@ static void load_or_create_ap_pass(char *out /* WF_AP_PASS_LEN + 1 */)
 static void retry_cb(void *arg)
 {
     (void)arg;
-    if (s_sta_wanted) esp_wifi_connect();
+    if (!s_sta_wanted) return;
+    if (xSemaphoreTake(s_scan_lock, 0) != pdTRUE) { /* a scan is running: try again shortly */
+        esp_timer_start_once(s_retry_timer, (uint64_t)RETRY_DEFER_MS * 1000u);
+        return;
+    }
+    s_sta_connecting = true;
+    if (esp_wifi_connect() != ESP_OK) s_sta_connecting = false;
+    xSemaphoreGive(s_scan_lock);
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -120,8 +139,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     (void)arg;
     (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        if (s_sta_wanted) esp_wifi_connect();
+        if (s_sta_wanted) {
+            s_sta_connecting = true;
+            if (esp_wifi_connect() != ESP_OK) s_sta_connecting = false;
+        }
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        s_sta_connecting = false;
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        s_sta_connecting = false;
         xEventGroupClearBits(s_events, GOT_IP_BIT);
         if (s_sta_wanted) {
             esp_timer_stop(s_retry_timer); /* error if not running: ignored */
@@ -168,6 +193,8 @@ esp_err_t wifi_mgr_start(void)
     s_sta_netif = esp_netif_create_default_wifi_sta();
     s_ap_netif = esp_netif_create_default_wifi_ap();
     s_events = xEventGroupCreate();
+    s_scan_lock = xSemaphoreCreateMutex();
+    if (s_events == NULL || s_scan_lock == NULL) return ESP_ERR_NO_MEM;
     const esp_timer_create_args_t targs = {.callback = retry_cb, .name = "sta_retry"};
     ESP_ERROR_CHECK(esp_timer_create(&targs, &s_retry_timer));
 
@@ -205,7 +232,7 @@ esp_err_t wifi_mgr_start(void)
             ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
         }
     } else {
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA)); /* STA stays idle; needed for scans */
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
         ESP_ERROR_CHECK(esp_wifi_start());
     }
@@ -229,6 +256,54 @@ esp_err_t wifi_mgr_start(void)
         ESP_LOGE(TAG, "mdns_init failed: %s", esp_err_to_name(err));
     }
     return ESP_OK;
+}
+
+esp_err_t wifi_mgr_scan(wsc_rec *out, size_t max, size_t *count)
+{
+    *count = 0;
+    wifi_mode_t mode;
+    if (esp_wifi_get_mode(&mode) != ESP_OK || mode != WIFI_MODE_APSTA) return ESP_ERR_WIFI_MODE;
+    if (xSemaphoreTake(s_scan_lock, 0) != pdTRUE) return ESP_ERR_WIFI_STATE; /* scan already running */
+    esp_err_t err = ESP_ERR_WIFI_STATE;
+    wifi_ap_record_t *aps = NULL;
+    uint16_t num = 0, want = 0;
+    size_t n = 0;
+    if (s_sta_connecting) goto done; /* do not abort a connect attempt */
+
+    const wifi_scan_config_t cfg = {
+        .ssid = NULL, .bssid = NULL, .channel = 0, .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time.active = {.min = SCAN_ACTIVE_MS, .max = SCAN_ACTIVE_MS},
+    };
+    err = esp_wifi_scan_start(&cfg, true); /* blocking; bounded by 13 channels * SCAN_ACTIVE_MS */
+    if (err != ESP_OK) goto done;
+    err = esp_wifi_scan_get_ap_num(&num);
+    if (err != ESP_OK) goto done;
+    if (num == 0) goto done;
+    want = num < WSC_RAW_MAX ? num : WSC_RAW_MAX;
+    aps = malloc(sizeof *aps * want);
+    if (aps == NULL) {
+        esp_wifi_clear_ap_list();
+        err = ESP_ERR_NO_MEM;
+        goto done;
+    }
+    err = esp_wifi_scan_get_ap_records(&want, aps); /* frees the driver's list, even beyond want */
+    if (err != ESP_OK) goto done;
+    n = want < max ? want : max;
+    for (size_t i = 0; i < n; i++) {
+        size_t l = strnlen((const char *)aps[i].ssid, sizeof aps[i].ssid);
+        memset(&out[i], 0, sizeof out[i]);
+        memcpy(out[i].ssid, aps[i].ssid, l);
+        out[i].ssid_len = (uint8_t)l;
+        out[i].rssi = aps[i].rssi;
+        out[i].channel = aps[i].primary;
+        out[i].secure = aps[i].authmode != WIFI_AUTH_OPEN;
+    }
+    *count = n;
+done:
+    free(aps);
+    xSemaphoreGive(s_scan_lock);
+    return err;
 }
 
 static void boot_monitor_task(void *arg)
