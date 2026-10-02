@@ -1,5 +1,7 @@
 # host/
 
+Back to the [root README](../README.md).
+
 Host application for AERIS-10 Lite: the upstream V7 PyQt6 radar GUI and its
 protocol layer, taken over unchanged.
 
@@ -53,4 +55,4 @@ cross-layer contract tests.
 
 The GUI still assumes the upstream radar configuration. Adapting it to the
 4-channel prototype and to the G0B1 firmware `STATUS` line is tracked in
-`BACKLOG.md`.
+[`BACKLOG.md`](../BACKLOG.md).

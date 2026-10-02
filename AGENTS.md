@@ -3,7 +3,9 @@
 Guidance for AI coding agents working in this repository. For what the
 project is, see [README.md](README.md); for contribution rules,
 [CONTRIBUTING.md](CONTRIBUTING.md); for the hardware/BOM background,
-[BOM_OPTIMIZATION_REPORT.md](BOM_OPTIMIZATION_REPORT.md).
+[docs/bom-optimization.md](docs/bom-optimization.md) (historical, Russian); for
+the system design, [docs/architecture.md](docs/architecture.md), and for the
+rationale of past owner decisions, [docs/decisions.md](docs/decisions.md).
 
 ## Development process: superpowers
 
@@ -64,7 +66,7 @@ GPT-5.5 is not used.
 - **Never ask for or accept secrets in chat** (API keys, tokens, licence
   keys).
 - Anything outward-facing or hard to reverse — merging to `main`, releases,
-  force-pushes, deleting hardware design files (`legacy/4_Schematics and Boards
+  force-pushes, deleting hardware design files (`hardware/`, `legacy/4_Schematics and Boards
   Layout/`, datasheets) — needs the owner's explicit go-ahead.
 
 ## Git workflow
@@ -90,7 +92,7 @@ GPT-5.5 is not used.
   The RTL (`radar_system_top.v`) is the single source of truth for opcode
   values, bit widths and reset defaults. No SystemVerilog, no `$clog2`.
 - Python (GUI/scripts/tests): `uv run ruff check .`;
-  `cd host && uv run pytest test_v7.py -v`.
+  `QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py -v`.
 - MCU, legacy F7 tree (reference only, do not modify):
   `cd legacy/9_Firmware/9_1_Microcontroller/tests && make clean && make`.
 - MCU, STM32G0B1 port: `cd firmware && make test && make`

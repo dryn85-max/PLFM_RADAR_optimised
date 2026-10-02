@@ -2,9 +2,12 @@
 
 Bare-metal C port of the radar MCU control firmware to an STM32G0B1RET6
 (Cortex-M0+, 64 MHz; the device has 512 KB flash / 144 KB RAM, the build budget is 128 KB flash / 32 KB RAM).
-The old STM32F746 tree (`9_1_1_*`, `9_1_2_*`, `9_1_3_*`, `../tests`) is untouched.
-Design: `docs/superpowers/specs/2026-10-01-firmware-g0b1-port.md`; plan:
-`docs/superpowers/plans/2026-10-01-firmware-g0b1-port.md`.
+The upstream STM32F746 tree is kept unchanged as reference under
+[`../legacy/9_Firmware/9_1_Microcontroller/`](../legacy/9_Firmware/9_1_Microcontroller/).
+Design: [`docs/superpowers/specs/2026-10-01-firmware-g0b1-port.md`](../docs/superpowers/specs/2026-10-01-firmware-g0b1-port.md);
+plan: [`docs/superpowers/plans/2026-10-01-firmware-g0b1-port.md`](../docs/superpowers/plans/2026-10-01-firmware-g0b1-port.md).
+Back to the [root README](../README.md); see also [docs/architecture.md](../docs/architecture.md)
+and [docs/bring-up.md](../docs/bring-up.md).
 
 > **Warnings**
 > - **Nothing in this firmware has been run on hardware.** It builds, and the
@@ -109,7 +112,7 @@ onto the PA11/PA12 pads).
 - **External pull-downs on all `EN_*` lines (EN_FPGA, EN_LO, EN_ADAR,
   EN_ADTR_VDD_SW, EN_ADTR_VSS_SW, EN_LNA, EN_PA) and on DIG0..DIG4.** The MCU
   pins are high-Z during reset and flashing, and the FPGA `reset_n` (DIG4) has
-  an internal `PULLUP` (`legacy/9_Firmware/9_2_FPGA/constraints/xc7a50t_ftg256.xdc:121`),
+  an internal `PULLUP` (`../legacy/9_Firmware/9_2_FPGA/constraints/xc7a50t_ftg256.xdc:121`),
   so without a pull-down the FPGA would be released from reset and the rails could
   float on at power-up or while flashing.
 - **ADAR1000 `PA_ON` pin (B3)** is not driven by the MCU (no GPIO assigned). It
@@ -255,7 +258,7 @@ data+bss+noinit + 4 KB stack + 1 KB heap reserve):
 
 ## Upstream defects fixed
 
-Items from `BOM_OPTIMIZATION_REPORT.md` section 2.4 (code state):
+Items from [`docs/bom-optimization.md`](../docs/bom-optimization.md) section 2.4 (code state):
 
 | Upstream defect | Resolution here |
 |---|---|

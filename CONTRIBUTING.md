@@ -1,16 +1,27 @@
-# Contributing to PLFM_RADAR (AERIS-10)
+# Contributing to AERIS-10 Lite
 
-Thanks for your interest in the project! This guide covers the basics
-for getting a change reviewed and merged.
+AERIS-10 Lite is a fork of [NawfalMotii79/PLFM_RADAR](https://github.com/NawfalMotii79/PLFM_RADAR).
+This guide covers what you need to get a change reviewed and merged here. For
+what the project is, see [README.md](README.md); AI coding agents should also
+read [AGENTS.md](AGENTS.md).
 
-## Getting started
+## Branches and pull requests
 
-1. Fork the repository and create a topic branch from `develop`. The `main` branch is for production releases only.
-2. Keep generated outputs (Vivado projects, bitstreams, build logs) out of version control.
+- `main` is the only long-lived branch of this fork. (Upstream also has a
+  `develop` branch; it does not exist here.)
+- Create topic branches from `main`. Never push to `main` directly.
+- Changes reach `main` only through a pull request.
+- CI (`.github/workflows/ci-tests.yml`) must be green before merging.
+- Commit messages are descriptive. Keep generated outputs (`*.vvp`, `*.vcd`,
+  Vivado/Quartus projects, bitstreams, build logs, `uv.lock`) out of version
+  control; see `.gitignore`.
 
-### Security Mandate: Package Installation
-Due to supply chain attack risks, **ALL package installations MUST use the `sfw` (secure firewall) prefix**.
-- Python: `sfw uv pip install <package>` (Do not use raw pip)
+## Security mandate: package installation
+
+Due to supply chain attack risks, **ALL package installations MUST use the
+`sfw` (secure firewall) prefix**.
+
+- Python: `sfw uv pip install <package>` (do not use raw pip)
 - Node/JS: `sfw npm install <package>`
 - Rust/Cargo: `sfw cargo <command>`
 
@@ -20,94 +31,135 @@ Never run bare package installation commands without the `sfw` prefix.
 
 | Path | Contents |
 |------|----------|
-| `4_Schematics and Boards Layout/` | KiCad schematics, Gerbers, BOM/CPL |
-| `9_Firmware/9_1_Microcontroller/` | STM32 MCU C/C++ firmware and unit tests |
-| `9_Firmware/9_2_FPGA/` | Verilog RTL, constraints, testbenches, build scripts |
-| `9_Firmware/9_3_GUI/` | Python radar dashboard (Tkinter/PyQt6) and CLI tools |
-| `9_Firmware/tests/cross_layer/` | Python-based system invariant/contract tests |
-| `docs/` | GitHub Pages documentation site |
+| `fpga/` | Vendor-neutral Verilog RTL, testbenches, golden vectors, `run_regression.sh` |
+| `firmware/` | STM32G0B1 (NUCLEO-G0B1RE) firmware and host unit tests |
+| `host/` | V7 PyQt6 GUI, protocol layer, smoke test |
+| `tests/cross_layer/` | Python system invariant / contract tests |
+| `tools/` | Helper scripts |
+| `hardware/datasheets/` | Datasheets of the parts used |
+| `docs/` | Architecture, bring-up, decisions, BOM analysis, specs and plans |
+| `legacy/` | Upstream-only material, reference only (see `legacy/README.md`) |
 
-## Code Standards & Tooling
+## Code standards and tooling
 
-- **Python (GUI, Scripts, Tests)**:
-  - We use `uv` for dependency management.
-  - We strictly enforce linting with `ruff`. Run `uv run ruff check .` before committing.
-  - Test with `pytest`.
-- **Verilog (FPGA)**:
-  - The RTL (`radar_system_top.v`) is the single source of truth for opcode values, bit widths, reset defaults, and valid ranges.
-  - Testbenches must include **adversarial validation**: actively test boundary conditions, race conditions, unexpected input sequences, and reset mid-operation.
-  - Use `iverilog` for simulation.
-- **C/C++ (MCU)**:
-  - Use `make test` for host-side unit testing (cpputest).
-- **System-Level Invariants**:
-  - Whenever adding code, verify that system-level invariants (across module, process, and chip boundaries) hold true.
+- **Python (host, scripts, tests):** `uv` for dependency management, `ruff` for
+  linting (`uv run ruff check .` must be clean), `pytest` for tests.
+- **Verilog (FPGA):** Verilog-2001 for Icarus Verilog (`iverilog`); no
+  SystemVerilog, no `$clog2`, no vendor primitives or attributes (the regression
+  has a grep gate). The RTL (`radar_system_top.v`) is the single source of truth
+  for opcode values, bit widths, reset defaults and valid ranges; all other
+  layers must align to it. Testbenches must include **adversarial validation**:
+  boundary conditions, race conditions, unexpected input sequences, and reset
+  mid-operation. Add a `#1` delay after `@(posedge clk)` before driving DUT
+  inputs with blocking assignments (or use non-blocking assignments).
+- **C (MCU firmware):** `make test` in `firmware/` runs the host unit tests with
+  recording mocks; `make`, `make DIAG=0` and `make ADAR_COUNT=4` must all build
+  (`arm-none-eabi-gcc`).
+- **System-level invariants:** whenever you change code, check that invariants
+  across module, process and chip boundaries still hold: the FPGA to STM32
+  DIG0-7 GPIO contract, the host USB packet format, and the opcode tables shared
+  by RTL, GUI and tests.
+- Write the failing test first.
+- Hardware facts (register bits, pin functions, polarities) are checked against
+  the datasheets in `hardware/datasheets/` and cited by table and page in code
+  comments. Anything that cannot be verified there is marked `VERIFY` and listed
+  in `BACKLOG.md`.
 
-## AI Usage Policy
+### Line endings
 
-The use of AI is permitted but we have to make sure that the quality and control of the codebase doesn't depend on the agents but the maintainer pushing the changes, meaning they are fully responsible for the code they commit.
+Several RTL files mix CRLF and LF. Never rewrite a whole file's line endings.
+Before committing, `git diff --stat` and `git diff --ignore-cr-at-eol --stat`
+must report the same line counts.
 
-1. **Human Accountability** — The committing engineer is fully responsible for AI-generated code as if they wrote it. Every PR must be understood and defensible by a human.
-2. **Mandatory Review** — No raw AI output may be committed unread. AI code must pass the same review bar as hand-written code.
-3. **Full CI Before Commit** — All AI-assisted changes must pass the complete CI suite locally (lint, unit, regression, cross-layer) before commit.
+## AI usage policy
 
-## Running the Test Suites
+The use of AI is permitted, but the quality and control of the codebase must not
+depend on the agents: it depends on the maintainer pushing the changes, who is
+fully responsible for the code they commit.
 
-We use GitHub Actions for CI, which runs four main jobs on every PR. Run these locally before pushing.
+1. **Human accountability.** The committing engineer is fully responsible for
+   AI-generated code as if they wrote it. Every PR must be understood and
+   defensible by a human.
+2. **Mandatory review.** No raw AI output may be committed unread. AI code must
+   pass the same review bar as hand-written code.
+3. **Full CI before commit.** All AI-assisted changes must pass the complete CI
+   suite locally (lint, unit, regression, cross-layer) before commit.
 
-### 1. Python & Linting
+Agent-specific rules (development process, models, git workflow) are in
+[AGENTS.md](AGENTS.md).
+
+## Running the test suites
+
+CI runs these jobs on every PR; run them locally before pushing.
+
+### 1. Python lint and tests
+
 ```bash
 uv run ruff check .
-cd 9_Firmware/9_3_GUI
-uv run pytest test_GUI_V65_Tk.py test_v7.py -v
+QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py -v
 ```
 
-### 2. FPGA Regression
+### 2. FPGA regression
+
 ```bash
-cd 9_Firmware/9_2_FPGA
+cd fpga
 bash run_regression.sh
+cd .. && git checkout -- fpga/tb/cosim
 ```
-This runs five phases (Lint, Changed Modules, Integration, Signal Processing, Infrastructure, and **P0 Adversarial Tests**). All must pass.
 
-### 3. MCU Unit Tests
+The regression (lint, vendor-neutrality and resource gates, golden tests, 38
+testbenches) rewrites tracked files: always restore `fpga/tb/cosim/*.csv`.
+`fpga/tb/golden/golden_doppler.mem` is committed only when a change legitimately
+alters the receiver output, and only after two runs give the same md5.
+
+### 3. Firmware (STM32G0B1)
+
 ```bash
-cd 9_Firmware/9_1_Microcontroller/tests
+cd firmware
+make test
+make
+make DIAG=0 clean all
+make ADAR_COUNT=4 clean all
+```
+
+### 4. Legacy F7 MCU tests
+
+The upstream STM32F7 unit tests are reference only (do not modify them) but still
+run in CI:
+
+```bash
+cd legacy/9_Firmware/9_1_Microcontroller/tests
 make clean && make
 ```
 
-### 4. Cross-Layer Contract Tests
+### 5. Cross-layer contract tests
+
 ```bash
-uv run pytest 9_Firmware/tests/cross_layer/test_cross_layer_contract.py -v
+uv run pytest tests/cross_layer/test_cross_layer_contract.py -v
 ```
 
-## Before merging: CI checklist
-
-All PRs must pass CI:
+## CI checklist
 
 | Job | What it checks |
 |----|---------------|
-| `python-tests` | ruff clean + pytest green |
-| `mcu-tests` | make all exits 0 |
-| `fpga-regression` | run_regression.sh exits 0 |
-| `cross-layer-tests` | pytest exits 0 |
+| `python-tests` | ruff clean, py_compile, `host/test_v7.py` green |
+| `mcu-tests` | legacy F7 unit tests, `make test` exits 0 |
+| `mcu-g0b1` | firmware `make test`, `make`, `make DIAG=0`, `make ADAR_COUNT=4` |
+| `fpga-regression` | `run_regression.sh` exits 0, golden vectors reproduce |
+| `cross-layer-tests` | contract tests green |
 
-## Important Notes
+## Checklist before push
 
-- **NO LEGACY COMPATIBILITY** unless explicitly requested by the maintainer.
-- **The FPGA RTL (`radar_system_top.v`) is the single source of truth** for opcode values, bit widths, reset defaults, and valid ranges. All other layers must align to it.
-- **Adversarial testing is mandatory**: Every test must actively try to break the code.
-- **Testbench timing**: Always add a `#1` delay after `@(posedge clk)` before driving DUT inputs with blocking assignments.
-- **Pre-fetch FIFO**: Remember `wr_full` is asserted after DEPTH+1 writes, not just DEPTH.
-
-## Checklist Before Push
-
-- [ ] `uv run ruff check .` — no lint errors
-- [ ] `uv run pytest test_GUI_V65_Tk.py test_v7.py -v` — all pass
-- [ ] `cd 9_Firmware/9_2_FPGA && bash run_regression.sh` — all 5 phases pass
-- [ ] `cd 9_Firmware/9_1_Microcontroller/tests && make clean && make` — pass
-- [ ] `uv run pytest 9_Firmware/tests/cross_layer/test_cross_layer_contract.py` — pass
-- [ ] `git diff --check` — no whitespace issues
-- [ ] PR targets `develop` branch
+- [ ] `uv run ruff check .` - no lint errors
+- [ ] `QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py -v` - all pass
+- [ ] `cd fpga && bash run_regression.sh` - all phases pass; `git checkout -- fpga/tb/cosim` afterwards
+- [ ] `cd firmware && make test && make && make DIAG=0 clean all && make ADAR_COUNT=4 clean all` - pass
+- [ ] `cd legacy/9_Firmware/9_1_Microcontroller/tests && make clean && make` - pass
+- [ ] `uv run pytest tests/cross_layer/test_cross_layer_contract.py` - pass
+- [ ] `git diff --check` - no whitespace issues; line-ending counts match (see above)
+- [ ] no generated outputs and no `uv.lock` staged
+- [ ] PR targets `main`
 
 ## Questions?
 
-Open a GitHub issue — discussion is visible to everyone.
+Open a GitHub issue; discussion is visible to everyone.

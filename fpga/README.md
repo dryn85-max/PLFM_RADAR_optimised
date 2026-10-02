@@ -6,9 +6,11 @@ attributes: `run_regression.sh` Phase 0 enforces this with a grep gate, an
 `iverilog -Wall` compile without `-DSIMULATION`, and a static resource gate
 (`tb/golden/count_multipliers.py`).
 
-Design documents: `docs/superpowers/specs/2026-10-01-rtl-vendor-neutral-port.md`
-(spec) and `docs/superpowers/plans/2026-10-01-rtl-vendor-neutral-port.md`
-(plan). Follow-up work is in `BACKLOG.md` ("RTL track").
+Design documents: [`docs/superpowers/specs/2026-10-01-rtl-vendor-neutral-port.md`](../docs/superpowers/specs/2026-10-01-rtl-vendor-neutral-port.md)
+(spec) and [`docs/superpowers/plans/2026-10-01-rtl-vendor-neutral-port.md`](../docs/superpowers/plans/2026-10-01-rtl-vendor-neutral-port.md)
+(plan). Follow-up work is in [`BACKLOG.md`](../BACKLOG.md) ("RTL track").
+Back to the [root README](../README.md); system view in
+[docs/architecture.md](../docs/architecture.md), bring-up in [docs/bring-up.md](../docs/bring-up.md).
 
 ## Signal chain
 
@@ -204,7 +206,7 @@ d. **Stale board files (Decision 8).** `constraints/`, `scripts/50t`,
    `scripts/200t`, `scripts/te0712`, `scripts/te0713`,
    `radar_system_top_te07*_dev.v` and `constraints/README.md` belong to the old
    Xilinx flows and reference removed tops/ports/modules. They now live under
-   `legacy/9_Firmware/9_2_FPGA/` (same relative paths), kept for reference and
+   `../legacy/9_Firmware/9_2_FPGA/` (same relative paths), kept for reference and
    neither built nor tested.
 e. **No per-stage FFT scaling.** `fft_engine` outputs saturate at 16 bits when
    the input exceeds roughly 1/16 of full scale; keep the matched-filter input

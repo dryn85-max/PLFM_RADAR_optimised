@@ -1,3 +1,5 @@
+> Исторический анализ upstream-дизайна (NawfalMotii79/PLFM_RADAR, базовый коммит `b46dd71`). Пути к файлам обновлены после реструктуризации 2026-10-02: материалы upstream лежат в `legacy/`, актуальный FPGA — в `fpga/`; номера строк и файлы, которых уже нет в дереве, относятся к состоянию `b46dd71`.
+
 # AERIS-10 (PLFM_RADAR) — анализ оптимальности BOM и кода
 
 Дата: 2026-10-01. Анализируемая ревизия: `main` @ `749bd0f`.
@@ -16,7 +18,7 @@
 | **Power Board**: 21× TPS562208 + 6× ADM7151 + 2× TPS7A83 + 5× LM2662 | 29 регуляторов | Суммарная нагрузка Main+Synth ≈ 54 Вт; несколько 2-А DC/DC питают нагрузку 0,2–50 мА | **Избыточно**: минимум 5–7 DC/DC можно объединить. |
 | Два ADS7830 + два DAC5578 + 16× INA241 (Idq-контур) | 16 каналов измерения/управления | Используются полностью | Оправданно для 10E; для 10N (без QPA2962) весь контур Idq лишний — нет варианта BOM. |
 
-**Главный вывод:** проект не столько «переоснащён» дорогими чипами, сколько **несогласован**: README говорит XC7A50T, `1_Project_Description/Project_Description.docx` — XC7A100T, `docs/architecture.html` — «Production target remains xc7a200t-2fbg484i», а на плате впаян 50T, в который текущий RTL влезает впритык (и, судя по коммиту `8d7b6e0`, ещё недавно не влезал: «100% DSP utilization… WNS=-1.103ns»). Наибольший экономический эффект даст **не замена FPGA на больший, а оптимизация RTL** (DSP 112 → ~55), после чего 50T становится комфортным, а STM32F746 можно заменить на F4/G4.
+**Главный вывод:** проект не столько «переоснащён» дорогими чипами, сколько **несогласован**: README говорит XC7A50T, `legacy/1_Project_Description/Project_Description.docx` — XC7A100T, `legacy/docs-site/architecture.html` — «Production target remains xc7a200t-2fbg484i», а на плате впаян 50T, в который текущий RTL влезает впритык (и, судя по коммиту `8d7b6e0`, ещё недавно не влезал: «100% DSP utilization… WNS=-1.103ns»). Наибольший экономический эффект даст **не замена FPGA на больший, а оптимизация RTL** (DSP 112 → ~55), после чего 50T становится комфортным, а STM32F746 можно заменить на F4/G4.
 
 ---
 
@@ -24,8 +26,8 @@
 
 ### 1.1. Факты
 
-- На Main Board впаян **XC7A50T-2FTG256I** (`4_Schematics and Boards Layout/4_7_Production Files/Gerber_Main_Board/BOM_Main_Board.xlsx`, U42). Trenz TE0712/TE0713 (XC7A200T) используются **только** для bring-up heartbeat / FT601-тестов (`9_Firmware/9_2_FPGA/scripts/te0713/*.tcl`), а не для радарного пайплайна.
-- Утилизационных отчётов для 50T в репо **нет**. Единственные цифры — для 200T (`docs/reports.html`, Build 25): 9 252 LUT, 12 488 FF, 17 BRAM, **142 DSP48E1**, 0,753 Вт. Разбивка DSP: DDC 117 (FIR 47+47, CIC 10+10, миксеры 2, NCO 1), matched filter 12, Doppler 10, CFAR 3.
+- На Main Board впаян **XC7A50T-2FTG256I** (`legacy/4_Schematics and Boards Layout/4_7_Production Files/Gerber_Main_Board/BOM_Main_Board.xlsx`, U42). Trenz TE0712/TE0713 (XC7A200T) используются **только** для bring-up heartbeat / FT601-тестов (`legacy/9_Firmware/9_2_FPGA/scripts/te0713/*.tcl`), а не для радарного пайплайна.
+- Утилизационных отчётов для 50T в репо **нет**. Единственные цифры — для 200T (`legacy/docs-site/reports.html`, Build 25): 9 252 LUT, 12 488 FF, 17 BRAM, **142 DSP48E1**, 0,753 Вт. Разбивка DSP: DDC 117 (FIR 47+47, CIC 10+10, миксеры 2, NCO 1), matched filter 12, Doppler 10, CFAR 3.
 - Для 50T есть только сообщения коммитов: `8d7b6e0` — после переноса сумматоров FIR в фабрику освобождено ~30 DSP; по подсчёту RTL в `main` — **~112 DSP из 120 (93 %)**. На ветке `origin/feat/dual-range-v2` (не в `main`) — 80/120 после сворачивания FIR по симметрии, затем 70/120.
 - Лимит XC7A50T: 120 DSP48E1, 32 600 LUT, 65 200 FF, 75 BRAM36 (2,7 Мбит).
 
@@ -33,7 +35,7 @@
 
 | # | Проблема | Где | Экономия |
 |---|---|---|---|
-| 1 | **FIR не использует симметрию коэффициентов.** 32 отвода, коэффициенты симметричны, но 32 умножителя на канал (64 всего) без пред-сумматора DSP48E1. | `9_Firmware/9_2_FPGA/fir_lowpass.v:14, 80-87, 120` | **−32 DSP** (сделано на ветке `0b2f756`, не влито в `main`) |
+| 1 | **FIR не использует симметрию коэффициентов.** 32 отвода, коэффициенты симметричны, но 32 умножителя на канал (64 всего) без пред-сумматора DSP48E1. | `fpga/fir_lowpass.v:14, 80-87, 120` | **−32 DSP** (сделано на ветке `0b2f756`, не влито в `main`) |
 | 2 | **Нет децимации после CIC.** Полоса чирпа 20 МГц (±10 МГц), поток 100 MSPS. 25 MSPS достаточно; FIR спроектирован под 25 MSPS, но работает на 100 (`977434a`). Далее считается 1024-точечное FFT, из которого 15/16 выбрасывается (`range_bin_decimator` 1024→64). | `fir_lowpass.v:43-44`, `radar_receiver_final.v:356-370` | ×4 меньше работы FFT/matched filter; FIR может быть полифазным/мультиплексированным по 4 тактам → **−24 DSP** |
 | 3 | **Опорный спектр чирпа пересчитывается в каждом сегменте.** Один FFT-движок гоняется 3 раза (signal, reference, inverse); reference постоянен → хранить в ROM. | `matched_filter_processing_chain.v:614` | −33 % времени matched-filter |
 | 4 | **Внутренняя ширина FFT 32 бит** при 8-битном АЦП → каждое комплексное умножение 32×16 = 2 DSP, 8 DSP на движок вместо 4. | `fft_engine.v:699-703` | **−8 DSP** (два движка) |
@@ -63,7 +65,7 @@
 
 ## 2. STM32F746ZGT7
 
-### 2.1. Что реально используется (`9_Firmware/9_1_Microcontroller/9_1_3_C_Cpp_Code/main.cpp`)
+### 2.1. Что реально используется (`legacy/9_Firmware/9_1_Microcontroller/9_1_3_C_Cpp_Code/main.cpp`)
 
 - Тактирование **72 МГц** (HSE 25, PLLM=25, PLLN=144, PLLP=2; `main.cpp:2250-2252`), VOLTAGE_SCALE3. I-/D-кэш не включены. Треть от паспортных 216 МГц.
 - Периферия: I2C1/2/3, SPI1 (ADAR1000 через FPGA-левелшифтер), SPI4 (AD9523 + 2× ADF4382), UART5 (GPS UM982), USART3 (лог), USB OTG FS CDC, TIM1 (micros), TIM3 (PWM DELADJ — **не работает**: нет MspInit для TIM3, пины PG7/PG13 не маппятся на TIM3), IWDG, ~78 GPIO.
@@ -127,7 +129,7 @@
 ### 3.2. Power Board (28 позиций, 313 установок)
 
 - **21× TPS562208 (2 А buck)**, 6× ADM7151 (RF LDO), 2× TPS7A8300, 5× LM2662 (инвертор заряда). Нагрузка Main+Synth ≈ 54 Вт.
-- Явно избыточные рейлы (`3_Power Management/Power Management V6.xlsx`, `PowerBoard.sch`):
+- Явно избыточные рейлы (`legacy/3_Power Management/Power Management V6.xlsx`, `PowerBoard.sch`):
 
 | Рейл | Нагрузка | Сейчас | Предложение |
 |---|---|---|---|
@@ -227,7 +229,7 @@ ADAR1000 ×4 + ADTR1107 ×16 — единственная доступная с�
 | 2 | **AD9484** 8 бит 500 MSPS (~$100) + 2× AD8352 | С ПЧ 20 МГц — **12–14 бит, 80–125 MSPS** (AD9629/AD9231/LTC2145, $20–35), один драйвер | **$80–100** | **+24 дБ динамического диапазона** → лучше CFAR; исчезает 400-МГц домен, MMCM, Gray-CDC |
 | 3 | **UM982** RTK (~$150–200, вне BOM) | u-blox NEO-M8 / ATGM336H ($5–15); heading не нужен — азимут задаёт шаговик с homing | **$140–190** | Стандартный NMEA |
 | 4 | **AD9523** (~$50) + OCXO 1,2 А + 2 VCXO + XO | После п.1–2 нужны 3 клока (FPGA 100, ADC ~100–125, DAC 120) + ref для одного PLL: **Si5344 / LMK03328** ($15–25). OCXO → TCXO, если фазовый шум/когерентность в кадре позволяют (для 10N почти наверняка) | **$40–80 + 4 Вт** | Фазовый шум LO определяет PLL+ref, не jitter-cleaner |
-| 5 | **XC7A50T** (~$60–90) | После оптимизации RTL (≤60 DSP) и ухода от 400 МГц: **XC7S50** (Spartan-7, те же 120 DSP/32 k LUT, ~$35–45; библиотека XC7S50-CSGA324 уже лежит в `8_Utils/Eagle_ CAD_Libs/`) или XC7A35T ($40). Lattice ECP5/Gowin — ещё вдвое дешевле, но полный переезд toolchain | **$25–50** | Spartan-7 — тот же Vivado |
+| 5 | **XC7A50T** (~$60–90) | После оптимизации RTL (≤60 DSP) и ухода от 400 МГц: **XC7S50** (Spartan-7, те же 120 DSP/32 k LUT, ~$35–45; библиотека XC7S50-CSGA324 уже лежит в `legacy/8_Utils/Eagle_ CAD_Libs/`) или XC7A35T ($40). Lattice ECP5/Gowin — ещё вдвое дешевле, но полный переезд toolchain | **$25–50** | Spartan-7 — тот же Vivado |
 | 6 | **INA241A3 ×16 + ADS7830 ×2** (Idq) | **INA226 ×16** (I²C, встроенный 16-бит ADC, ровно 16 адресов на шине, ~$1.5) | $20–30 | −2 ADS7830, точность на порядок выше, снимает вопрос шунта 5 мΩ vs R100 |
 | 7 | **STM32F746ZGT7** (~$12–15) | STM32G0B1 (5.2) | $10–12 | −USB-разъём X53, −кварц 8 МГц, −USB-стек |
 | 8 | **FT2232HQ** + AT93C46 + кварц | FT232HQ (одноканальный, тот же 245-FIFO) | $3–4 | — |
@@ -254,6 +256,6 @@ ADAR1000 ×4 + ADTR1107 ×16 — единственная доступная с�
 
 ## Приложение: источники
 
-- FPGA: `9_Firmware/9_2_FPGA/` (`radar_system_top_50t.v`, `radar_system_top.v`, `radar_receiver_final.v`, `ddc_400m.v`, `fir_lowpass.v`, `cic_decimator_4x_enhanced.v`, `fft_engine.v`, `matched_filter_*.v`, `cfar_ca.v`, `mti_canceller.v`, `latency_buffer.v`, `cdc_modules.v`, `constraints/*.xdc`, `scripts/*/build_*.tcl`), `docs/reports.html`, `docs/implementation-log.html`, `docs/release-notes.html`, коммиты `8d7b6e0`, `1acedf4`, ветки `feat/dual-range-v2`, `integration/fft-2048-on-p0`.
-- MCU: `9_Firmware/9_1_Microcontroller/9_1_3_C_Cpp_Code/main.cpp`, `main.h`, `um982_gps.c`, `9_1_1_C_Cpp_Libraries/*`, `tests/Makefile`.
-- BOM/железо: `4_Schematics and Boards Layout/4_7_Production Files/Gerber_*/BOM_*.xlsx`, `4_6_Schematics/*/*.sch`, `3_Power Management/Power Management V6.xlsx`, `2_Functional Diagram & Interconnection Matrices/RADAR_V6.drawio`, `1_Project_Description/Project_Description.docx`, `README.md`.
+- FPGA: `fpga/` (`radar_system_top_50t.v`, `radar_system_top.v`, `radar_receiver_final.v`, `ddc_400m.v`, `fir_lowpass.v`, `cic_decimator_4x_enhanced.v`, `fft_engine.v`, `matched_filter_*.v`, `cfar_ca.v`, `mti_canceller.v`, `latency_buffer.v`, `cdc_modules.v`, `constraints/*.xdc`, `scripts/*/build_*.tcl`), `legacy/docs-site/reports.html`, `legacy/docs-site/implementation-log.html`, `legacy/docs-site/release-notes.html`, коммиты `8d7b6e0`, `1acedf4`, ветки `feat/dual-range-v2`, `integration/fft-2048-on-p0`.
+- MCU: `legacy/9_Firmware/9_1_Microcontroller/9_1_3_C_Cpp_Code/main.cpp`, `main.h`, `um982_gps.c`, `9_1_1_C_Cpp_Libraries/*`, `tests/Makefile`.
+- BOM/железо: `legacy/4_Schematics and Boards Layout/4_7_Production Files/Gerber_*/BOM_*.xlsx`, `4_6_Schematics/*/*.sch`, `legacy/3_Power Management/Power Management V6.xlsx`, `legacy/2_Functional Diagram & Interconnection Matrices/RADAR_V6.drawio`, `legacy/1_Project_Description/Project_Description.docx`, `README.md`.

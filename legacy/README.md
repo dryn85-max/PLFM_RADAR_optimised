@@ -1,14 +1,17 @@
 # legacy/
 
+Back to the [root README](../README.md).
+
 Reference material inherited from the upstream project
 [NawfalMotii79/PLFM_RADAR](https://github.com/NawfalMotii79/PLFM_RADAR)
 (baseline upstream commit `b46dd71`) that AERIS-10 Lite does not use.
 
 Everything here was moved with `git mv`, so history is preserved, and keeps its
 original relative path (`X` became `legacy/X`). `legacy/` is reference only and
-is not built. The one exception: the STM32F7 firmware unit tests are kept in CI
-as required by the G0B1 spec (they are moved out of the F7 tree in Task 3 of the
-restructure plan and stay referenced from here).
+is not built. The one exception: the STM32F7 firmware unit tests in
+`9_Firmware/9_1_Microcontroller/tests/` are kept in CI (job "Legacy F7 MCU tests")
+as required by the G0B1 spec; run them with
+`make -C legacy/9_Firmware/9_1_Microcontroller/tests clean all`.
 
 ## Moved items
 
