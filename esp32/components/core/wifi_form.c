@@ -19,7 +19,7 @@ static int hexval(char c)
 }
 
 /* Decode in[0..n) into out (capacity max + 1). Returns length or a negative WF_E_*. */
-static int decode_value(const char *in, size_t n, char *out, size_t max)
+int wf_url_decode(const char *in, size_t n, char *out, size_t max)
 {
     size_t o = 0;
     for (size_t i = 0; i < n; i++) {
@@ -66,7 +66,7 @@ int wf_parse_credentials(const char *body, size_t len, char *ssid, char *pass)
             }
             if (have != NULL) {
                 if (*have) return WF_E_DUPLICATE;
-                int r = decode_value(val, vlen, dst, max);
+                int r = wf_url_decode(val, vlen, dst, max);
                 if (r < 0) return r;
                 *have = 1;
             }

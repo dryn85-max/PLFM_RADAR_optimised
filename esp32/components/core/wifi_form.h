@@ -32,4 +32,8 @@ void wf_gen_ap_pass(uint32_t (*rnd)(void), char *out);
  * Returns WF_OK or a negative WF_E_*; outputs are unspecified on error. */
 int wf_parse_credentials(const char *body, size_t len, char *ssid, char *pass);
 
+/* Decode in[0..n) (%XX and '+') into out (capacity max + 1), NUL-terminated.
+ * Returns the decoded length or WF_E_BAD_ESCAPE / WF_E_TOO_LONG (more than max bytes). */
+int wf_url_decode(const char *in, size_t n, char *out, size_t max);
+
 #endif
