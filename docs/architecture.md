@@ -208,11 +208,13 @@ Data flow:
    unchanged for every type. A missing or silent GPS or IMU never touches the
    LD2410C path.
 2b. **Time.** UTC is carried by `time_sync` records: GPS on each RMC with status
-   `A` and valid time and date (no PPS, so about +-50 to 300 ms, VERIFY), SNTP
+   `A` and valid time and date (no PPS: measured 128 ms late), SNTP
    on each synchronisation over the STA link. Both are recorded; the live page
    shows GPS while its latest sync is under 5 s old, else SNTP. The PC converts
    `esp_time_us` to UTC with a GPS `time_sync` of the same boot within +-2 s, else
-   the nearest preceding `time_sync` of any source.
+   the nearest preceding `time_sync` of any source; a GPS sync more than 1 s off
+   the nearest SNTP sync of its boot is rejected (whole-second UTC error of the
+   NEO-6M after a cold-start fix).
 2c. **Tilt.** Pitch and roll are absolute (complementary filter on the gravity
    direction; body frame +X boresight, +Y left, +Z up; sensor-to-body mapping is
    a firmware constant). There is no azimuth: no magnetometer.

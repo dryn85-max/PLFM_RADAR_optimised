@@ -1357,6 +1357,108 @@ def test_cli_export_with_gps_and_imu_files(tmp_path, capsys):
     assert capsys.readouterr().out.startswith("seq,")
 
 
+# ---- GPS vs SNTP plausibility -------------------------------------------------
+
+
+def osync(seq, esp, d_us, source):
+    """time_sync whose offset (utc - esp) is U0 + d_us."""
+    return sync_rec(seq, esp, U0 + esp + d_us, source)
+
+
+def test_gps_3s_off_sntp_rejected_then_consistent_gps_used():
+    recs = [
+        osync(0, 10_000_000, 0, 2),
+        osync(1, 11_000_000, 3_000_000, 1),  # receiver 3 s ahead
+        osync(2, 12_000_000, 3_000_000, 1),
+        frame_at(3, 11_500_000),
+        osync(4, 400_000_000, -128_000, 1),  # later, 128 ms off SNTP: fine
+        frame_at(5, 400_100_000),
+    ]
+    assert utc_of(recs, 0) == (lr.format_utc_us(U0 + 11_500_000), "sntp")
+    assert utc_of(recs, 1) == (lr.format_utc_us(U0 + 400_100_000 - 128_000), "gps")
+    idx = lr.TimeIndex(recs)
+    assert idx.gps_rejected == 2
+    assert idx.utc_us(0, 11_000_000) == (U0 + 11_000_000, 2)
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_gps_sntp_boundary(sign):
+    def run(diff):
+        recs = [osync(0, 10_000_000, 0, 2), osync(1, 11_000_000, sign * diff, 1)]
+        idx = lr.TimeIndex(recs)
+        return idx.gps_rejected, idx.utc_us(0, 11_000_000)
+
+    assert run(1_000_000) == (0, (U0 + 11_000_000 + sign * 1_000_000, 1))  # exactly 1 s: kept
+    assert run(1_000_001) == (1, (U0 + 11_000_000, 2))
+
+
+def test_gps_without_sntp_in_boot_used_unchanged():
+    recs = [osync(0, 10_000_000, 3_000_000, 1), frame_at(1, 10_500_000)]
+    assert utc_of(recs, 0) == (lr.format_utc_us(U0 + 13_500_000), "gps")
+    assert lr.TimeIndex(recs).gps_rejected == 0
+
+
+def test_gps_sntp_check_is_per_boot():
+    recs = [
+        osync(0, 10_000_000, 0, 2),
+        lr.RebootRec(1, 2, 5),
+        osync(0, 10_000_000, 3_000_000, 1),  # boot 1: no SNTP of its own
+        frame_at(1, 10_500_000),
+    ]
+    idx = lr.TimeIndex(recs)
+    assert idx.gps_rejected == 0
+    assert idx.utc_us(1, 10_500_000) == (U0 + 13_500_000, 1)
+
+
+def test_gps_judged_against_nearest_sntp_by_esp_time():
+    recs = [
+        osync(0, 10_000_000, 0, 2),
+        osync(1, 100_000_000, 5_000_000, 2),  # SNTP syncs disagree with each other
+        osync(2, 90_000_000, 5_000_000, 1),  # nearest SNTP is the 100 s one: consistent
+        osync(3, 20_000_000, 5_000_000, 1),  # nearest SNTP is the 10 s one: rejected
+    ]
+    idx = lr.TimeIndex(recs)
+    assert idx.gps_rejected == 1
+    assert idx.utc_us(0, 90_000_000) == (U0 + 95_000_000, 1)
+    assert idx.utc_us(0, 20_000_000) == (U0 + 20_000_000, 2)  # no GPS left in window
+
+
+def test_gps_sntp_tie_uses_preceding_sntp():
+    recs = [
+        osync(0, 10_000_000, 0, 2),
+        osync(1, 20_000_000, 5_000_000, 2),
+        osync(2, 15_000_000, 0, 1),  # equidistant: judged against the preceding (offset 0)
+    ]
+    assert lr.TimeIndex(recs).gps_rejected == 0
+
+
+def test_all_gps_rejected_before_first_sntp_falls_back_to_following_sntp():
+    recs = [
+        osync(0, 1_000_000, 3_000_000, 1),
+        osync(1, 5_000_000, 0, 2),
+        frame_at(2, 1_500_000),
+    ]
+    assert utc_of(recs, 0) == (lr.format_utc_us(U0 + 1_500_000), "sntp")
+    assert lr.TimeIndex(recs).utc_us(0, 1_500_000) == (U0 + 1_500_000, 2)
+
+
+def test_gps_sntp_other_sources_untouched_and_damaged_sync_ignored():
+    recs = [
+        osync(0, 10_000_000, 0, 2),
+        osync(1, 11_000_000, 7_000_000, 9),  # unknown source: never rejected
+        lr.TimeSyncRec(2, 12_000_000, 1, b"bad"),
+        osync(3, 13_000_000, 3_000_000, 1),
+    ]
+    idx = lr.TimeIndex(recs)
+    assert idx.gps_rejected == 1
+    assert idx.utc_us(0, 11_000_000) == (U0 + 18_000_000, 9)
+
+
+def test_no_syncs_gives_none_and_zero_rejected():
+    assert lr.TimeIndex([frame_at(0, 5)]).gps_rejected == 0
+    assert lr.TimeIndex([frame_at(0, 5)]).utc_us(0, 5) is None
+
+
 # ---- info -------------------------------------------------------------------
 
 
@@ -1392,6 +1494,26 @@ def test_info_gps_imu_time_stats(tmp_path, capsys):
     assert lr.main(["info", str(f)]) == 0
     out = capsys.readouterr().out
     assert "gps fix ratio: n/a" in out and "time syncs:    0 (none)" in out
+
+
+def test_info_prints_rejected_gps_line_only_when_nonzero(tmp_path, capsys):
+    recs = [
+        osync(0, 10_000_000, 0, 2),
+        osync(1, 11_000_000, 3_000_000, 1),
+        osync(2, 12_000_000, 3_000_000, 1),
+    ]
+    assert lr.summarize(0, recs)["gps_syncs_rejected"] == 2
+    f = tmp_path / "r.ldrec"
+    f.write_bytes(build_file(recs))
+    assert lr.main(["info", str(f)]) == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    i = next(k for k, ln in enumerate(lines) if ln.startswith("time syncs:"))
+    assert lines[i + 1] == "gps rejected:  2 (off SNTP by > 1 s)"
+    f.write_bytes(build_file([osync(0, 10_000_000, 0, 2), osync(1, 11_000_000, 0, 1)]))
+    assert lr.main(["info", str(f)]) == 0
+    assert "gps rejected" not in capsys.readouterr().out
+    assert lr.summarize(0, [])["gps_syncs_rejected"] == 0
 
 
 # ---- recorder with mixed record types (one shared seq) ------------------------

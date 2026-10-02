@@ -247,7 +247,19 @@ required; other sentences are ignored).
   for the NEO-6M; from memory, not in the repository, **VERIFY**). Without sky
   view it never comes. **Place the antenna near a window** (or outdoors, flat,
   with the ceramic patch facing up); a fix at a desk deep inside a building is
-  not to be expected.
+  not to be expected. Bench, 2026-10-02: first fix about 7 min after
+  power-up (the module was moved from the desk to the balcony meanwhile), 4
+  satellites, HDOP about 5 at first; position, altitude and UTC correct.
+- **UTC off by whole seconds right after the first fix.** On the bench the GPS
+  UTC was **3 s ahead** of SNTP for the first 5.6 min after the first fix
+  (335 consecutive syncs), then correct. Likely cause: until the receiver has
+  decoded the GPS-UTC leap-second count from the satellites (broadcast every
+  12.5 min) it uses a default built into its firmware (from memory, **VERIFY**
+  against the NEO-6M documentation); NMEA has no flag for this. The host
+  conversion therefore **rejects a GPS `time_sync` that differs from the
+  nearest SNTP sync of the same boot by more than 1 s** (owner decision
+  2026-10-02); `info` prints how many were rejected. Without SNTP (no Wi-Fi
+  STA) nothing can be checked and those first minutes stay about 3 s off.
 - A one-line GPS status is logged every 10 s (see "Live page").
 
 ## Time sources and accuracy
@@ -258,14 +270,15 @@ is the matching ESP32 time. There are two sources:
 
 | Source | Code | When a record is written | Accuracy |
 |---|---|---|---|
-| GPS | 1 | on every RMC with status `A` and valid time and date (about 1 Hz); stamped when the parser completes the RMC line | no PPS on the board: about **+-50 to 300 ms** expected (**VERIFY** on the bench): the UTC value belongs to the second boundary but the sentence arrives later (a 70-character RMC takes about 70 ms at 9600 Bd, plus the receiver's output delay) |
-| SNTP | 2 | on each synchronisation with `pool.ntp.org` (ESP-IDF `esp_netif_sntp`), started once the STA link has an IP address; needs the home Wi-Fi with internet access | typically tens of ms over the internet (**VERIFY**); the time is the ESP32 system clock right after the SNTP callback |
+| GPS | 1 | on every RMC with status `A` and valid time and date (about 1 Hz); stamped when the parser completes the RMC line | no PPS on the board: the UTC value belongs to the second boundary but the sentence arrives later (a 70-character RMC takes about 70 ms at 9600 Bd, plus the receiver's output delay). Measured on the bench (2026-10-02, 1413 syncs over 23 min, against SNTP): the GPS stamp is **128 ms late** (median), p1..p99 119..136 ms, no drift; not corrected in the recording. Plus the whole-second error after the first fix (see "GPS") |
+| SNTP | 2 | on each synchronisation with `pool.ntp.org` (ESP-IDF `esp_netif_sntp`), started once the STA link has an IP address; needs the home Wi-Fi with internet access | typically tens of ms over the internet (not measured separately; the GPS figures above are relative to it); the time is the ESP32 system clock right after the SNTP callback |
 
 **Priority.** The live page shows GPS while the latest GPS `time_sync` is less
 than 5 s old, otherwise SNTP once at least one SNTP sync happened, otherwise
 `none`. This only decides what is *shown*: **both sources are recorded**. The PC
 tool converts a record's `esp_time_us` to UTC with the nearest GPS `time_sync`
-record of the same boot within +-2 s of it (GPS has priority); otherwise with the
+record of the same boot within +-2 s of it (GPS has priority; GPS syncs more than
+1 s off the nearest SNTP sync of the boot are rejected first); otherwise with the
 nearest preceding `time_sync` of any source (if none precedes it, the first
 following one; none at all: empty), and writes that source into the
 `time_source` column. Since SNTP syncs hourly by default, the firmware re-emits an
@@ -366,7 +379,8 @@ uv run python host/ld2410_rec.py info run.ldrec
   frame_utc, time_source, gps_utc, gps_lat, gps_lon, gps_alt_m, gps_sats, gps_hdop,
   gps_fix_quality, gps_flags, pitch_deg, roll_deg`. `record` is `frame`, `gap` or
   `reboot`. `frame_utc` (ISO 8601, microseconds) is the frame's `esp_time_us`
-  converted with the nearest GPS `time_sync` of the same boot within +-2 s, else the
+  converted with the nearest GPS `time_sync` of the same boot within +-2 s (GPS
+  syncs more than 1 s off SNTP are rejected), else the
   nearest preceding `time_sync` of any source (if none precedes it, the following one;
   none at all: empty); `time_source` is `gps` or
   `sntp`. `gps_*` is the latest fix recorded before the frame, `pitch_deg` /
@@ -522,9 +536,12 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   talker), no-fix behaviour (time and date reported with status `V`), cold
   start time at the owner's window, NEO-6M datasheet not in
   `hardware/datasheets/`.
-- GPS time accuracy without PPS (expected +-50 to 300 ms) against SNTP.
-- SNTP: sync cadence (the ESP-IDF default interval is assumed, not checked),
-  that a record is written on every sync, and accuracy on the home network.
+- GPS time accuracy without PPS: measured on the bench 2026-10-02 (128 ms
+  late against SNTP, see "Time sources and accuracy"); the cause of the 3 s
+  error after the first fix (default leap-second count) is still VERIFY.
+- SNTP: sync cadence (the ESP-IDF default interval is assumed; a 36 min
+  recording showed one real sync and the 60 s re-emits), and its own accuracy
+  on the home network.
 - GY-BMI160: every register value, delay and sensitivity in "BMI160 registers
   used" (datasheet not in `hardware/datasheets/`); board pull-ups at 400 kHz;
   address 0x68 with SA0 to GND; I2C mode with CS to 3V3.
