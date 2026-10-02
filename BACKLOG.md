@@ -69,21 +69,37 @@ Follow-up work that is out of scope for the current plans.
 Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
 `docs/superpowers/specs/2026-10-02-esp32-ld2410-mvp.md`).
 
-- [ ] **LD2410C settings page** on the live page: maximum gates, per-gate
-  sensitivity, hold time (the first version only enables engineering mode).
 - [ ] **Rotating radar and PPI display.** Analysis (owner idea, esp32-gps-imu
   brainstorming): azimuth must come from the drive (stepper motor with a homing
   switch, or an encoder), not from the IMU; the angular spacing of the picture
   is limited by the LD2410C output rate (10 frames/s) and its wide beam, not by
-  the IMU rate. Needs its own spec (drive, slip ring or cable wrap, PPI page,
-  recording of the azimuth).
+  the IMU rate. Decision (owner, 2026-10-02, LD2410C settings brainstorming):
+  the purpose is to rehearse the mechanics and the software for the future
+  radar; **step mode** (move, settle, take frames); **drive B**: 28BYJ-48 +
+  ULN2003 + a home sensor, **360 degrees back and forth** (no slip ring, a
+  flexible cable is enough). A **separate later cycle** with its own spec (drive,
+  PPI page, recording of the azimuth, see "Recording protocol v4"); the hardware
+  is not on hand. Shopping list: 28BYJ-48 5 V stepper with a ULN2003 driver
+  board; a Hall sensor module (KY-003 or A3144) with a small magnet, or a
+  slotted optical sensor with a flag, as the home sensor; a stand or turntable;
+  a flexible 4-core cable to the radar.
+- [ ] **Recording protocol v4** (one change, with the rotating radar): a
+  `config` record with the LD2410C settings (max gates, no-one duration,
+  per-gate sensitivities, firmware version) so a recording says how the module
+  was set; the LD2410C **distance resolution 0.2 m** (commands `0x00AA` set /
+  `0x00AB` query, §2.2.16-2.2.17, p. 17-18 of the Hi-Link document; the
+  document's table lists 0x0000 = 0.75 m and 0x0001 = 0.2 m but calls the
+  default 0x0001 "0.75 m": VERIFY on the module) which changes the gate size, so
+  the recording must carry it; and the **azimuth per frame** for the rotating
+  radar. Today settings changes are only logged on the console and the
+  protocol is v3.
 - [ ] **Magnetometer or BNO085 for azimuth.** The GY-BMI160 has no
   magnetometer, so there is no heading. A BNO085 (or a separate magnetometer)
   would give it; calibration is needed near the electronics (hard/soft-iron).
   The IMU code is already separated from the tilt filter for such an addition.
-- [ ] **Tilt zero button** on the live page (stores an offset so the radar's
-  mounting error can be cancelled). Needs authentication of the live page first
-  (today anyone on the network can open it); tilt is absolute until then.
+- [ ] **Tilt zero button** (stores an offset so the radar's mounting error can
+  be cancelled), from the AP-only settings page (the live page stays open on the
+  home network); tilt is absolute until then.
 - [ ] **Radar motion detector** (presence/motion event on the radar data, with
   its own recording and live indication); out of scope of the GPS/IMU cycle.
 - [ ] **IMU recording at 100 Hz option.** The recording carries 10 Hz averaged
@@ -118,20 +134,18 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
 - [ ] **PA over-temperature sensor choice for the STM32.** Options: A) TMP3x on
   the internal ADC (needs a pin reshuffle); B) I2C LM75 / TMP102; C) AHT only
   for air temperature; D) keep the ADS7830. NTC probes from the ZFC39 kit are an
-  option for the probe itself. Needs an owner decision.
-- [ ] **Hi-Link LD2410C protocol manual into `hardware/datasheets/`**, then
-  verify the parser, the frame decoder, the command codec and the test vectors
-  (`esp32/tests/vectors/`, currently synthetic) against it and a real capture
-  (engineering frame layout incl. the extra module-specific bytes, ACK
-  sequence, frame rate, maximum payload length).
+  option for the probe itself. Needs an owner decision. Not needed now (owner
+  2026-10-02: no part that can overheat on the bench).
 - [ ] **Commit `esp32/dependencies.lock`.** The `espressif/mdns` version is now
   pinned exactly (`==1.14.0`, as resolved by CI) but the lock file is still
   git-ignored and not committed; commit it for fully reproducible builds.
 - [ ] **TCP keepalive for the recording server** (only 1 s keep-alive batches and
   5 s socket timeouts today); a half-open connection from a vanished client is
   noticed by the send timeout only.
-- [ ] **Optional authentication on the live page** (none in the MVP; anyone on
-  the AP or the home network can open it and the recording port).
+- [ ] **Live page and recording port stay open on the home network** (owner
+  decision 2026-10-02: no password; the settings pages `/wifi` and `/ld2410` are
+  AP-only). Authentication of the live page and port 5410 is not planned; revisit
+  if the board is used on a shared network.
 - [ ] **A stalled WebSocket client blocks the httpd task** (final review,
   2026-10-02): `httpd_ws_send_frame_async` runs synchronously in the httpd task,
   so one stalled browser delays page loads and the other clients for up to the

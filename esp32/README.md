@@ -9,6 +9,9 @@ the HLK-LD2410C, a ready 24 GHz FMCW presence radar, over UART and offers:
 - a **recording server** (TCP 5410) from which a PC tool stores the raw
   LD2410C frames, with sequence numbers and timestamps, and survives Wi-Fi
   drops;
+- a **settings page** for the LD2410C (`/ld2410`, only from the ESP32's own
+  access point), an **RGB status LED** and **BOOT-button actions** (access
+  point on demand, Wi-Fi reset);
 - optional **GPS** (GY-NEO6MV2, u-blox NEO-6M) and **IMU** (GY-BMI160, 6-axis,
   no magnetometer): UTC time and position, and absolute radar tilt (pitch and
   roll), shown on the live page and stored in the same recording as separate
@@ -34,6 +37,7 @@ Specification and plan: [spec](../docs/superpowers/specs/2026-10-02-esp32-ld2410
 | HLK-LD2410C | 24 GHz FMCW presence radar, UART 256000 8N1 |
 | GY-NEO6MV2 | u-blox NEO-6M GPS module, UART 9600 8N1, 3.3 V logic (optional) |
 | GY-BMI160 | Bosch BMI160 6-axis IMU (accelerometer + gyroscope), I2C (optional) |
+| On-board RGB LED | addressable (WS2812-type) LED of the DevKitC-1 v1.1, data on GPIO38; no wiring |
 | USB cable | to the native **USB** connector (USB-Serial-JTAG) |
 
 ### Wiring
@@ -148,16 +152,131 @@ page; only the AP password line is printed.
   credentials the radio runs in AP+STA mode with the STA idle, because the
   driver cannot scan in AP-only mode.
 - On boot with stored credentials the ESP32 connects as a station (15 s
-  timeout). If it connects, only STA is active and the AP is off (so `/wifi` is
-  not reachable until the credentials are erased). If it does not connect, the
+  timeout). If it connects, only STA is active and the AP is off; the AP (and
+  with it `/wifi` and `/ld2410`) is brought up on demand with the BOOT button
+  (see "AP on demand"). If it does not connect, the
   AP starts alongside (AP+STA) and the STA keeps retrying in the background
   (backoff 2 s doubling to 30 s). A dropped STA link is also retried.
 - On the STA network the board is reachable as `http://aeris-mvp.local`
   (mDNS, VERIFY) or by the STA IP from the console.
-- **BOOT held for at least 5 s while the firmware is running** erases the stored
-  STA credentials (not the AP password) and reboots into AP mode. Do **not**
-  hold BOOT at power-up or reset: GPIO0 low at reset selects the ROM download
-  mode.
+- **BOOT released after 5 to 10 s while the firmware is running** erases the
+  stored STA credentials (not the AP password) and reboots into AP mode; see
+  "BOOT button and RGB LED". Do **not** hold BOOT at power-up or reset: GPIO0
+  low at reset selects the ROM download mode.
+
+## BOOT button and RGB LED
+
+The BOOT button (GPIO0) acts **on release**, by how long it was held, and the
+RGB LED shows the zone while it is held. The button is polled every 50 ms; the
+zone logic is `components/core/boot_btn.[ch]` (host-tested). Exact boundaries:
+2000 ms is already the blue zone, 5000 ms the red zone, 10000 ms the cancel
+zone.
+
+| Held | LED while held | Action on release |
+|---|---|---|
+| under 2 s | off | nothing |
+| 2 s to under 5 s | blue | AP on demand ("AP on demand" below), then 3 blue flashes |
+| 5 s to under 10 s | red | 3 red flashes, then the STA credentials are erased (the AP password is kept) and the board restarts |
+| 10 s or more | off | cancelled, nothing happens |
+
+A button that is already down when the firmware starts is ignored until it has
+been released once. **Never hold BOOT while resetting or powering up**: GPIO0
+low at reset selects the ROM download mode (the same rule as for flashing).
+The blue flashes appear only when the AP could be started (not when Wi-Fi was
+busy: then press again).
+
+RGB LED in normal operation (`components/core/status_led.[ch]`, host-tested;
+one `status_led` task owns the LED). Highest priority first:
+
+| Priority | State | LED |
+|---|---|---|
+| 1 | BOOT held | zone colour of the table above |
+| 2 | action confirmation | 3 flashes (100 ms on, 100 ms off) in the action's colour |
+| 3 | AP only (no stored credentials, or the STA did not connect: fallback AP) | blue steady |
+| 4 | AP on demand | blue slow blink (1 Hz, 50 %) |
+| 5 | STA connected, no AP | off |
+
+The brightness is 5 % of full scale (`RGB_LED_BRIGHTNESS_PCT`, the LED is very
+bright). The LED is the on-board addressable RGB LED of the DevKitC-1 v1.1 on
+**GPIO38** (`RGB_LED_GPIO` in `main/rgb_led.h`;
+`hardware/datasheets/esp_dev_kits_en_master_esp32s3-3540495.pdf`, ch. 1
+ESP32-S3-DevKitC-1, "Description of Components" p. 4 and "Hardware Revision
+Details" p. 5). **Boards of version v1.0 use GPIO48**: change that one constant
+for them. It is driven by the ESP-IDF RMT TX driver (GRB order). A failing LED
+initialisation is logged and everything else keeps working.
+
+## AP on demand
+
+Daily work is on the home Wi-Fi (STA), where the AP is off. To reach `/wifi` or
+`/ld2410` (both are served only to clients of the AP):
+
+1. Hold **BOOT** for 2 to 5 s (LED blue) and release. The LED flashes blue 3
+   times and then blinks blue slowly. The console prints the line
+   `AP password: ...  AP SSID: AERIS-MVP-XXXX  AP IP: 192.168.4.1 (AP on demand)`
+   again (open the console with `idf.py monitor`).
+2. Join `AERIS-MVP-XXXX` with that password (the same WPA2 password as always)
+   and open **http://192.168.4.1/ld2410** or **/wifi**.
+
+The board stays on the home Wi-Fi meanwhile (AP+STA; the AP uses the STA's
+channel, so the AP channel is the router's, not 1, while the on-demand AP is
+up). The on-demand AP switches itself off **10 minutes after the last client
+disconnected** (`AP_DEMAND_IDLE_MS`; the timer starts when the AP starts and at
+each disconnect of the last client, and never runs while a client is
+connected); the LED goes dark. Another 2 to 5 s press while the AP is up
+restarts the timer. If the switch-off finds Wi-Fi busy (a scan or connect
+attempt) it retries after 5 s. The **fallback AP** (no credentials, or the STA
+did not connect) is unchanged: it never times out and the LED stays steady
+blue.
+
+## LD2410C settings page (`/ld2410`)
+
+Served only to clients of the AP (on demand or fallback); requests from the STA
+side get 404, like `/wifi`. There is no password: the AP's WPA2 password and
+physical access to the board are the protection (owner decision 2026-10-02).
+The live page and the recording port stay open on the home network. The page
+links to `/wifi` and back. Source of the numbers below:
+`hardware/datasheets/Protocolo_comunicacion_serial_LD2410C.pdf` (Hi-Link
+"HLK-LD2410C serial communication protocol" V1.00, the text is English despite
+the file name; page numbers are the document's "Page N / 23").
+
+The page first reads the module (firmware version and parameters). If that
+fails it shows an error text and no form. Fields:
+
+- **Max moving gate** and **max still gate** (2 to 8): the farthest gate in
+  which a moving or still target is reported. One gate is **0.75 m**: with 2,
+  only targets within 1.5 m count (§1.2.2, p. 6; the command section p. 10 gives
+  2 to 8, §1.2.2 says 1 to 8, the firmware follows the command section).
+- **No-one duration** (0 to 65535 s): after the last detection the module keeps
+  reporting "occupied" for this long before it reports "unoccupied" (§1.2.2,
+  p. 7).
+- **Sensitivity table**, one row per gate 0 to 8 (range of the gate shown), moving
+  and still, 0 to 100 (§1.2.2, p. 6-7): a target counts when its energy (0 to
+  100) is above the value; **100 means the gate is ignored**. The **still
+  sensitivity of gates 0 and 1 cannot be set** (Table 7, p. 15): it is shown
+  read-only. The factory defaults of Table 7 are shown next to each row, and
+  the factory max gates (8/8) and duration (5 s) under the table.
+- **Save** writes only the values that differ from a fresh read, then reads
+  the module back and shows what is now in it. The values are **stored in the
+  module** (they survive a power cycle). **Data frames pause while the module is
+  being configured** (up to about 1 s; the frame counter continues); each
+  change is logged once on the console as `setting: ... old -> new`. Changes
+  are **not recorded** in the `.ldrec` file (recording protocol unchanged).
+- **Bluetooth off**: switches the module's Bluetooth off and restarts it
+  (`0x00A4` then `0x00A3`; §2.2.12, p. 16). Without this anyone nearby could
+  change the settings with the Hi-Link phone app. Switching it back on is not
+  offered (the document is inconsistent about that value).
+- **Restart module** (`0x00A3`, §2.2.11, p. 15; browser confirmation).
+- **Factory reset** (`0x00A2`, effective after a restart, so the firmware
+  restarts the module as well; §2.2.10, p. 14; browser confirmation). Gates,
+  duration and sensitivities return to the defaults of Table 7 (p. 15). The
+  document does not say whether the Bluetooth setting is reset too: check with
+  the Bluetooth switch-off afterwards.
+
+After a restart the module comes back in normal mode and the firmware
+re-enables engineering mode by itself after about 3 s of normal frames. Other
+tasks never touch UART1: the page submits a request to the LD2410C task, which
+executes it between frame reads (see `docs/architecture.md`), with a 5 s limit;
+a busy or silent module gives an error text on the page.
 
 ## Live page
 
@@ -463,11 +582,12 @@ no sensor columns filled in); it only writes version 3.
 
 ## LD2410C protocol summary
 
-The Hi-Link manual is not in the repository yet (BACKLOG). The layout below is
-what the code implements; it was written from the protocol description and is
-checked by synthetic vectors and, for the engineering frame, by two real
-captures (confirmed on hardware 2026-10-02; Hi-Link manual still not in
-`hardware/datasheets/`).
+Source: `hardware/datasheets/Protocolo_comunicacion_serial_LD2410C.pdf`
+(Hi-Link V1.00; frame layout §2.3 p. 18-20, command section 2.2 p. 9-17). The
+layout below is what the code implements; it is checked by synthetic vectors
+and, for the engineering frame, by two real captures (confirmed on hardware
+2026-10-02; the document's engineering example with intra-frame length 0x23 =
+35 bytes matches the real frames).
 
 - UART 256000 8N1.
 - **Data frame:** header `F4 F3 F2 F1`, payload length u16, payload, footer
@@ -485,7 +605,15 @@ captures (confirmed on hardware 2026-10-02; Hi-Link manual still not in
   `0x0001`), enable-engineering-mode (`0x0062`) and end-configuration
   (`0x00FE`), waiting up to 500 ms for each ACK. On failure it logs a warning
   and continues in normal mode (gates shown as unavailable). No other
-  configuration is changed.
+  configuration is changed at start; changes are made only from `/ld2410`.
+- **Settings commands** (all inside enable-config ... end-config, which is also
+  sent after a failure): `0x0060` max gates and no-one duration (§2.2.3, p. 10),
+  `0x0061` read parameters (§2.2.4, p. 11), `0x0064` gate sensitivity (§2.2.7,
+  p. 12-13), `0x00A0` firmware version (§2.2.8, p. 13), `0x00A2` factory reset
+  (§2.2.10, p. 14), `0x00A3` restart (§2.2.11, p. 15), `0x00A4` Bluetooth
+  (§2.2.12, p. 16). After a restart or factory reset no end-config is sent (the
+  module is rebooting). Not used: distance resolution 0.2 m (`0x00AA`/`0x00AB`,
+  BACKLOG), baud rate, Bluetooth password.
 
 ## Host tests
 
@@ -494,8 +622,9 @@ make -C esp32/tests test
 ```
 
 Plain C11 modules in `esp32/components/core/` (parser, frame decoder, command
-codec, ring buffer, recording protocol, snapshot JSON, Wi-Fi form and password
-helpers, WebSocket slot table), built with `-Wall -Wextra -Werror` and
+codec and ACK decoders, LD2410C settings form parser, BOOT button zone tracker,
+status LED colour logic, ring buffer, recording protocol, snapshot JSON, Wi-Fi
+form and password helpers, WebSocket slot table), built with `-Wall -Wextra -Werror` and
 AddressSanitizer/UBSan. The Python side:
 `uv run pytest host/test_ld2410_rec.py -v`.
 
@@ -515,11 +644,26 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 ## VERIFY list
 
 - Octal flash and octal PSRAM boot on the N32R8V module (`sdkconfig.defaults`).
-- LD2410C ACK sequence and the real frame rate.
-- Engineering frame layout, including the extra module-specific bytes:
-  confirmed on hardware 2026-10-02 (two real frames in the shared vectors);
-  Hi-Link manual still not in `hardware/datasheets/`. Maximum payload length
+- The real LD2410C frame rate.
+- Engineering frame layout: confirmed on hardware 2026-10-02 (two real frames
+  in the shared vectors) and against the Hi-Link document (§2.3 p. 18-20; the
+  engineering example 0x23 = 35-byte payload matches the real frames). The
+  command ACK sequence is documented there too (§2.2, p. 9-17), but the
+  settings commands have not been run on a real module. Maximum payload length
   64 is still VERIFY; the other shared test vectors are synthetic.
+- RGB LED: the WS2812 part number and timing are not in the DevKitC-1 document
+  (`RGB_LED_*` and the RMT timing in `main/rgb_led.c`); that GPIO38 is the LED
+  pin on the owner's board (v1.1) and the 5 % brightness.
+- BOOT zones and AP on demand on the real board: the 2 s / 5 s / 10 s zone
+  colours, the 10 min switch-off after the last client, and that the AP comes
+  up while the STA link stays connected.
+- LD2410C firmware version display: the document's example (§2.2.8, p. 13)
+  shows the minor bytes `16 15 09 22` as "22091615"; the firmware prints the
+  little-endian u32 as `%08x` (0x22091516 gives "22091516"). Compare with the
+  real module.
+- How long data frames pause while the module is configured (assumed up to
+  about 1 s) and whether engineering mode survives end-config (the firmware
+  re-enables it after about 3 s of normal frames either way).
 - WebSocket close handling (slot removal, reconnect of the page).
 - Recording server preemption (a new client replacing the old one) and the
   5 s send/receive timeouts; there is no TCP keepalive (BACKLOG).
@@ -527,7 +671,7 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 - A 64-character hexadecimal Wi-Fi password (WPA2 treats it as a raw PSK; the
   63-character ASCII case is the normal one).
 - Task stack sizes (LD2410C task 4096 B, recording tasks 4096 B, HTTP server
-  6144 B, main task 6144 B, BOOT monitor 3072 B, GPS task 4096 B, IMU task
+  6144 B, main task 6144 B, BOOT monitor 3072 B, status LED task 3072 B, GPS task 4096 B, IMU task
   5120 B) under real load.
 - The AP password stays stable across reboots and a credential reset.
 - GPS wiring and pins (GPIO4/5 UART2, GPIO8/9 I2C) on the real boards, and that

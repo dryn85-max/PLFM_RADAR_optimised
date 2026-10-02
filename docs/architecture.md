@@ -174,15 +174,18 @@ stays in the repo unchanged.
  |   UART -> ld2410_parser (frames) -> ld2410_frame (decode)           |
  |        +--> ring buffer, 4 MiB PSRAM (typed records, one seq)       |
  |        +--> latest snapshot (mutex)                                 |
+ |   request queue (depth 1): /ld2410 settings, between frame reads    |
  | gps task (core 1, prio 4): UART2 -> nmea (RMC/GGA)                  |
  |        +--> gps_fix per epoch, time_sync (GPS) per valid RMC        |
  | imu task (core 1, prio 3): I2C -> BMI160 100 Hz -> tilt filter      |
  |        +--> imu record every 100 ms (10 Hz)                         |
  | SNTP (pool.ntp.org, on STA IP) -> time_sync (SNTP)                  |
- | HTTP :80  /  /wifi (AP only)  /ws  <- 10 Hz timer: latest snapshot  |
+ | HTTP :80  /  /wifi, /ld2410 (AP only)  /ws  <- 10 Hz snapshot timer |
  | TCP :5410 recording server <- ring buffer batches (core 0)          |
  | Wi-Fi: STA from NVS, fallback AP AERIS-MVP-XXXX; mDNS aeris-mvp     |
- | BOOT (GPIO0) held >= 5 s: erase STA credentials                     |
+ | BOOT (GPIO0), action on release: 2-5 s AP on demand, 5-10 s erase   |
+ |   STA credentials, >10 s cancel; zone colour on RGB LED (GPIO38)    |
+ | status_led task: RGB LED state (AP / confirmation flashes)          |
  | console / flashing: native USB (USB-Serial-JTAG)                    |
  +---------------------------------------------------------------------+
       | Wi-Fi                                  | Wi-Fi
@@ -233,16 +236,45 @@ Data flow:
    the latest GPS fix and the latest pitch/roll, plus optional per-sensor CSVs
    (`--gps`, `--imu`). Unknown record types are kept raw (file type 6).
 
+5. **LD2410C settings (`/ld2410`).** The LD2410C task owns UART1. The HTTP
+   handler submits a request (read, write, Bluetooth off, restart, factory
+   reset) and waits up to 5 s; the task takes it from a depth-1 queue with a
+   zero-wait poll **between frame reads**, so there is **one request at a time**
+   (callers are serialised) and no cost for the frame path while nothing is
+   pending. A request runs enable-config, its commands (each ACK checked) and
+   end-config (also after a failure; not after a restart, the module is
+   rebooting). Data frames pause while it runs (up to about 1 s, VERIFY). After
+   a restart the existing engineering-mode recovery re-enables engineering
+   mode. Changes are logged on the console only; the recording protocol is
+   unchanged.
+
 Wi-Fi modes: STA when credentials are stored and the connection succeeds within
 15 s (AP off); otherwise AP+STA (AP `AERIS-MVP-XXXX`, WPA2, random 12-character
 password kept in NVS and printed to the console at every boot, STA keeps
-retrying); with no credentials AP only. The `/wifi` setup page is served only to
-clients on the AP.
+retrying); with no credentials AP only. The `/wifi` and `/ld2410` pages are
+served only to clients on the AP (no password: the AP's WPA2 password is the
+protection); the live page and port 5410 stay open on the home network.
+
+**AP on demand.** Daily work is on STA. Releasing BOOT after 2-5 s switches
+STA to AP+STA (the AP uses the STA's channel; the password line is printed
+again). The AP clients are counted from the Wi-Fi events; the on-demand AP goes
+back to STA-only 10 minutes after the last client left (never while one is
+connected). The fallback AP is unchanged and never times out.
+
+**BOOT and the status LED.** The BOOT monitor task polls GPIO0 every 50 ms and
+feeds a hardware-independent zone tracker (`boot_btn`): under 2 s nothing, 2-5 s
+AP on demand, 5-10 s erase the STA credentials and restart, 10 s or more cancel;
+the action fires on release. A button already down at start is ignored until
+released once (GPIO0 low at reset is the ROM download mode). The `status_led`
+task owns the on-board RGB LED (GPIO38, RMT driver, 5 % brightness) and picks the
+colour from a pure function (`status_led`), by priority: button zone colour,
+confirmation flashes (3 x), AP only (blue steady), AP on demand (blue slow
+blink), off.
 
 Not verified on hardware yet; see the VERIFY list in
 [esp32/README.md](../esp32/README.md) (the GPS and IMU parts have never run on
 the boards; the BMI160 register values are unverified). Open follow-ups
-(settings page, rotating radar and PPI display, magnetometer, PPS, all-on-ESP32
+(rotating radar and PPI display, recording protocol v4, magnetometer, PPS, all-on-ESP32
 vs hybrid STM32 + ESP32) are in [BACKLOG.md](../BACKLOG.md).
 
 ## Known limitations
