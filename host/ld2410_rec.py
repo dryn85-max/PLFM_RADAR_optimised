@@ -17,10 +17,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
-import errno
 import logging
-import os
-import select
 import signal
 import socket
 import struct
@@ -36,6 +33,7 @@ log = logging.getLogger("ld2410_rec")
 
 SEQ_MASK = 0xFFFFFFFF
 DEFAULT_PORT = 5410
+CONNECT_S = 1.0  # connect timeout; a stop request waits at most this long while connecting
 POLL_S = 0.2  # blocking I/O is cut into slices of this length so `stop` is seen promptly
 
 REQ_MAGIC = b"LDRQ"
@@ -420,7 +418,6 @@ class _Writer:
 
     def __init__(self, fh: IO[bytes], next_seq: int | None = None) -> None:
         self.fh = fh
-        self.good = fh.tell()  # end of the last completely written, flushed record
         self.next_seq = next_seq
         self.boot_id: int | None = None
         self.frames = 0
@@ -435,7 +432,7 @@ class _Writer:
         if hdr.boot_id != self.boot_id:
             if self.boot_id is not None:
                 log.warning("device rebooted: boot_id %08x -> %08x", self.boot_id, hdr.boot_id)
-                self._commit(encode_reboot_rec(self.boot_id, hdr.boot_id, pc_time_ns))
+                self.fh.write(encode_reboot_rec(self.boot_id, hdr.boot_id, pc_time_ns))
                 self.reboots += 1
                 self.boot_id = hdr.boot_id
                 self.next_seq = None  # new sequence baseline
@@ -445,7 +442,6 @@ class _Writer:
                     return False
             else:
                 self.boot_id = hdr.boot_id
-        out = bytearray()
         for r in recs:
             if self.next_seq is not None:
                 d = seq_delta(r.seq, self.next_seq)
@@ -459,26 +455,13 @@ class _Writer:
                         (r.seq - 1) & SEQ_MASK,
                         " (device reported GAP)" if hdr.gap else "",
                     )
-                    out += encode_gap_rec(self.next_seq, r.seq, pc_time_ns)
+                    self.fh.write(encode_gap_rec(self.next_seq, r.seq, pc_time_ns))
                     self.gaps += 1
-            out += encode_frame_rec(r.seq, r.esp_time_us, pc_time_ns, r.raw)
+            self.fh.write(encode_frame_rec(r.seq, r.esp_time_us, pc_time_ns, r.raw))
             self.frames += 1
             self.next_seq = (r.seq + 1) & SEQ_MASK
-        self._commit(bytes(out))
-        return True
-
-    def _commit(self, data: bytes) -> None:
-        """Write whole records in one call and flush; remember the clean end of file."""
-        if data:
-            self.fh.write(data)
         self.fh.flush()
-        self.good = self.fh.tell()
-
-    def discard_partial(self) -> None:
-        """After an interrupted write, cut the file back to the last complete record."""
-        with contextlib.suppress(OSError, ValueError):
-            self.fh.seek(self.good)
-            self.fh.truncate()
+        return True
 
 class Stopped(Exception):
     """The caller's stop event was set while waiting for the network."""
@@ -530,37 +513,6 @@ def read_batch(
         recs.append(Record(seq, esp, raw))
     return hdr, recs
 
-def _connect(host: str, port: int, timeout: float, stop: threading.Event) -> socket.socket:
-    """Like socket.create_connection, but polls `stop` every POLL_S while connecting."""
-    last: OSError | None = None
-    for fam, typ, proto, _name, addr in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
-        if stop.is_set():
-            raise Stopped
-        sock = socket.socket(fam, typ, proto)
-        try:
-            sock.setblocking(False)
-            err = sock.connect_ex(addr)
-            deadline = time.monotonic() + timeout
-            while err in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, 10035):
-                if stop.is_set():
-                    raise Stopped
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("timed out connecting")
-                _r, w, x = select.select([], [sock], [sock], POLL_S)
-                if w or x:
-                    err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                    break
-            if err:
-                raise OSError(err, os.strerror(err))
-            sock.settimeout(POLL_S)
-            return sock
-        except BaseException as e:
-            sock.close()
-            if not isinstance(e, OSError):
-                raise
-            last = e
-    raise last or OSError(f"cannot resolve {host}")
-
 def _record_loop(
     host: str,
     port: int,
@@ -575,7 +527,10 @@ def _record_loop(
     while not stop.is_set() and (max_frames is None or w.frames < max_frames):
         from_seq = w.next_seq if w.next_seq is not None else 0
         try:
-            with _connect(host, port, timeout, stop) as sock:
+            with socket.create_connection((host, port), timeout=CONNECT_S) as sock:
+                if stop.is_set():
+                    break
+                sock.settimeout(POLL_S)
                 sock.sendall(encode_request(from_seq))
                 log.info("connected to %s:%d, from_seq=%d", host, port, from_seq)
                 while not stop.is_set() and (max_frames is None or w.frames < max_frames):
@@ -613,13 +568,8 @@ def record(
         fh.write(encode_file_header(time.time_ns()))
         fh.flush()
         w = _Writer(fh)
-        try:
+        with contextlib.suppress(Stopped):
             _record_loop(host, port, w, stop, max_frames, timeout, backoff_initial, backoff_max)
-        except Stopped:
-            pass
-        except BaseException:  # KeyboardInterrupt etc.: never leave half a record behind
-            w.discard_partial()
-            raise
     return w
 
 # --------------------------------------------------------------------------
@@ -642,8 +592,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
     First SIGINT/SIGTERM only sets the stop event: all waits are sliced (POLL_S) so the
     recorder returns within ~0.2 s and the file is closed cleanly. A further Ctrl+C
-    raises KeyboardInterrupt at once; the writer then cuts the file back to the last
-    complete record, so `info` can always read it.
+    raises KeyboardInterrupt at once; `info`/`export-csv` tolerate a truncated last record.
     """
     out = args.output or time.strftime("ld2410_%Y%m%d_%H%M%S.ldrec")
     stop = threading.Event()
