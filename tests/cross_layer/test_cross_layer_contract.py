@@ -1,7 +1,7 @@
 """
 Cross-Layer Contract Tests
 ==========================
-Single pytest file orchestrating three tiers of verification:
+Single pytest file orchestrating two tiers of verification:
 
 Tier 1 — Static Contract Parsing:
   Compares Python, Verilog, and C source code at parse-time to catch
@@ -14,10 +14,10 @@ Tier 2 — Verilog Cosimulation (iverilog):
   runs Python parsers on the captured bytes to verify round-trip
   correctness.
 
-Tier 3 — C Stub Execution:
-  Compiles stm32_settings_stub.cpp, generates a binary settings
-  packet from Python, runs the stub, and verifies all parsed field
-  values match.
+MCU side = the active STM32G0B1 firmware in firmware/ (pins_table.c,
+fpga_if.c, agc.c, hal_gpio.c, adar1000.c).  The upstream F7 checks that have
+no G0B1 equivalent (RadarSettings USB packet, USB start flag, C++ settings
+stub execution) were removed; see the NOTE before Tier 2 below.
 
 The goal is to find UNKNOWN bugs by testing each layer against
 independently-derived ground truth — not just checking that two
@@ -28,10 +28,9 @@ from __future__ import annotations
 
 import os
 import re
-import struct
 import subprocess
-import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -53,29 +52,19 @@ sys.path.insert(0, str(cp.GUI_DIR))
 
 IVERILOG = os.environ.get("IVERILOG", "iverilog")
 VVP = os.environ.get("VVP", "vvp")
-CXX = os.environ.get("CXX", "c++")
 
 # Check tool availability for conditional skipping
 _has_iverilog = Path(IVERILOG).exists() if "/" in IVERILOG else bool(
     subprocess.run(["which", IVERILOG], capture_output=True).returncode == 0
 )
-_has_cxx = subprocess.run(
-    [CXX, "--version"], capture_output=True
-).returncode == 0
 
 # In CI, missing tools must be a hard failure — never silently skip.
 _in_ci = os.environ.get("GITHUB_ACTIONS") == "true"
-if _in_ci:
-    if not _has_iverilog:
-        raise RuntimeError(
-            "iverilog is required in CI but was not found. "
-            "Ensure 'apt-get install iverilog' ran and IVERILOG/VVP are on PATH."
-        )
-    if not _has_cxx:
-        raise RuntimeError(
-            "C++ compiler is required in CI but was not found. "
-            "Ensure build-essential is installed."
-        )
+if _in_ci and not _has_iverilog:
+    raise RuntimeError(
+        "iverilog is required in CI but was not found. "
+        "Ensure 'apt-get install iverilog' ran and IVERILOG/VVP are on PATH."
+    )
 
 
 def _strip_cxx_comments_and_strings(src: str) -> str:
@@ -476,44 +465,86 @@ class TestTier1AgcCrossLayerInvariant:
             "expected 0 (AGC off at boot)"
         )
 
-    def test_mcu_agc_constructor_default_off(self):
-        """MCU ADAR1000_AGC constructor must default enabled=false."""
-        agc_cpp = (cp.MCU_LIB_DIR / "ADAR1000_AGC.cpp").read_text()
-        # The constructor initializer list must have enabled(false)
-        assert re.search(
-            r'enabled\s*\(\s*false\s*\)', agc_cpp
-        ), "ADAR1000_AGC constructor must initialize enabled(false)"
-        assert not re.search(
-            r'enabled\s*\(\s*true\s*\)', agc_cpp
-        ), "ADAR1000_AGC constructor must NOT initialize enabled(true)"
+    # ---- MCU side: STM32G0B1 firmware (firmware/Core) -------------------
+    @staticmethod
+    def _src(rel: str) -> str:
+        return (cp.MCU_CORE_DIR / rel).read_text()
+
+    def test_mcu_agc_default_off(self):
+        """G0B1: AGC state must be zero after agc_init() and fpga_if_init()."""
+        agc = cp.parse_g0b1_function_body(self._src("app/agc.c"), "agc_init")
+        assert agc is not None, "agc_init() not found in agc.c"
+        assert re.search(r"memset\s*\(\s*a\s*,\s*0\s*,", agc), (
+            "agc_init must zero the whole agc_t (enabled defaults to 0)"
+        )
+        assert not re.search(r"->\s*enabled\s*=\s*(1|true)\b", agc), (
+            "agc_init must NOT set enabled=1"
+        )
+        init = cp.parse_g0b1_function_body(self._src("app/fpga_if.c"),
+                                           "fpga_if_init")
+        assert init is not None, "fpga_if_init() not found in fpga_if.c"
+        for var in ("s_dig6_prev", "s_agc_enabled"):
+            assert re.search(rf"\b{var}\s*=\s*0\s*;", init), (
+                f"fpga_if_init must reset {var} to 0 (matches FPGA boot: AGC off)"
+            )
 
     def test_mcu_reads_dig6_before_agc_gate(self):
-        """MCU main loop must read DIG_6 GPIO to sync outerAgc.enabled."""
-        main_cpp = (cp.MCU_CODE_DIR / "main.cpp").read_text()
-        # DIG_6 must be read via HAL_GPIO_ReadPin
+        """G0B1: DIG6 comes from ONE port read and gates AGC via the debouncer."""
+        fpga_if = self._src("app/fpga_if.c")
+        sample = cp.parse_g0b1_function_body(fpga_if, "fpga_if_sample")
+        assert sample is not None, "fpga_if_sample() not found"
+        # One port read, stored in a local variable.
+        reads = re.findall(r"gpio_read_fpga_port\s*\(", sample)
+        assert len(reads) == 1, (
+            f"fpga_if_sample must read the FPGA port exactly once, got {len(reads)}"
+        )
+        m = re.search(r"(?:uint8_t|int)\s+(\w+)\s*=\s*gpio_read_fpga_port\s*\(",
+                      sample)
+        assert m, "the DIG port read must be stored in a local variable"
+        v = m.group(1)
+        # DIG6 = bit 6 of that sample -> agc_enable.
         assert re.search(
-            r'HAL_GPIO_ReadPin\s*\(\s*FPGA_DIG6', main_cpp,
-        ), "main.cpp must read DIG_6 GPIO via HAL_GPIO_ReadPin"
-        # outerAgc.enabled must be assigned from the DIG_6 reading
-        # (may be indirect via debounce variable like dig6_now)
+            rf"agc_enable\s*=\s*\(uint8_t\)\(\(\s*{v}\s*>>\s*6\s*\)\s*&\s*1u?\)",
+            sample,
+        ), "agc_enable must be bit 6 (DIG6) of the sampled port value"
+        # The port read must map IDR bit0 -> DIG0 (so bit 6 -> DIG6).
+        pins = cp.parse_g0b1_pin_table()
+        shift = int(re.search(r"#define\s+PIN_FPGA_PORT_SHIFT\s+(\d+)",
+                              self._src("hal/pins.h")).group(1))
+        assert int(pins["PIN_FPGA_DIG6"].pin_id[2:]) - shift == 6, (
+            "PIN_FPGA_DIG6 must sit at port-read bit 6"
+        )
+        hal = cp.parse_g0b1_function_body(self._src("hal/hal_gpio.c"),
+                                          "gpio_read_fpga_port")
+        assert hal and "IDR" in hal and "PIN_FPGA_PORT_SHIFT" in hal, (
+            "gpio_read_fpga_port must read GPIOC->IDR >> PIN_FPGA_PORT_SHIFT"
+        )
+        # agc_tick: sample -> debounced -> a->enabled.
+        tick = cp.parse_g0b1_function_body(self._src("app/agc.c"), "agc_tick")
+        assert tick is not None, "agc_tick() not found"
+        assert re.search(r"=\s*fpga_if_sample\s*\(", tick)
         assert re.search(
-            r'outerAgc\.enabled\s*=', main_cpp,
-        ), "main.cpp must assign outerAgc.enabled from DIG_6 state"
+            r"->\s*enabled\s*=\s*\(?\w*\)?\s*fpga_if_agc_enable_debounced\s*\(\s*\w+\.agc_enable",
+            tick,
+        ), "agc_tick must assign enabled from fpga_if_agc_enable_debounced(DIG6)"
+        assert not re.search(r"->\s*enabled\s*=\s*(1|true)\b",
+                             cp.strip_c_comments(self._src("app/agc.c"))), (
+            "agc.c must not force enabled=1 outside the debounced DIG6 path"
+        )
 
     def test_boot_invariant_all_layers_agc_off(self):
         """
         At boot, all three layers must agree: AGC is OFF.
         - FPGA: host_agc_enable resets to 0 -> DIG_6 low
-        - MCU: ADAR1000_AGC.enabled defaults to false
+        - MCU: agc_init()/fpga_if_init() leave enabled=0
         - GUI: reads status word 4 bit[11] = 0 -> reports MANUAL
         """
         # FPGA
         v_defaults = cp.parse_verilog_reset_defaults()
         assert v_defaults.get("host_agc_enable") == 0
 
-        # MCU
-        agc_cpp = (cp.MCU_LIB_DIR / "ADAR1000_AGC.cpp").read_text()
-        assert re.search(r'enabled\s*\(\s*false\s*\)', agc_cpp)
+        # MCU (G0B1)
+        self.test_mcu_agc_default_off()
 
         # GUI: status word 4 bit[11] is host_agc_enable, which resets to 0.
         # Verify the GUI parses bit[11] of status word 4 as the AGC flag.
@@ -561,68 +592,102 @@ class TestTier1AgcCrossLayerInvariant:
 
     def test_mcu_dig6_debounce_guards_enable_assignment(self):
         """
-        MCU must apply a 2-frame confirmation debounce before mutating
-        outerAgc.enabled from DIG_6 reads. A naive assignment straight from
-        the latest GPIO sample would let a single-cycle glitch flip the AGC
-        state for one frame — defeating the debounce claim in the PR body.
+        G0B1: fpga_if_agc_enable_debounced() must apply a 2-frame confirmation
+        before changing the AGC state: the stored state follows DIG6 only when
+        the current and previous samples agree, the previous sample advances
+        every call, and both default to 0 (FPGA boot: AGC off). A naive
+        assignment from the latest sample would let a one-sample glitch flip
+        the AGC for a frame.
         """
-        main_cpp = (cp.MCU_CODE_DIR / "main.cpp").read_text()
+        fpga_if = self._src("app/fpga_if.c")
+        body = cp.parse_g0b1_function_body(fpga_if, "fpga_if_agc_enable_debounced")
+        assert body is not None, "fpga_if_agc_enable_debounced() not found"
 
-        # (1) Current-frame DIG_6 sample must be captured in a local variable
-        # so it can be compared against the previous-frame value.
-        now_match = re.search(
-            r'(bool|int|uint8_t)\s+(\w*dig6\w*)\s*=\s*[^;]*?'
-            r'HAL_GPIO_ReadPin\s*\(\s*FPGA_DIG6[^;]*;',
-            main_cpp,
-            re.DOTALL,
-        )
-        assert now_match, (
-            "DIG_6 read must be stored in a local variable (e.g. `dig6_now`) "
-            "so the current sample can be compared against the previous frame"
-        )
-        now_var = now_match.group(2)
+        # (1) Static storage for previous sample and confirmed state; both
+        # zero-initialised (explicit 0 or no initialiser == C static zero).
+        stripped = cp.strip_c_comments(fpga_if)
+        prev = re.search(
+            r"static\s+(?:uint8_t|int|bool)\s+(\w*dig6\w*)\s*(?:=\s*(0|false)\s*)?;",
+            stripped)
+        state = re.search(
+            r"static\s+(?:uint8_t|int|bool)\s+(\w*agc\w*)\s*(?:=\s*(0|false)\s*)?;",
+            stripped)
+        assert prev, "static previous-DIG6 variable (e.g. s_dig6_prev) must exist, default 0"
+        assert state, "static confirmed AGC state (e.g. s_agc_enabled) must exist, default 0"
+        prev_var, state_var = prev.group(1), state.group(1)
 
-        # (2) Previous-frame state must persist across iterations via static
-        # storage, and must default to false (matches FPGA boot: AGC off).
-        prev_match = re.search(
-            r'static\s+(bool|int|uint8_t)\s+(\w*dig6\w*)\s*=\s*(false|0)\s*;',
-            main_cpp,
-        )
-        assert prev_match, (
-            "A static previous-frame variable (e.g. "
-            "`static bool dig6_prev = false;`) must exist, initialized to "
-            "false so the debounce starts in sync with the FPGA boot default"
-        )
-        prev_var = prev_match.group(2)
-        assert prev_var != now_var, (
-            f"Current and previous DIG_6 variables must be distinct "
-            f"(both are '{now_var}')"
-        )
+        # (2) The current sample is held in a local variable, distinct from prev.
+        now = re.search(r"(?:uint8_t|int|bool)\s+(\w+)\s*=\s*\w+\s*!=\s*0\s*;", body)
+        assert now, "current DIG6 sample must be normalised into a local (now = dig6 != 0)"
+        now_var = now.group(1)
+        assert now_var != prev_var
 
-        # (3) outerAgc.enabled assignment must be gated by now == prev.
-        guarded_assign = re.search(
-            rf'if\s*\(\s*{now_var}\s*==\s*{prev_var}\s*\)\s*\{{[^}}]*?'
-            rf'outerAgc\.enabled\s*=\s*{now_var}\s*;',
-            main_cpp,
-            re.DOTALL,
+        # (3) State assignment gated by now == prev.
+        assert re.search(
+            rf"if\s*\(\s*{now_var}\s*==\s*{prev_var}\s*\)\s*\{{[^}}]*?"
+            rf"{state_var}\s*=\s*{now_var}\s*;",
+            body, re.DOTALL,
+        ), (
+            f"`{state_var} = {now_var};` must be inside "
+            f"`if ({now_var} == {prev_var}) {{ ... }}` (confirmation guard); "
+            "an unguarded assignment reintroduces the glitch bug"
         )
-        assert guarded_assign, (
-            f"`outerAgc.enabled = {now_var};` must be inside "
-            f"`if ({now_var} == {prev_var}) {{ ... }}` — the confirmation "
-            "guard that absorbs single-sample GPIO glitches. A naive "
-            "assignment without this guard reintroduces the glitch bug."
+        # No other assignment to the confirmed state outside that guard.
+        assert len(re.findall(rf"\b{state_var}\s*=[^=]", body)) == 1, (
+            f"{state_var} must be assigned only inside the confirmation guard"
         )
 
-        # (4) Previous-frame variable must advance each frame.
-        prev_update = re.search(
-            rf'{prev_var}\s*=\s*{now_var}\s*;',
-            main_cpp,
+        # (4) Previous sample advances every call, after the guard.
+        assert re.search(rf"{prev_var}\s*=\s*{now_var}\s*;", body), (
+            f"`{prev_var} = {now_var};` must run each call so the window slides"
         )
-        assert prev_update, (
-            f"`{prev_var} = {now_var};` must run each frame so the "
-            "debounce window slides forward; without it the guard is "
-            "stuck and enable changes never confirm"
+        assert body.index(f"{prev_var} = {now_var}") > body.index(f"{state_var} = {now_var}"), (
+            "previous sample must be updated after the guard compares against it"
         )
+        # (5) Result is the confirmed state.
+        assert re.search(rf"return\s+{state_var}\s*;", body)
+
+
+class TestTier1GpioDirections:
+    """
+    FPGA <-> STM32G0B1 DIG0-7 contract: pin roles and directions in
+    firmware/Core/hal/pins_table.c must be the mirror image of the port
+    directions in fpga/radar_system_top.v (MCU output <-> FPGA input).
+    """
+
+    # DIG index -> FPGA top-level port (see firmware/Core/hal/pins.h)
+    DIG_TO_FPGA: ClassVar[dict[int, str]] = {
+        0: "stm32_new_chirp",
+        1: "stm32_new_elevation",
+        2: "stm32_new_azimuth",
+        3: "stm32_mixers_enable",
+        4: "reset_n",
+        5: "gpio_dig5",
+        6: "gpio_dig6",
+        7: "gpio_dig7",
+    }
+
+    def test_dig_pin_directions_mirror_fpga_ports(self):
+        pins = cp.parse_g0b1_pin_table()
+        rtl = (cp.FPGA_DIR / "radar_system_top.v").read_text()
+        for k, port in self.DIG_TO_FPGA.items():
+            mcu = pins.get(f"PIN_FPGA_DIG{k}")
+            assert mcu is not None, f"PIN_FPGA_DIG{k} missing from pins_table.c"
+            fpga_dir = cp.parse_verilog_port_direction(rtl, port)
+            assert fpga_dir is not None, f"{port} not declared in radar_system_top.v"
+            expected_mcu = "output" if fpga_dir == "input" else "input"
+            assert mcu.direction == expected_mcu, (
+                f"DIG{k}: MCU pin {mcu.pin_id} is {mcu.direction} but FPGA "
+                f"port {port} is {fpga_dir}"
+            )
+
+    def test_dig_pins_are_contiguous_on_port_c(self):
+        """DIGk must be PCk (the one-shot port read in fpga_if relies on it)."""
+        pins = cp.parse_g0b1_pin_table()
+        for k in range(8):
+            assert pins[f"PIN_FPGA_DIG{k}"].pin_id == f"PC{k}", (
+                f"DIG{k} must be PC{k}, got {pins[f'PIN_FPGA_DIG{k}'].pin_id}"
+            )
 
 
 class TestTier1DataPacketLayout:
@@ -667,75 +732,14 @@ class TestTier1DataPacketLayout:
         assert field_map["detection"].byte_start == 9
 
 
-class TestTier1STM32SettingsPacket:
-    """Verify STM32 settings packet layout."""
-
-    def test_field_order_and_sizes(self):
-        """STM32 settings fields must have correct offsets and sizes."""
-        fields = cp.parse_stm32_settings_fields()
-        if not fields:
-            pytest.skip("MCU source not available")
-
-        expected = [
-            ("system_frequency", 0, 8, "double"),
-            ("chirp_duration_1", 8, 8, "double"),
-            ("chirp_duration_2", 16, 8, "double"),
-            ("chirps_per_position", 24, 4, "uint32_t"),
-            ("freq_min", 28, 8, "double"),
-            ("freq_max", 36, 8, "double"),
-            ("prf1", 44, 8, "double"),
-            ("prf2", 52, 8, "double"),
-            ("max_distance", 60, 8, "double"),
-            ("map_size", 68, 8, "double"),
-        ]
-
-        assert len(fields) == len(expected), (
-            f"Expected {len(expected)} fields, got {len(fields)}"
-        )
-
-        for f, (ename, eoff, esize, etype) in zip(fields, expected, strict=True):
-            assert f.name == ename, f"Field name: {f.name} != {ename}"
-            assert f.offset == eoff, f"{f.name}: offset {f.offset} != {eoff}"
-            assert f.size == esize, f"{f.name}: size {f.size} != {esize}"
-            assert f.c_type == etype, f"{f.name}: type {f.c_type} != {etype}"
-
-    def test_minimum_packet_size(self):
-        """
-        RadarSettings.cpp says minimum is 74 bytes but actual payload is:
-        'SET'(3) + 9*8(doubles) + 4(uint32) + 'END'(3) = 82 bytes.
-        This test documents the bug.
-        """
-        fields = cp.parse_stm32_settings_fields()
-        if not fields:
-            pytest.skip("MCU source not available")
-
-        # Calculate required payload size
-        total_field_bytes = sum(f.size for f in fields)
-        # Add markers: "SET"(3) + "END"(3)
-        required_size = 3 + total_field_bytes + 3
-
-        # Read the actual minimum check from the source
-        src = (cp.MCU_LIB_DIR / "RadarSettings.cpp").read_text(encoding="latin-1")
-        import re
-        m = re.search(r'length\s*<\s*(\d+)', src)
-        assert m, "Could not find minimum length check in parseFromUSB"
-        declared_min = int(m.group(1))
-
-        assert declared_min == required_size, (
-            f"BUFFER OVERREAD BUG: parseFromUSB minimum check is {declared_min} "
-            f"but actual required size is {required_size}. "
-            f"({total_field_bytes} bytes of fields + 6 bytes of markers). "
-            f"If exactly {declared_min} bytes are passed, extractDouble() reads "
-            f"past the buffer at offset {declared_min - 3} (needs 8 bytes, "
-            f"only {declared_min - 3 - fields[-1].offset} available)."
-        )
-
-    def test_stm32_usb_start_flag(self):
-        """USB start flag must be [23, 46, 158, 237]."""
-        flag = cp.parse_stm32_start_flag()
-        if not flag:
-            pytest.skip("USBHandler.cpp not available")
-        assert flag == [23, 46, 158, 237], f"Start flag: {flag}"
+# NOTE (removed F7-only checks, no G0B1 equivalent): the upstream F7 tests
+# TestTier1STM32SettingsPacket (RadarSettings::parseFromUSB field order, 74-byte
+# minimum-length overread, USB start flag [23,46,158,237]) and TestTier3CStub
+# (compiled stm32_settings_stub.cpp round trip) covered the F7 USB binary
+# "SET...END" settings packet and USBHandler.  The G0B1 firmware has no USB and
+# no RadarSettings (firmware/README.md, "Not ported"); runtime settings are text
+# commands over UART, covered by firmware/tests/test_cmd.c.  The stub moved to
+# legacy/9_Firmware/tests/cross_layer/.
 
 
 # ===================================================================
@@ -743,8 +747,8 @@ class TestTier1STM32SettingsPacket:
 # ===================================================================
 #
 # Cross-layer contract: the firmware constants
-#   ADAR1000Manager::VM_I[128] / VM_Q[128]
-# (in legacy/9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/ADAR1000_Manager.cpp)
+#   VM_I[128] / VM_Q[128]
+# (in firmware/Core/drivers/adar1000.c)
 # MUST equal the byte values published in the ADAR1000 datasheet Rev. B,
 # Tables 13-16 page 34 ("Phase Shifter Programming"), on a uniform 2.8125 deg
 # grid (index N == phase N * 360/128 deg).
@@ -766,14 +770,7 @@ class TestTier2Adar1000VmTableGroundTruth:
 
     @pytest.fixture(scope="class")
     def cpp_source(self):
-        path = (
-            cp.REPO_ROOT
-            / "legacy"
-            / "9_Firmware"
-            / "9_1_Microcontroller"
-            / "9_1_1_C_Cpp_Libraries"
-            / "ADAR1000_Manager.cpp"
-        )
+        path = cp.MCU_CORE_DIR / "drivers" / "adar1000.c"
         assert path.is_file(), f"Firmware source missing: {path}"
         return path.read_text()
 
@@ -835,7 +832,7 @@ class TestTier2Adar1000VmTableGroundTruth:
         gt = adar_vm.GROUND_TRUTH
         firmware = adar_vm.parse_array(cpp_source, "VM_I")
         assert firmware is not None, (
-            "Could not parse VM_I[128] from ADAR1000_Manager.cpp; "
+            "Could not parse VM_I[128] from adar1000.c; "
             "definition pattern may have drifted"
         )
         assert len(firmware) == 128, (
@@ -857,7 +854,7 @@ class TestTier2Adar1000VmTableGroundTruth:
         gt = adar_vm.GROUND_TRUTH
         firmware = adar_vm.parse_array(cpp_source, "VM_Q")
         assert firmware is not None, (
-            "Could not parse VM_Q[128] from ADAR1000_Manager.cpp; "
+            "Could not parse VM_Q[128] from adar1000.c; "
             "definition pattern may have drifted"
         )
         assert len(firmware) == 128, (
@@ -892,7 +889,7 @@ class TestTier2Adar1000VmTableGroundTruth:
         """
         stripped = _strip_cxx_comments_and_strings(cpp_source)
         assert "VM_GAIN" not in stripped, (
-            "VM_GAIN symbol reappeared in ADAR1000_Manager.cpp executable code. "
+            "VM_GAIN symbol reappeared in adar1000.c executable code. "
             "This array has no hardware backing and must not be reintroduced. "
             "If you need to scale phase-state magnitude, modify VM_I/VM_Q "
             "bits[4:0] directly per the datasheet."
@@ -910,8 +907,8 @@ class TestTier2Adar1000VmTableGroundTruth:
         good_i = ", ".join(f"0x{gt[k][2]:02X}" for k in range(128))
         good_q = ", ".join(f"0x{gt[k][3]:02X}" for k in range(128))
         snippet_good = (
-            f"const uint8_t ADAR1000Manager::VM_I[128] = {{ {good_i} }};\n"
-            f"const uint8_t ADAR1000Manager::VM_Q[128] = {{ {good_q} }};\n"
+            f"const uint8_t VM_I[128] = {{ {good_i} }};\n"
+            f"const uint8_t VM_Q[128] = {{ {good_q} }};\n"
         )
         # Sanity: the unmodified snippet must parse and match.
         parsed_i = adar_vm.parse_array(snippet_good, "VM_I")
@@ -926,8 +923,8 @@ class TestTier2Adar1000VmTableGroundTruth:
             for k in range(128)
         )
         snippet_bad = (
-            f"const uint8_t ADAR1000Manager::VM_I[128] = {{ {bad_i} }};\n"
-            f"const uint8_t ADAR1000Manager::VM_Q[128] = {{ {good_q} }};\n"
+            f"const uint8_t VM_I[128] = {{ {bad_i} }};\n"
+            f"const uint8_t VM_Q[128] = {{ {good_q} }};\n"
         )
         parsed_bad = adar_vm.parse_array(snippet_bad, "VM_I")
         assert parsed_bad is not None and len(parsed_bad) == 128
@@ -1117,181 +1114,4 @@ class TestTier2VerilogCosim:
         assert sr.radar_mode == 3, (
             f"radar_mode={sr.radar_mode} != 3. "
             f"Check status_words[0] bit positions."
-        )
-
-
-# ===================================================================
-# TIER 3: C Stub Execution
-# ===================================================================
-
-@pytest.mark.skipif(not _has_cxx, reason="C++ compiler not available")
-class TestTier3CStub:
-    """Compile STM32 settings stub and verify field parsing."""
-
-    @pytest.fixture(scope="class")
-    def stub_binary(self, tmp_path_factory):
-        """Compile the C++ stub once."""
-        workdir = tmp_path_factory.mktemp("c_stub")
-        stub_src = THIS_DIR / "stm32_settings_stub.cpp"
-        radar_settings_src = cp.MCU_LIB_DIR / "RadarSettings.cpp"
-        out_bin = workdir / "stm32_settings_stub"
-
-        result = subprocess.run(
-            [CXX, "-std=c++11", "-o", str(out_bin),
-             str(stub_src), str(radar_settings_src),
-             f"-I{cp.MCU_LIB_DIR}"],
-            capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0, f"Compile failed:\n{result.stderr}"
-        return out_bin
-
-    def _build_settings_packet(self, values: dict) -> bytes:
-        """Build a binary settings packet matching RadarSettings::parseFromUSB."""
-        pkt = b"SET"
-        for key in [
-            "system_frequency", "chirp_duration_1", "chirp_duration_2",
-        ]:
-            pkt += struct.pack(">d", values[key])
-        pkt += struct.pack(">I", values["chirps_per_position"])
-        for key in [
-            "freq_min", "freq_max", "prf1", "prf2",
-            "max_distance", "map_size",
-        ]:
-            pkt += struct.pack(">d", values[key])
-        pkt += b"END"
-        return pkt
-
-    def _run_stub(self, binary: Path, packet: bytes) -> dict[str, str]:
-        """Run stub with packet file, parse stdout into field dict."""
-        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-            f.write(packet)
-            pkt_path = f.name
-
-        try:
-            result = subprocess.run(
-                [str(binary), pkt_path],
-                capture_output=True, text=True, timeout=10,
-            )
-        finally:
-            os.unlink(pkt_path)
-
-        fields = {}
-        for line in result.stdout.strip().splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                fields[k.strip()] = v.strip()
-        return fields
-
-    def test_default_values_round_trip(self, stub_binary):
-        """Default settings must parse correctly through C stub."""
-        values = {
-            "system_frequency": 10.0e9,
-            "chirp_duration_1": 30.0e-6,
-            "chirp_duration_2": 0.5e-6,
-            "chirps_per_position": 32,
-            "freq_min": 10.0e6,
-            "freq_max": 30.0e6,
-            "prf1": 1000.0,
-            "prf2": 2000.0,
-            "max_distance": 50000.0,
-            "map_size": 50000.0,
-        }
-        pkt = self._build_settings_packet(values)
-        result = self._run_stub(stub_binary, pkt)
-
-        assert result.get("parse_ok") == "true", f"Parse failed: {result}"
-
-        for key, expected in values.items():
-            actual_str = result.get(key)
-            assert actual_str is not None, f"Missing field: {key}"
-            actual = int(actual_str) if key == "chirps_per_position" else float(actual_str)
-            if isinstance(expected, float):
-                assert abs(actual - expected) < expected * 1e-10, (
-                    f"{key}: {actual} != {expected}"
-                )
-            else:
-                assert actual == expected, f"{key}: {actual} != {expected}"
-
-    def test_distinctive_values_round_trip(self, stub_binary):
-        """Non-default distinctive values must parse correctly."""
-        values = {
-            "system_frequency": 24.125e9,   # K-band
-            "chirp_duration_1": 100.0e-6,
-            "chirp_duration_2": 2.0e-6,
-            "chirps_per_position": 64,
-            "freq_min": 24.0e6,
-            "freq_max": 24.25e6,
-            "prf1": 5000.0,
-            "prf2": 3000.0,
-            "max_distance": 75000.0,
-            "map_size": 100000.0,
-        }
-        pkt = self._build_settings_packet(values)
-        result = self._run_stub(stub_binary, pkt)
-
-        assert result.get("parse_ok") == "true", f"Parse failed: {result}"
-
-        for key, expected in values.items():
-            actual_str = result.get(key)
-            assert actual_str is not None, f"Missing field: {key}"
-            actual = int(actual_str) if key == "chirps_per_position" else float(actual_str)
-            if isinstance(expected, float):
-                assert abs(actual - expected) < expected * 1e-10, (
-                    f"{key}: {actual} != {expected}"
-                )
-            else:
-                assert actual == expected, f"{key}: {actual} != {expected}"
-
-    def test_truncated_packet_rejected(self, stub_binary):
-        """Packet shorter than minimum must be rejected."""
-        pkt = b"SET" + b"\x00" * 40 + b"END"  # Only 46 bytes, needs 82
-        result = self._run_stub(stub_binary, pkt)
-        assert result.get("parse_ok") == "false", (
-            f"Expected parse failure for truncated packet, got: {result}"
-        )
-
-    def test_bad_markers_rejected(self, stub_binary):
-        """Packet with wrong start/end markers must be rejected."""
-        values = {
-            "system_frequency": 10.0e9, "chirp_duration_1": 30.0e-6,
-            "chirp_duration_2": 0.5e-6, "chirps_per_position": 32,
-            "freq_min": 10.0e6, "freq_max": 30.0e6,
-            "prf1": 1000.0, "prf2": 2000.0,
-            "max_distance": 50000.0, "map_size": 50000.0,
-        }
-        pkt = self._build_settings_packet(values)
-
-        # Wrong start marker
-        bad_pkt = b"BAD" + pkt[3:]
-        result = self._run_stub(stub_binary, bad_pkt)
-        assert result.get("parse_ok") == "false", "Should reject bad start marker"
-
-        # Wrong end marker
-        bad_pkt = pkt[:-3] + b"BAD"
-        result = self._run_stub(stub_binary, bad_pkt)
-        assert result.get("parse_ok") == "false", "Should reject bad end marker"
-
-    def test_python_c_packet_format_agreement(self, stub_binary):
-        """
-        Python builds a settings packet, C stub parses it.
-        This tests that both sides agree on the packet format.
-        """
-        # Use values right at validation boundaries to stress-test
-        values = {
-            "system_frequency": 1.0e9,     # min valid
-            "chirp_duration_1": 1.0e-6,    # min valid
-            "chirp_duration_2": 0.1e-6,    # min valid
-            "chirps_per_position": 1,      # min valid
-            "freq_min": 1.0e6,             # min valid
-            "freq_max": 2.0e6,             # just above freq_min
-            "prf1": 100.0,                 # min valid
-            "prf2": 100.0,                 # min valid
-            "max_distance": 100.0,         # min valid
-            "map_size": 1000.0,            # min valid
-        }
-        pkt = self._build_settings_packet(values)
-        result = self._run_stub(stub_binary, pkt)
-
-        assert result.get("parse_ok") == "true", (
-            f"Boundary values rejected: {result}"
         )

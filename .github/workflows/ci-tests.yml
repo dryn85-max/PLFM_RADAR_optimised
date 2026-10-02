@@ -118,7 +118,7 @@ jobs:
   # ===========================================================================
   # Cross-Layer Contract Tests (Python ↔ Verilog ↔ C)
   # Validates opcode maps, bit widths, packet layouts, and round-trip
-  # correctness across FPGA RTL, Python GUI, and STM32 firmware.
+  # correctness across FPGA RTL, Python GUI, and STM32G0B1 firmware (firmware/).
   # ===========================================================================
   cross-layer-tests:
     name: Cross-Layer Contract Tests
@@ -142,7 +142,7 @@ jobs:
       - name: Run cross-layer contract tests
         run: >
           uv run pytest
-          9_Firmware/tests/cross_layer/test_cross_layer_contract.py
+          tests/cross_layer/test_cross_layer_contract.py
           -v --tb=short
 
   # ===========================================================================

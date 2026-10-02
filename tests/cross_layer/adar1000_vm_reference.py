@@ -1,7 +1,7 @@
 """ADAR1000 vector-modulator ground-truth table and firmware parser.
 
 This module is a pure data + helpers library imported by the cross-layer
-test suite (`9_Firmware/tests/cross_layer/test_cross_layer_contract.py`,
+test suite (`tests/cross_layer/test_cross_layer_contract.py`,
 class `TestTier2Adar1000VmTableGroundTruth`). It has no CLI entry point
 and no side effects on import beyond the structural assertion on the
 table length.
@@ -22,7 +22,7 @@ licensing-relevant source.
 PLFM_RADAR firmware indexing convention
 ---------------------------------------
 `adarSetRxPhase` / `adarSetTxPhase` in
-`legacy/9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/ADAR1000_Manager.cpp`
+`firmware/Core/drivers/adar1000.c`
 write `VM_I[phase % 128]` and `VM_Q[phase % 128]` to the chip. Each index
 N corresponds to commanded beam phase `N * 360/128 = N * 2.8125 deg`. The
 ADI table is also on a uniform 2.8125 deg grid (verified by
@@ -182,7 +182,7 @@ def check_cardinal_points() -> list[str]:
 # Parse VM_I[] / VM_Q[] from firmware C++ source.
 # ----------------------------------------------------------------------------
 ARRAY_RE = re.compile(
-    r"const\s+uint8_t\s+ADAR1000Manager::(?P<name>VM_I|VM_Q|VM_GAIN)\s*"
+    r"const\s+uint8_t\s+(?:ADAR1000Manager::)?(?P<name>VM_I|VM_Q|VM_GAIN)\s*"
     r"\[\s*128\s*\]\s*=\s*\{(?P<body>[^}]*)\}\s*;",
     re.DOTALL,
 )

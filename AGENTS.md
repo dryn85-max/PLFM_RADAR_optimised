@@ -97,7 +97,7 @@ GPT-5.5 is not used.
   (arm-none-eabi-gcc; `make DIAG=0`, `make ADAR_COUNT=4` must also build).
   See its README.
 - Cross-layer contracts:
-  `uv run pytest 9_Firmware/tests/cross_layer/test_cross_layer_contract.py -v`.
+  `uv run pytest tests/cross_layer/test_cross_layer_contract.py -v`.
 - Write the failing test first. Testbenches must be adversarial: boundary
   conditions, reset mid-operation, unexpected input sequences.
 - Run the full relevant suite locally before every commit; no raw AI output

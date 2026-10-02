@@ -6,7 +6,8 @@ layouts) directly from the source files of each layer:
   - Python GUI:  radar_protocol.py
   - FPGA RTL:    radar_system_top.v, usb_data_interface_ft2232h.v,
                  usb_data_interface.v
-  - STM32 MCU:   RadarSettings.cpp, main.cpp
+  - STM32G0B1 MCU (firmware/): Core/hal/pins_table.c, Core/app/fpga_if.c,
+                 Core/app/agc.c, Core/hal/hal_gpio.c, Core/drivers/adar1000.c
 
 These parsers do NOT define the expected values — they discover what each
 layer actually implements, so the test can compare layers against ground
@@ -23,12 +24,11 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Repository layout (relative to repo root)
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 GUI_DIR = REPO_ROOT / "host"
 FPGA_DIR = REPO_ROOT / "fpga"
-MCU_DIR = REPO_ROOT / "legacy" / "9_Firmware" / "9_1_Microcontroller"
-MCU_LIB_DIR = MCU_DIR / "9_1_1_C_Cpp_Libraries"
-MCU_CODE_DIR = MCU_DIR / "9_1_3_C_Cpp_Code"
+MCU_DIR = REPO_ROOT / "firmware"            # STM32G0B1 (active MCU)
+MCU_CORE_DIR = MCU_DIR / "Core"
 # Xilinx constraints are legacy-only (not built or tested).
 XDC_DIR = REPO_ROOT / "legacy" / "9_Firmware" / "9_2_FPGA" / "constraints"
 
@@ -666,89 +666,30 @@ def parse_verilog_data_mux(
 
 
 # ===================================================================
-# STM32 / C layer parser
+# STM32G0B1 / C layer parser
 # ===================================================================
+# The F7 RadarSettings USB packet and USBHandler start flag are not ported to
+# the G0B1 firmware (README "Not ported"), so their parsers were removed.
 
-def parse_stm32_settings_fields(
-    filepath: Path | None = None,
-) -> list[SettingsField]:
-    """
-    Parse RadarSettings::parseFromUSB to extract field order, offsets, types.
-    """
-    if filepath is None:
-        filepath = MCU_LIB_DIR / "RadarSettings.cpp"
-
-    if not filepath.exists():
-        return []  # MCU code not available (CI might not have it)
-
-    text = filepath.read_text(encoding="latin-1")
-
-    fields: list[SettingsField] = []
-
-    # Look for memcpy + shift patterns that extract doubles and uint32s
-    # Pattern for doubles: loop reading 8 bytes big-endian
-    # Pattern for uint32: 4 bytes big-endian
-    # We'll parse the assignment targets in order
-
-    # Find the parseFromUSB function
-    match = re.search(
-        r'parseFromUSB\s*\(.*?\)\s*\{(.*?)^\}',
-        text, re.DOTALL | re.MULTILINE
-    )
-    if not match:
-        return fields
-
-    body = match.group(1)
-
-    # The fields are extracted sequentially from the payload.
-    # Look for variable assignments that follow the memcpy/extraction pattern.
-    # Based on known code: extractDouble / extractUint32 patterns
-    field_names = [
-        ("system_frequency", 8, "double"),
-        ("chirp_duration_1", 8, "double"),
-        ("chirp_duration_2", 8, "double"),
-        ("chirps_per_position", 4, "uint32_t"),
-        ("freq_min", 8, "double"),
-        ("freq_max", 8, "double"),
-        ("prf1", 8, "double"),
-        ("prf2", 8, "double"),
-        ("max_distance", 8, "double"),
-        ("map_size", 8, "double"),
-    ]
-
-    offset = 0
-    for name, size, ctype in field_names:
-        # Verify the field name appears in the function body
-        if name in body or name.replace("_", "") in body.lower():
-            fields.append(SettingsField(
-                name=name, offset=offset, size=size, c_type=ctype
-            ))
-        offset += size
-
-    return fields
+def strip_c_comments(src: str) -> str:
+    """Remove /* */ and // comments (keeps newlines)."""
+    src = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group().count("\n"), src,
+                 flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", "", src)
 
 
-def parse_stm32_start_flag(
-    filepath: Path | None = None,
-) -> list[int]:
-    """Parse the USB start flag bytes from USBHandler.cpp."""
-    if filepath is None:
-        filepath = MCU_LIB_DIR / "USBHandler.cpp"
-
-    if not filepath.exists():
-        return []
-
-    text = filepath.read_text()
-
-    # Look for the start flag array, e.g. {23, 46, 158, 237}
-    match = re.search(r'start_flag.*?=\s*\{([^}]+)\}', text, re.DOTALL)
-    if not match:
-        # Try alternate patterns
-        match = re.search(r'\{(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*)\}', text)
-        if not match:
-            return []
-
-    return [int(x.strip()) for x in match.group(1).split(",") if x.strip().isdigit()]
+def parse_g0b1_function_body(text: str, name: str) -> str | None:
+    """Return the brace-balanced body of C function `name` (comments stripped)."""
+    text = strip_c_comments(text)
+    m = re.search(rf"\b{re.escape(name)}\s*\([^)]*\)\s*\{{", text)
+    if not m:
+        return None
+    depth = 1
+    i = m.end()
+    while i < len(text) and depth:
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        i += 1
+    return text[m.end():i - 1]
 
 
 # ===================================================================
@@ -789,42 +730,33 @@ def parse_xdc_gpio_pins(filepath: Path | None = None) -> list[GpioPin]:
     return pins
 
 
-def parse_stm32_gpio_init(filepath: Path | None = None) -> list[GpioPin]:
-    """Parse STM32 GPIO initialization for PD8-PD15 directions."""
+def parse_g0b1_pin_table(filepath: Path | None = None) -> dict[str, GpioPin]:
+    """Parse firmware/Core/hal/pins_table.c.
+
+    Returns {"PIN_FPGA_DIG0": GpioPin(...), ...}; pin_id is e.g. "PC0",
+    direction "output"/"input" from the is_output column.
+    """
     if filepath is None:
-        filepath = MCU_CODE_DIR / "main.cpp"
-
-    if not filepath.exists():
-        return []
-
-    text = filepath.read_text()
-    pins: list[GpioPin] = []
-
-    # Look for GPIO_InitStruct.Pin and GPIO_InitStruct.Mode patterns
-    # This is approximate — STM32 HAL GPIO init is complex
-    # Look for PD8-PD15 configuration (output vs input)
-
-    # Pattern: GPIO_PIN_8 | GPIO_PIN_9 ... with Mode = OUTPUT
-    # We'll find blocks that configure GPIOD pins
+        filepath = MCU_CORE_DIR / "hal" / "pins_table.c"
+    text = strip_c_comments(filepath.read_text())
+    pins: dict[str, GpioPin] = {}
     for m in re.finditer(
-        r'GPIO_InitStruct\.Pin\s*=\s*([^;]+);.*?'
-        r'GPIO_InitStruct\.Mode\s*=\s*(\w+)',
-        text, re.DOTALL
+        r"\[\s*(PIN_\w+)\s*\]\s*=\s*\{\s*([ABC])\s*,\s*(\d+)\s*,"
+        r"\s*([01])\s*,\s*([01])\s*\}",
+        text,
     ):
-        pin_expr = m.group(1)
-        mode = m.group(2)
-
-        direction = "output" if "OUTPUT" in mode else "input"
-
-        # Extract individual pin numbers
-        for pin_m in re.finditer(r'GPIO_PIN_(\d+)', pin_expr):
-            pin_num = int(pin_m.group(1))
-            if 8 <= pin_num <= 15:
-                pins.append(GpioPin(
-                    name=f"PD{pin_num}",
-                    pin_id=f"PD{pin_num}",
-                    direction=direction,
-                    layer="stm32"
-                ))
-
+        name, port, num, is_out, _idle = m.groups()
+        pins[name] = GpioPin(
+            name=name, pin_id=f"P{port}{int(num)}",
+            direction="output" if is_out == "1" else "input", layer="stm32",
+        )
     return pins
+
+
+def parse_verilog_port_direction(text: str, port: str) -> str | None:
+    """Return "input"/"output" for a `input|output wire [..] port` declaration."""
+    m = re.search(
+        rf"\b(input|output)\s+(?:wire\s+)?(?:\[[^\]]+\]\s*)?{re.escape(port)}\b",
+        text,
+    )
+    return m.group(1) if m else None
