@@ -18,7 +18,8 @@ JSON keys mirror the C struct field names (`ld_data_t`, `ld_ack_t`,
 | `frame_engineering` | data frame, type 0x01, 35-byte payload incl. 2 module-specific bytes | same keys |
 | `ack_ok` | ACK of enable-config (0x01FF), status 0 | `frame_kind:"cmd"`, `ack{cmd, status, ok}`; `cmd` has the 0x0100 flag removed |
 | `ack_fail` | ACK of enable-engineering (0x0162), status 1 | same keys |
-| `batch_gap_wrap` | recording batch, GAP flag, first_seq 0xFFFFFFFF, 2 records (seq 0xFFFFFFFF then 0, second esp_time_us above 2^32) wrapping the sequence | `version, flags, first_seq, count, records[{seq, esp_time_us, raw_hex}]` |
+| `batch_gap_wrap` | recording batch (version 2, boot_id 0xA1B2C3D4), GAP flag, first_seq 0xFFFFFFFF, 2 records (seq 0xFFFFFFFF then 0, second esp_time_us above 2^32) wrapping the sequence | `version, flags, first_seq, count, boot_id, records[{seq, esp_time_us, raw_hex}]` |
+| `batch_reboot` | keep-alive batch of a rebooted device: first_seq 0, count 0, boot_id 0xFFFFFFFF (differs from `batch_gap_wrap`) | same keys, `records` empty |
 
 Record layout in a batch: `seq u32, esp_time_us u64, len u16, raw[len]`, little-endian;
-batch header 16 bytes `"LDRB", version u8, flags u8, reserved u16, first_seq u32, count u16, reserved u16`.
+batch header 20 bytes `"LDRB", version u8 = 2, flags u8, reserved u16, first_seq u32, count u16, reserved u16, boot_id u32` (boot_id is random per ESP32 boot, never 0).

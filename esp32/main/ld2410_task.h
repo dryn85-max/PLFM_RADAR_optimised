@@ -42,7 +42,7 @@ const rb_t *ld2410_ring(void); /* use only between lock and unlock */
 
 /* Convenience: lock, rec_batch_from_ring(), unlock. Returns what
  * rec_batch_from_ring returns. */
-int ld2410_ring_batch(uint32_t from_seq, uint8_t *buf, size_t cap,
+int ld2410_ring_batch(uint32_t from_seq, uint32_t boot_id, uint8_t *buf, size_t cap,
                       size_t *out_len, uint16_t *count);
 
 #endif

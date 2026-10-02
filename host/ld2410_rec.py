@@ -35,17 +35,18 @@ DEFAULT_PORT = 5410
 
 REQ_MAGIC = b"LDRQ"
 BATCH_MAGIC = b"LDRB"
-REC_VERSION = 1
+REC_VERSION = 2
 REQ_LEN = 12
-BATCH_HDR_LEN = 16
+BATCH_HDR_LEN = 20
 REC_HDR_LEN = 14  # seq u32, esp_time_us u64, len u16
 FLAG_GAP = 0x01
 
 FILE_MAGIC = b"LDREC1\x00\x00"
-FILE_VERSION = 1
+FILE_VERSION = 2
 FILE_HDR_LEN = 20
 REC_FRAME = 0
 REC_GAP = 1
+REC_REBOOT = 2
 
 GATES = 9
 DATA_HEADER = b"\xf4\xf3\xf2\xf1"
@@ -170,6 +171,7 @@ class BatchHeader(NamedTuple):
     flags: int
     first_seq: int
     count: int
+    boot_id: int
 
     @property
     def gap(self) -> bool:
@@ -183,14 +185,18 @@ class Record(NamedTuple):
 def parse_batch_header(buf: bytes) -> BatchHeader:
     if len(buf) < BATCH_HDR_LEN:
         raise ProtocolError(f"short batch header ({len(buf)} bytes)")
-    magic, version, flags, res1, first_seq, count, res2 = struct.unpack_from("<4sBBHIHH", buf, 0)
+    magic, version, flags, res1, first_seq, count, res2, boot_id = struct.unpack_from(
+        "<4sBBHIHHI", buf, 0
+    )
     if magic != BATCH_MAGIC:
         raise ProtocolError(f"bad batch magic {magic!r}")
     if res1 or res2:
         raise ProtocolError("nonzero reserved field in batch header")
     if version != REC_VERSION:
         raise ProtocolError(f"unsupported batch version {version}")
-    return BatchHeader(version, flags, first_seq, count)
+    if boot_id == 0:
+        raise ProtocolError("batch header has boot_id 0")
+    return BatchHeader(version, flags, first_seq, count, boot_id)
 
 def parse_records(buf: bytes, count: int) -> tuple[list[Record], int]:
     """Parse `count` records from buf; return (records, bytes consumed)."""
@@ -241,6 +247,14 @@ class GapRec:
     def missing(self) -> int:
         return (self.to_seq - self.from_seq) & SEQ_MASK
 
+@dataclass(frozen=True)
+class RebootRec:
+    old_boot_id: int
+    new_boot_id: int
+    pc_time_ns: int
+
+FileRec = FrameRec | GapRec | RebootRec
+
 def encode_file_header(created_unix_ns: int) -> bytes:
     return struct.pack("<8sHHQ", FILE_MAGIC, FILE_VERSION, 0, created_unix_ns)
 
@@ -250,7 +264,10 @@ def encode_frame_rec(seq: int, esp_time_us: int, pc_time_ns: int, raw: bytes) ->
 def encode_gap_rec(from_seq: int, to_seq: int, pc_time_ns: int) -> bytes:
     return struct.pack("<BIIQ", REC_GAP, from_seq, to_seq, pc_time_ns)
 
-def parse_file(data: bytes, *, strict: bool = True) -> tuple[int, list[FrameRec | GapRec]]:
+def encode_reboot_rec(old_boot_id: int, new_boot_id: int, pc_time_ns: int) -> bytes:
+    return struct.pack("<BIIQ", REC_REBOOT, old_boot_id, new_boot_id, pc_time_ns)
+
+def parse_file(data: bytes, *, strict: bool = True) -> tuple[int, list[FileRec]]:
     """Parse a .ldrec image. Returns (created_unix_ns, records).
 
     strict=False tolerates a truncated last record (e.g. a recording killed
@@ -263,7 +280,7 @@ def parse_file(data: bytes, *, strict: bool = True) -> tuple[int, list[FrameRec 
         raise ProtocolError("not a .ldrec file (bad magic)")
     if version != FILE_VERSION:
         raise ProtocolError(f"unsupported .ldrec version {version}")
-    recs: list[FrameRec | GapRec] = []
+    recs: list[FileRec] = []
     off = FILE_HDR_LEN
     while off < len(data):
         rtype = data[off]
@@ -283,10 +300,16 @@ def parse_file(data: bytes, *, strict: bool = True) -> tuple[int, list[FrameRec 
                 _, frm, to, pc = struct.unpack_from("<BIIQ", data, off)
                 recs.append(GapRec(frm, to, pc))
                 off += 17
+            elif rtype == REC_REBOOT:
+                if len(data) - off < 17:
+                    raise ProtocolError(f"truncated reboot record at offset {off}")
+                _, old, new, pc = struct.unpack_from("<BIIQ", data, off)
+                recs.append(RebootRec(old, new, pc))
+                off += 17
             else:
                 raise ProtocolError(f"unknown record type {rtype} at offset {off}")
         except ProtocolError:
-            if strict or rtype not in (REC_FRAME, REC_GAP):
+            if strict or rtype not in (REC_FRAME, REC_GAP, REC_REBOOT):
                 raise
             break
     return created, recs
@@ -301,11 +324,18 @@ CSV_COLUMNS = (
     + ["max_moving_gate", "max_still_gate"]
     + [f"move_g{i}" for i in range(GATES)]
     + [f"still_g{i}" for i in range(GATES)]
-    + ["record", "gap_to_seq", "error"]
+    + ["record", "gap_to_seq", "error", "old_boot_id", "new_boot_id"]
 )
 
-def csv_row(rec: FrameRec | GapRec) -> dict[str, object]:
+def csv_row(rec: FileRec) -> dict[str, object]:
     """One CSV row (dict keyed by CSV_COLUMNS) for a file record; never raises."""
+    if isinstance(rec, RebootRec):
+        return {
+            "pc_time_ns": rec.pc_time_ns,
+            "record": "reboot",
+            "old_boot_id": rec.old_boot_id,
+            "new_boot_id": rec.new_boot_id,
+        }
     if isinstance(rec, GapRec):
         return {
             "seq": rec.from_seq,
@@ -341,7 +371,7 @@ def csv_row(rec: FrameRec | GapRec) -> dict[str, object]:
             row[f"still_g{i}"] = d.still_gate_energy[i]
     return row
 
-def write_csv(records: list[FrameRec | GapRec], out: IO[str]) -> int:
+def write_csv(records: list[FileRec], out: IO[str]) -> int:
     w = csv.DictWriter(out, fieldnames=CSV_COLUMNS, restval="", lineterminator="\n")
     w.writeheader()
     for r in records:
@@ -352,14 +382,16 @@ def write_csv(records: list[FrameRec | GapRec], out: IO[str]) -> int:
 # info
 # --------------------------------------------------------------------------
 
-def summarize(created_unix_ns: int, records: list[FrameRec | GapRec]) -> dict[str, object]:
+def summarize(created_unix_ns: int, records: list[FileRec]) -> dict[str, object]:
     frames = [r for r in records if isinstance(r, FrameRec)]
     gaps = [r for r in records if isinstance(r, GapRec)]
+    reboots = [r for r in records if isinstance(r, RebootRec)]
     info: dict[str, object] = {
         "created_unix_ns": created_unix_ns,
         "frames": len(frames),
         "gaps": [(g.from_seq, g.to_seq, g.missing) for g in gaps],
         "missing_frames": sum(g.missing for g in gaps),
+        "reboots": [(r.old_boot_id, r.new_boot_id, r.pc_time_ns) for r in reboots],
         "first_seq": frames[0].seq if frames else None,
         "last_seq": frames[-1].seq if frames else None,
         "duration_s": None,
@@ -375,15 +407,39 @@ def summarize(created_unix_ns: int, records: list[FrameRec | GapRec]) -> dict[st
 # --------------------------------------------------------------------------
 
 class _Writer:
-    """Appends records to an open binary file and tracks the next expected seq."""
+    """Appends records to an open binary file and tracks the next expected seq.
+
+    The device sequence restarts at 0 after every ESP32 reboot; boot_id tells
+    boots apart. Sequence checks (duplicates, gaps) apply within one boot only.
+    """
 
     def __init__(self, fh: IO[bytes], next_seq: int | None = None) -> None:
         self.fh = fh
         self.next_seq = next_seq
+        self.boot_id: int | None = None
         self.frames = 0
         self.gaps = 0
+        self.reboots = 0
 
-    def add_batch(self, hdr: BatchHeader, recs: list[Record], pc_time_ns: int) -> None:
+    def add_batch(
+        self, hdr: BatchHeader, recs: list[Record], pc_time_ns: int, requested_seq: int = 0
+    ) -> bool:
+        """Write a batch. Returns False if it was discarded because the device
+        rebooted: the caller must reconnect and request from seq 0 of the new boot."""
+        if hdr.boot_id != self.boot_id:
+            if self.boot_id is not None:
+                log.warning("device rebooted: boot_id %08x -> %08x", self.boot_id, hdr.boot_id)
+                self.fh.write(encode_reboot_rec(self.boot_id, hdr.boot_id, pc_time_ns))
+                self.fh.flush()
+                self.reboots += 1
+                self.boot_id = hdr.boot_id
+                self.next_seq = None  # new sequence baseline
+                if requested_seq != 0:
+                    # We asked from the old boot's seq, so frames the new boot
+                    # produced before it are missing from this batch; ask from 0.
+                    return False
+            else:
+                self.boot_id = hdr.boot_id
         for r in recs:
             if self.next_seq is not None:
                 d = seq_delta(r.seq, self.next_seq)
@@ -403,6 +459,7 @@ class _Writer:
             self.frames += 1
             self.next_seq = (r.seq + 1) & SEQ_MASK
         self.fh.flush()
+        return True
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
     buf = bytearray()
@@ -442,7 +499,9 @@ def record(
 
     The first connection asks from seq 0 and accepts whatever the device has (no gap
     record: there is no baseline). Later connections resume from last_seq + 1 and
-    write a gap record when the device skips ahead.
+    write a gap record when the device skips ahead. If the batch header's boot_id
+    changes (ESP32 rebooted, its sequence restarted), a reboot record is written, the
+    sequence baseline is reset and the recorder reconnects asking from seq 0.
     """
     stop = stop or threading.Event()
     with open(out_path, "wb") as fh:
@@ -459,8 +518,9 @@ def record(
                     log.info("connected to %s:%d, from_seq=%d", host, port, from_seq)
                     while not stop.is_set() and (max_frames is None or w.frames < max_frames):
                         hdr, recs = read_batch(sock)
-                        w.add_batch(hdr, recs, time.time_ns())
                         backoff = backoff_initial
+                        if not w.add_batch(hdr, recs, time.time_ns(), from_seq):
+                            break  # device rebooted: reconnect from seq 0 of the new boot
             except (OSError, ProtocolError) as e:
                 log.warning("connection lost: %s; retry in %.1fs", e, backoff)
                 if stop.wait(backoff):
@@ -475,7 +535,7 @@ def record(
 def _out(text: str) -> None:
     sys.stdout.write(text + "\n")
 
-def _load(path: str) -> tuple[int, list[FrameRec | GapRec]]:
+def _load(path: str) -> tuple[int, list[FileRec]]:
     data = Path(path).read_bytes()
     try:
         return parse_file(data)
@@ -512,6 +572,9 @@ def cmd_info(args: argparse.Namespace) -> int:
     _out(f"duration (pc): {s['duration_s']} s")
     _out(f"duration (esp): {s['esp_duration_s']} s")
     gaps = s["gaps"]
+    _out(f"reboots:       {len(s['reboots'])}")  # type: ignore[arg-type]
+    for old, new, _pc in s["reboots"]:  # type: ignore[attr-defined]
+        _out(f"  boot_id {old:08x} -> {new:08x}")
     _out(f"gaps:          {len(gaps)} ({s['missing_frames']} frames missing)")  # type: ignore[arg-type]
     for frm, to, n in gaps:  # type: ignore[attr-defined]
         _out(f"  [{frm}, {to}) = {n} frames")

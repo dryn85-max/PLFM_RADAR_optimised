@@ -255,11 +255,11 @@ const rb_t *ld2410_ring(void)
     return &s_ring;
 }
 
-int ld2410_ring_batch(uint32_t from_seq, uint8_t *buf, size_t cap,
+int ld2410_ring_batch(uint32_t from_seq, uint32_t boot_id, uint8_t *buf, size_t cap,
                       size_t *out_len, uint16_t *count)
 {
     ld2410_ring_lock();
-    int rc = rec_batch_from_ring(&s_ring, from_seq, buf, cap, out_len, count);
+    int rc = rec_batch_from_ring(&s_ring, from_seq, boot_id, buf, cap, out_len, count);
     ld2410_ring_unlock();
     return rc;
 }

@@ -85,14 +85,22 @@ def main():
                             "ack": {"cmd": 0x0062, "status": 1, "ok": 0}})
 
     recs = [(0xFFFFFFFF, 1234567, nraw), (0, 0x100000005, eraw)]
-    out = b"LDRB" + struct.pack("<BBHIHH", 1, 1, 0, 0xFFFFFFFF, len(recs), 0)
+    boot = 0xA1B2C3D4
+    out = b"LDRB" + struct.pack("<BBHIHHI", 2, 1, 0, 0xFFFFFFFF, len(recs), 0, boot)
     for seq, t, raw in recs:
         out += struct.pack("<IQH", seq, t, len(raw)) + raw
     write("batch_gap_wrap", out, {
-        "version": 1, "flags": 1, "first_seq": 0xFFFFFFFF, "count": 2,
+        "version": 2, "flags": 1, "first_seq": 0xFFFFFFFF, "count": 2,
+        "boot_id": boot,
         "records": [{"seq": s, "esp_time_us": t, "raw_hex": r.hex()}
                     for s, t, r in recs]})
 
+    # Keep-alive from a device that rebooted: seq restarted at 0, boot_id differs
+    # from the one in batch_gap_wrap (and is the largest possible value).
+    out = b"LDRB" + struct.pack("<BBHIHHI", 2, 0, 0, 0, 0, 0, 0xFFFFFFFF)
+    write("batch_reboot", out, {
+        "version": 2, "flags": 0, "first_seq": 0, "count": 0,
+        "boot_id": 0xFFFFFFFF, "records": []})
 
 if __name__ == "__main__":
     main()

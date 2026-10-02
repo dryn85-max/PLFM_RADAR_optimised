@@ -33,9 +33,9 @@ int rec_req_parse(const uint8_t *buf, size_t len, uint32_t *from_seq)
 }
 
 int rec_batch_begin(rec_batch_t *b, uint8_t *buf, size_t cap,
-                    uint32_t first_seq, uint8_t flags)
+                    uint32_t first_seq, uint8_t flags, uint32_t boot_id)
 {
-    if (!b || !buf)
+    if (!b || !buf || boot_id == 0)
         return -EINVAL;
     if (cap < REC_BATCH_HDR_LEN)
         return -ENOSPC;
@@ -46,6 +46,7 @@ int rec_batch_begin(rec_batch_t *b, uint8_t *buf, size_t cap,
     put32(buf + 8, first_seq);
     put16(buf + 12, 0);
     put16(buf + 14, 0);
+    put32(buf + 16, boot_id);
     b->buf = buf;
     b->cap = cap;
     b->len = REC_BATCH_HDR_LEN;
@@ -82,7 +83,7 @@ int rec_batch_parse_header(const uint8_t *buf, size_t len, rec_batch_hdr_t *h)
     if (!buf || !h)
         return -EINVAL;
     if (len < REC_BATCH_HDR_LEN || memcmp(buf, "LDRB", 4) != 0 ||
-        get16(buf + 6) != 0 || get16(buf + 14) != 0)
+        get16(buf + 6) != 0 || get16(buf + 14) != 0 || get32(buf + 16) == 0)
         return -EBADMSG;
     if (buf[4] != REC_VERSION)
         return -ENOTSUP;
@@ -90,11 +91,12 @@ int rec_batch_parse_header(const uint8_t *buf, size_t len, rec_batch_hdr_t *h)
     h->flags = buf[5];
     h->first_seq = get32(buf + 8);
     h->count = get16(buf + 12);
+    h->boot_id = get32(buf + 16);
     return 0;
 }
 
-int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint8_t *buf,
-                        size_t cap, size_t *out_len, uint16_t *count)
+int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint32_t boot_id,
+                        uint8_t *buf, size_t cap, size_t *out_len, uint16_t *count)
 {
     if (!rb || !buf || !out_len || !count)
         return -EINVAL;
@@ -104,7 +106,7 @@ int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint8_t *buf,
     if (rc)
         return rc;
     rec_batch_t b;
-    rc = rec_batch_begin(&b, buf, cap, cur.seq, gap ? REC_FLAG_GAP : 0);
+    rc = rec_batch_begin(&b, buf, cap, cur.seq, gap ? REC_FLAG_GAP : 0, boot_id);
     if (rc)
         return rc;
     uint8_t raw[RB_MAX_RAW];
@@ -130,4 +132,22 @@ int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint8_t *buf,
     *out_len = rec_batch_finish(&b);
     *count = b.count;
     return 0;
+}
+
+int rec_batch_next_seq(const uint8_t *buf, size_t len, uint32_t *next)
+{
+    rec_batch_hdr_t h;
+    if (!next)
+        return -EINVAL;
+    int rc = rec_batch_parse_header(buf, len, &h);
+    if (rc)
+        return rc;
+    *next = h.first_seq + h.count;
+    return 0;
+}
+
+int rec_batch_maybe_truncated(size_t len, size_t cap)
+{
+    const size_t max_rec = REC_RECORD_HDR_LEN + RB_MAX_RAW;
+    return cap >= max_rec && len + max_rec > cap;
 }

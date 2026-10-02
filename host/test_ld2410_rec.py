@@ -50,7 +50,14 @@ def test_decode_ack_vectors(name):
 
 def test_every_vector_is_covered():
     names = {p.stem for p in VEC.glob("*.json")}
-    assert names == {"frame_normal", "frame_engineering", "ack_ok", "ack_fail", "batch_gap_wrap"}
+    assert names == {
+        "frame_normal",
+        "frame_engineering",
+        "ack_ok",
+        "ack_fail",
+        "batch_gap_wrap",
+        "batch_reboot",
+    }
 
 
 def payload_of(raw: bytes) -> bytes:
@@ -101,20 +108,22 @@ def test_decode_frame_rejects_bad_framing():
 
 
 def test_request_encoding_exact():
-    assert lr.encode_request(0x01020304) == b"LDRQ\x01\x00\x00\x00\x04\x03\x02\x01"
-    assert lr.encode_request(0) == b"LDRQ" + b"\x01\x00\x00\x00" + b"\x00" * 4
+    assert lr.encode_request(0x01020304) == b"LDRQ\x02\x00\x00\x00\x04\x03\x02\x01"
+    assert lr.encode_request(0) == b"LDRQ" + b"\x02\x00\x00\x00" + b"\x00" * 4
     assert len(lr.encode_request(0xFFFFFFFF)) == lr.REQ_LEN
 
 
 def test_batch_gap_wrap_vector():
     raw, exp = vec("batch_gap_wrap")
     hdr, recs = lr.parse_batch(raw)
-    assert (hdr.version, hdr.flags, hdr.first_seq, hdr.count) == (
+    assert (hdr.version, hdr.flags, hdr.first_seq, hdr.count, hdr.boot_id) == (
         exp["version"],
         exp["flags"],
         exp["first_seq"],
         exp["count"],
+        exp["boot_id"],
     )
+    assert hdr.version == 2 and hdr.boot_id == 0xA1B2C3D4
     assert hdr.gap
     assert [(r.seq, r.esp_time_us, r.raw.hex()) for r in recs] == [
         (r["seq"], r["esp_time_us"], r["raw_hex"]) for r in exp["records"]
@@ -124,16 +133,26 @@ def test_batch_gap_wrap_vector():
         lr.decode_data_frame(r.raw)
 
 
+def test_batch_reboot_vector():
+    raw, exp = vec("batch_reboot")
+    hdr, recs = lr.parse_batch(raw)
+    assert recs == [] and len(raw) == lr.BATCH_HDR_LEN == 20
+    assert (hdr.first_seq, hdr.count, hdr.boot_id, hdr.gap) == (0, 0, exp["boot_id"], False)
+    assert hdr.boot_id == 0xFFFFFFFF != vec("batch_gap_wrap")[1]["boot_id"]
+
+
 def test_batch_errors():
     raw, _ = vec("batch_gap_wrap")
     with pytest.raises(lr.ProtocolError, match="short"):
-        lr.parse_batch_header(raw[:15])
+        lr.parse_batch_header(raw[:19])
     with pytest.raises(lr.ProtocolError, match="magic"):
         lr.parse_batch_header(b"XXXX" + raw[4:])
     with pytest.raises(lr.ProtocolError, match="version"):
-        lr.parse_batch_header(raw[:4] + b"\x02" + raw[5:])
+        lr.parse_batch_header(raw[:4] + b"\x01" + raw[5:])
     with pytest.raises(lr.ProtocolError, match="reserved"):
         lr.parse_batch_header(raw[:6] + b"\x01\x00" + raw[8:])
+    with pytest.raises(lr.ProtocolError, match="boot_id"):
+        lr.parse_batch_header(raw[:16] + b"\x00\x00\x00\x00")
     with pytest.raises(lr.ProtocolError, match="exceeds"):
         lr.parse_batch(raw[:-1])
     with pytest.raises(lr.ProtocolError, match="truncated"):
@@ -141,10 +160,11 @@ def test_batch_errors():
     with pytest.raises(lr.ProtocolError, match="trailing"):
         lr.parse_batch(raw + b"\x00")
     bad_len = bytearray(raw)
-    bad_len[16 + 12 : 16 + 14] = b"\xff\xff"  # record length beyond data
+    bad_len[20 + 12 : 20 + 14] = b"\xff\xff"  # record length beyond data
     with pytest.raises(lr.ProtocolError, match="exceeds"):
         lr.parse_batch(bytes(bad_len))
-    assert lr.parse_batch(raw[:4] + b"\x01\x00\x00\x00" + raw[8:12] + b"\x00\x00\x00\x00")[1] == []
+    empty = raw[:4] + b"\x02\x00\x00\x00" + raw[8:12] + b"\x00\x00\x00\x00" + raw[16:20]
+    assert lr.parse_batch(empty)[1] == []
 
 
 def test_seq_delta_wrap():
@@ -161,6 +181,8 @@ def build_file(recs) -> bytes:
     for r in recs:
         if isinstance(r, lr.GapRec):
             out += lr.encode_gap_rec(r.from_seq, r.to_seq, r.pc_time_ns)
+        elif isinstance(r, lr.RebootRec):
+            out += lr.encode_reboot_rec(r.old_boot_id, r.new_boot_id, r.pc_time_ns)
         else:
             out += lr.encode_frame_rec(r.seq, r.esp_time_us, r.pc_time_ns, r.raw)
     return bytes(out)
@@ -171,16 +193,22 @@ def test_file_round_trip_and_layout():
         lr.FrameRec(0xFFFFFFFE, 10, 111, NORMAL_RAW),
         lr.GapRec(0xFFFFFFFF, 3, 222),
         lr.FrameRec(3, 2**33, 333, ENG_RAW),
+        lr.RebootRec(0x11223344, 0xFFFFFFFF, 2**40 + 5),
+        lr.FrameRec(0, 4, 444, NORMAL_RAW),
     ]
     data = build_file(recs)
     assert data[:8] == b"LDREC1\x00\x00"
-    assert data[8:12] == b"\x01\x00\x00\x00"
+    assert data[8:12] == b"\x02\x00\x00\x00"
     assert struct.unpack_from("<Q", data, 12)[0] == 1234
     assert data[20] == 0  # first record is a frame
     created, back = lr.parse_file(data)
     assert created == 1234
     assert back == recs
     assert back[1].missing == 4
+    # reboot record: type 2, old u32, new u32, pc_time_ns u64
+    reb = lr.encode_reboot_rec(0x11223344, 0xFFFFFFFF, 2**40 + 5)
+    assert reb == b"\x02" + b"\x44\x33\x22\x11" + b"\xff\xff\xff\xff" + struct.pack("<Q", 2**40 + 5)
+    assert len(reb) == 17
 
 
 def test_file_errors_and_truncation():
@@ -190,9 +218,13 @@ def test_file_errors_and_truncation():
     with pytest.raises(lr.ProtocolError, match="magic"):
         lr.parse_file(b"XXXXXXXX" + good[8:])
     with pytest.raises(lr.ProtocolError, match="version"):
-        lr.parse_file(good[:8] + b"\x02" + good[9:])
+        lr.parse_file(good[:8] + b"\x01" + good[9:])
     with pytest.raises(lr.ProtocolError, match="unknown record type"):
         lr.parse_file(good + b"\x07")
+    with pytest.raises(lr.ProtocolError, match="truncated"):
+        lr.parse_file(good + lr.encode_reboot_rec(1, 2, 3)[:-1])
+    _, part = lr.parse_file(good + lr.encode_reboot_rec(1, 2, 3)[:-1], strict=False)
+    assert [r.seq for r in part] == [1, 2]
     with pytest.raises(lr.ProtocolError, match=r"truncated|exceeds"):
         lr.parse_file(good[:-3])
     _, part = lr.parse_file(good[:-3], strict=False)
@@ -217,6 +249,7 @@ def test_csv_columns_and_values():
             lr.FrameRec(8, 100, 556, ENG_RAW),
             lr.GapRec(9, 12, 557),
             lr.FrameRec(12, 101, 558, b"garbage"),
+            lr.RebootRec(5, 6, 559),
         ]
     )
     expected = (
@@ -227,7 +260,7 @@ def test_csv_columns_and_values():
         + [f"still_g{i}" for i in range(9)]
     )
     assert list(rows[0].keys())[: len(expected)] == expected
-    n, e, g, bad = rows
+    n, e, g, bad, reb = rows
     assert (n["seq"], n["esp_time_us"], n["pc_time_ns"], n["data_type"]) == ("7", "99", "555", "2")
     assert (n["target_state"], n["moving_dist_cm"], n["still_dist_cm"]) == ("3", "80", "120")
     assert (n["detect_dist_cm"], n["max_moving_gate"], n["move_g0"], n["still_g8"]) == (
@@ -242,15 +275,20 @@ def test_csv_columns_and_values():
     assert (e["still_g0"], e["still_g8"]) == ("0", "80")
     assert (g["record"], g["seq"], g["gap_to_seq"], g["data_type"]) == ("gap", "9", "12", "")
     assert bad["error"] and bad["data_type"] == ""
+    assert (reb["record"], reb["pc_time_ns"], reb["seq"]) == ("reboot", "559", "")
+    assert reb["data_type"] == ""
+    assert (reb["old_boot_id"], reb["new_boot_id"]) == ("5", "6")
 
 
 def test_info_summary():
     recs = [
         lr.FrameRec(1, 1_000_000, 10**9, NORMAL_RAW),
         lr.GapRec(2, 5, 2 * 10**9),
+        lr.RebootRec(1, 2, 25 * 10**8),
         lr.FrameRec(5, 3_000_000, 3 * 10**9, NORMAL_RAW),
     ]
     s = lr.summarize(0, recs)
+    assert s["reboots"] == [(1, 2, 25 * 10**8)]
     assert (s["frames"], s["first_seq"], s["last_seq"]) == (2, 1, 5)
     assert s["gaps"] == [(2, 5, 3)] and s["missing_frames"] == 3
     assert s["duration_s"] == 2.0 and s["esp_duration_s"] == 2.0
@@ -261,7 +299,9 @@ def test_cli_info_and_csv(tmp_path, capsys):
     f = tmp_path / "a.ldrec"
     f.write_bytes(build_file([lr.FrameRec(1, 2, 3, NORMAL_RAW)]))
     assert lr.main(["info", str(f)]) == 0
-    assert "frames:        1" in capsys.readouterr().out
+    out_text = capsys.readouterr().out
+    assert "frames:        1" in out_text
+    assert "reboots:       0" in out_text
     out = tmp_path / "a.csv"
     assert lr.main(["export-csv", str(f), "-o", str(out)]) == 0
     assert out.read_text().startswith("seq,esp_time_us,pc_time_ns")
@@ -278,8 +318,12 @@ def frame_for(seq: int) -> bytes:
     return frame_of(bytes(p))
 
 
-def batch(first_seq: int, seqs: list[int], flags: int = 0) -> bytes:
-    out = struct.pack("<4sBBHIHH", b"LDRB", 1, flags, 0, first_seq, len(seqs), 0)
+BOOT_A = 0xA0A0A0A1
+BOOT_B = 0xB0B0B0B2
+
+
+def batch(first_seq: int, seqs: list[int], flags: int = 0, boot: int = BOOT_A) -> bytes:
+    out = struct.pack("<4sBBHIHHI", b"LDRB", 2, flags, 0, first_seq, len(seqs), 0, boot)
     for s in seqs:
         raw = frame_for(s)
         out += struct.pack("<IQH", s, 1000 + s, len(raw)) + raw
@@ -312,7 +356,7 @@ class FakeServer:
                         if not chunk:
                             break
                         req += chunk
-                    assert req[:4] == b"LDRQ"
+                    assert req[:5] == b"LDRQ\x02"
                     self.requests.append(struct.unpack_from("<I", req, 8)[0])
                     for r in replies:
                         conn.sendall(r)
@@ -424,3 +468,131 @@ def test_stop_event_ends_recording(tmp_path):
     assert w.frames == 1
     _, recs = lr.parse_file(path.read_bytes())
     assert summary(recs) == [("f", 0)]
+
+
+def reboot_summary(recs):
+    return [
+        ("reboot", r.old_boot_id, r.new_boot_id)
+        if isinstance(r, lr.RebootRec)
+        else ("gap", r.from_seq, r.to_seq)
+        if isinstance(r, lr.GapRec)
+        else ("f", r.seq)
+        for r in recs
+    ]
+
+
+def test_boot_id_unchanged_reconnect_no_reboot_record(tmp_path):
+    script = [[batch(0, [0, 1])], [batch(2, [2, 3])]]
+    srv, recs = run_recorder(tmp_path, script, 4)
+    assert srv.requests == [0, 2]
+    assert reboot_summary(recs) == [("f", 0), ("f", 1), ("f", 2), ("f", 3)]
+
+
+def test_esp32_reboot_mid_recording_keeps_all_frames(tmp_path):
+    # Device rebooted: the new boot's seq restarts at 0, i.e. "older" than 2.
+    # Frames before and after must all be kept, with exactly one reboot record.
+    script = [
+        [batch(0, [0, 1, 2], boot=BOOT_A)],
+        # request from 3 on a device that already has 0..4 again: boot differs ->
+        # the recorder must discard this batch and ask again from 0 (0..2 are not lost)
+        [batch(3, [3, 4], boot=BOOT_B)],
+        [batch(0, [0, 1, 2, 3, 4], boot=BOOT_B)],
+    ]
+    srv, recs = run_recorder(tmp_path, script, 8)
+    assert srv.requests == [0, 3, 0]
+    assert reboot_summary(recs) == [
+        ("f", 0),
+        ("f", 1),
+        ("f", 2),
+        ("reboot", BOOT_A, BOOT_B),
+        ("f", 0),
+        ("f", 1),
+        ("f", 2),
+        ("f", 3),
+        ("f", 4),
+    ]
+
+
+def test_reboot_seq_restarts_at_zero_no_wrong_drop(tmp_path):
+    # The usual case: the new boot has fewer frames than the old last seq.
+    script = [
+        [batch(0, [0, 1, 2, 3, 4, 5], boot=BOOT_A)],
+        [batch(0, [], boot=BOOT_B)],  # boot differs; requested 6, device sends from 0
+        [batch(0, [0, 1], boot=BOOT_B)],
+    ]
+    srv, recs = run_recorder(tmp_path, script, 8)
+    assert srv.requests == [0, 6, 0]
+    got = reboot_summary(recs)
+    assert got.count(("reboot", BOOT_A, BOOT_B)) == 1
+    assert [x for x in got if x[0] == "f"] == [("f", i) for i in range(6)] + [("f", 0), ("f", 1)]
+    assert not any(x[0] == "gap" for x in got)
+    # file decodes, reboot record sits between the two boots' frames
+    assert isinstance(recs[6], lr.RebootRec)
+    assert recs[6].pc_time_ns > 0
+
+
+def test_reboot_with_gap_flag_on_new_boot_is_accepted(tmp_path):
+    # After the reboot the new ring already evicted its oldest frames: GAP flag, first_seq 7
+    script = [
+        [batch(0, [0, 1], boot=BOOT_A)],
+        [batch(7, [7], flags=1, boot=BOOT_B)],  # requested 2 -> boot differs -> redo from 0
+        [batch(7, [7, 8], flags=1, boot=BOOT_B)],
+        [batch(9, [9], boot=BOOT_B)],  # same boot: resume from last+1, no extra reboot record
+    ]
+    srv, recs = run_recorder(tmp_path, script, 5)
+    assert srv.requests == [0, 2, 0, 9]
+    assert reboot_summary(recs) == [
+        ("f", 0),
+        ("f", 1),
+        ("reboot", BOOT_A, BOOT_B),
+        ("f", 7),
+        ("f", 8),
+        ("f", 9),
+    ]
+
+
+def test_two_reboots(tmp_path):
+    script = [
+        [batch(0, [0], boot=BOOT_A)],
+        [batch(0, [0], boot=BOOT_B)],  # requested 1, from_seq != 0 -> redo
+        [batch(0, [0], boot=BOOT_B)],
+        [batch(0, [0], boot=BOOT_A)],  # another reboot, boot id differs again
+        [batch(0, [0], boot=BOOT_A)],
+    ]
+    srv, recs = run_recorder(tmp_path, script, 3)
+    assert srv.requests == [0, 1, 0, 1, 0]
+    assert reboot_summary(recs) == [
+        ("f", 0),
+        ("reboot", BOOT_A, BOOT_B),
+        ("f", 0),
+        ("reboot", BOOT_B, BOOT_A),
+        ("f", 0),
+    ]
+
+
+def test_cli_info_and_csv_with_reboot(tmp_path, capsys):
+    f = tmp_path / "r.ldrec"
+    f.write_bytes(
+        build_file(
+            [
+                lr.FrameRec(1, 2, 3, NORMAL_RAW),
+                lr.RebootRec(7, 9, 10),
+                lr.FrameRec(0, 1, 11, NORMAL_RAW),
+            ]
+        )
+    )
+    assert lr.main(["info", str(f)]) == 0
+    assert "reboots:       1" in capsys.readouterr().out
+    out = tmp_path / "r.csv"
+    assert lr.main(["export-csv", str(f), "-o", str(out)]) == 0
+    rows = list(csv.DictReader(out.open()))
+    assert [r["record"] for r in rows] == ["frame", "reboot", "frame"]
+
+
+def test_server_with_other_version_batch_reconnects(tmp_path):
+    old = bytearray(batch(0, [0]))
+    old[4] = 1  # an old-protocol batch must be refused, not misparsed
+    script = [[bytes(old)], [batch(0, [0])]]
+    srv, recs = run_recorder(tmp_path, script, 1)
+    assert srv.requests == [0, 0]
+    assert reboot_summary(recs) == [("f", 0)]
