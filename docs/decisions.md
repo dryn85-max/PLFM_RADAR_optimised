@@ -75,6 +75,7 @@ B). Fork baseline: upstream `b46dd71`.
 | **Both time sources are recorded (GPS and SNTP `time_sync` records); GPS has priority only for display** (live page: GPS while its latest sync is under 5 s old, else SNTP). | Recording everything lets the host decide; the host converts with GPS priority (see the next row). `components/core/time_source.h`. | this change |
 | **Live page marks the IMU `error` when its last record is older than 1 s** (owner-confirmed 2026-10-02). | Agent-made choice in the implementation, confirmed by the owner; spec R6. | this change |
 | **GPS priority also in the host UTC conversion, +-2 s window** (owner decision 2026-10-02, spec R4): a GPS `time_sync` of the same boot within +-2 s of a record wins (nearest such one); otherwise the nearest preceding `time_sync` of any source, else the following one. Firmware also re-emits an SNTP `time_sync` every 60 s once SNTP has synced; RMC dates before 2025 are rejected. | An SNTP sync between two GPS syncs must not make `frame_utc` jump; hourly SNTP alone would leave recordings without a sync. `host/ld2410_rec.py` `GPS_PRIORITY_WINDOW_US`. | this change |
+| **Default IMU mounting = BMI160 chip facing down** (`TILT_MAP_SIGN` +1, -1, -1: sensor turned 180° about X). | Owner's bench board has the chip on the underside; with the identity mapping it read roll ≈ ±180° at rest (bench, 2026-10-02). | this change |
 
 ## Process decisions (earlier)
 

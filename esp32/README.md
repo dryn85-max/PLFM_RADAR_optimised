@@ -296,15 +296,17 @@ right-handed. Level and at rest the accelerometer reads (0, 0, +1000 mg).
 - An accelerometer sample with a magnitude outside 0.5 g to 1.5 g (free fall,
   shock) is not used for correction; the gyro still propagates.
 
-**Default mounting:** the GY-BMI160 board lies **flat, components up**, with the
-sensor's **X axis along the radar boresight**. The BMI160 axes are right-handed,
-so its Y axis then points left and Z up, and the mapping is the identity. For
-another mounting edit the six constants in `components/core/tilt.h`
-(`body[i] = TILT_MAP_SIGN_i * sensor[TILT_MAP_SRC_i]`, source index 0 = X, 1 = Y,
-2 = Z; defaults `SRC` 0, 1, 2 and `SIGN` +1, +1, +1), then rebuild; keep the
-mapping right-handed (an odd number of sign flips or swaps mirrors the frame and
-gives wrong angles). Whether the sensor really sits this way on the owner's
-board is **VERIFY** (silkscreen axis arrows).
+**Default mounting (owner's bench, 2026-10-02):** the GY-BMI160 board lies
+flat with the **BMI160 chip facing down** (silkscreen labels up), the sensor's
+**X axis along the radar boresight**. That is the sensor turned 180° about X, so
+the mapping is `body X = +sensor X`, `body Y = -sensor Y`, `body Z = -sensor Z`
+(`SRC` 0, 1, 2 and `SIGN` +1, -1, -1 in `components/core/tilt.h`). With the
+default (+1, +1, +1) mapping this mounting read roll ≈ ±180° at rest on the
+bench. For a chip-up mounting use signs +1, +1, +1; for another mounting edit
+the six constants (`body[i] = TILT_MAP_SIGN_i * sensor[TILT_MAP_SRC_i]`, source
+index 0 = X, 1 = Y, 2 = Z), then rebuild; keep the mapping right-handed (an odd
+number of sign flips or swaps mirrors the frame and gives wrong angles). The
+direction of the sensor X axis on the board (silkscreen arrow) is still VERIFY.
 
 ### BMI160 registers used (all VERIFY)
 

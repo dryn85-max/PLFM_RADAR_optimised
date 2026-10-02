@@ -41,15 +41,16 @@
 #include "rec_payload.h"
 
 /* Sensor-to-body axis mapping, a firmware constant: body[i] = SIGN_i * sensor[SRC_i].
- * Default = the sensor is mounted so that its X axis points along the boresight,
- * its Z axis up (so its Y axis is left, as the BMI160 axes are right-handed).
- * Change these six values for another mounting. VERIFY on the real board. */
+ * Default = the owner's bench mounting (2026-10-02): GY-BMI160 board with the BMI160
+ * chip facing DOWN (labels up), sensor X axis along the boresight. That is the
+ * sensor turned 180 deg about X, so body Y = -sensor Y and body Z = -sensor Z
+ * (still right-handed). For a chip-up mounting use signs +1, +1, +1. */
 #define TILT_MAP_SRC_X 0
 #define TILT_MAP_SRC_Y 1
 #define TILT_MAP_SRC_Z 2
 #define TILT_MAP_SIGN_X 1
-#define TILT_MAP_SIGN_Y 1
-#define TILT_MAP_SIGN_Z 1
+#define TILT_MAP_SIGN_Y (-1)
+#define TILT_MAP_SIGN_Z (-1)
 
 #define TILT_ALPHA_DEFAULT 0.98f
 #define TILT_DT_DEFAULT 0.01f
