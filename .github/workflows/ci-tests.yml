@@ -50,6 +50,7 @@ jobs:
         run: >
           uv run pytest
           host/test_v7.py
+          host/test_radar_protocol.py
           -v --tb=short
 
   # ===========================================================================

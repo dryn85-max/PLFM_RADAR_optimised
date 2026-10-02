@@ -11,7 +11,8 @@ protocol layer, taken over unchanged.
 | `v7/` | GUI package: dashboard, map widget, workers, processing, replay, hardware access, software FPGA model (`software_fpga.py`), AGC simulation (`agc_sim.py`). |
 | `radar_protocol.py` | Pure-logic USB protocol layer (packet parsing, command building, `FT2232HConnection`, `FT601Connection`); no GUI dependencies. |
 | `smoke_test.py` | Board bring-up script: sends opcode 0x30 (self-test) and reads the result with 0x31. Mock mode by default, `--live` for real FT2232H hardware. |
-| `test_v7.py` | Unit tests for the V7 GUI package and protocol layer. |
+| `test_v7.py` | Unit tests for the V7 GUI package (models, processing, workers, software FPGA). |
+| `test_radar_protocol.py` | Unit tests for `radar_protocol.py`: packet parsing, command building, opcodes, AGC status, recorder, acquisition. No Qt or Tk needed. |
 | `requirements_v7.txt` | Python dependencies. |
 
 ## Install
@@ -35,7 +36,7 @@ python host/smoke_test.py --live     # real FT2232H
 ## Tests
 
 ```
-QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py -v
+QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py host/test_radar_protocol.py -v
 ```
 
 `v7/software_fpga.py` and some tests read the golden reference and co-sim data
