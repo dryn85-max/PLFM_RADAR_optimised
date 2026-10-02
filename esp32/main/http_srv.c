@@ -29,27 +29,89 @@ static void on_session_close(httpd_handle_t hd, int sockfd)
     close(sockfd);
 }
 
+/* Same look as web_page.html (colour tokens, card, system font); inline, no external resources.
+ * Sent once per response in the page head. */
+#define WIFI_CSS                                                                              \
+    "<style>"                                                                                 \
+    ":root{--bg:#f4f5f7;--card:#fff;--fg:#1c1f24;--mut:#667;--bar:#2f6fed;--bd:#d8dbe0;"      \
+    "--ok:#1f8f4e;--bad:#c0392b}"                                                             \
+    "@media(prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1e2126;--fg:#e8eaed;"       \
+    "--mut:#98a0ab;--bar:#5b8def;--bd:#33373e;--ok:#4cc27e;--bad:#e8685a}}"                   \
+    "*{box-sizing:border-box}"                                                                \
+    "body{margin:0;padding:12px;background:var(--bg);color:var(--fg);"                        \
+    "font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}"                       \
+    "main{max-width:640px;margin:0 auto}"                                                     \
+    "h1{font-size:1.1rem;margin:0 0 10px}h2{font-size:.95rem;margin:0 0 8px}"                 \
+    ".card{background:var(--card);border:1px solid var(--bd);border-radius:10px;"             \
+    "padding:12px;margin-bottom:10px}"                                                        \
+    ".k{font-size:.8rem;color:var(--mut)}.k a{color:var(--bar)}"                              \
+    "ul{list-style:none;margin:0;padding:0}"                                                  \
+    "li+li{border-top:1px solid var(--bd)}"                                                   \
+    ".r{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;"        \
+    "gap:2px 12px;min-height:44px;padding:8px 4px;color:var(--fg);text-decoration:none}"      \
+    "a.r:active{background:var(--bg)}"                                                        \
+    ".nm{font-weight:600;overflow-wrap:anywhere}"                                             \
+    ".mt{font-size:.8rem;color:var(--mut)}"                                                   \
+    ".q{display:inline-block;width:16px;height:12px;margin-right:6px;"                        \
+    "clip-path:polygon(0 100%,100% 100%,100% 0);background:var(--bd)}"                        \
+    ".q1{background:linear-gradient(90deg,var(--bar) 25%,var(--bd) 25%)}"                     \
+    ".q2{background:linear-gradient(90deg,var(--bar) 50%,var(--bd) 50%)}"                     \
+    ".q3{background:linear-gradient(90deg,var(--bar) 75%,var(--bd) 75%)}"                     \
+    ".q4{background:var(--bar)}"                                                              \
+    "label{display:block;margin-bottom:12px;font-size:.9rem;color:var(--mut)}"                \
+    "input{display:block;width:100%;margin-top:4px;padding:10px;font:inherit;"                \
+    "color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px}"      \
+    "input:focus{outline:2px solid var(--bar);outline-offset:-1px}"                           \
+    "button{width:100%;padding:12px;font:inherit;font-weight:600;color:#fff;"                 \
+    "background:var(--bar);border:0;border-radius:8px}"                                       \
+    ".ok{color:var(--ok)}.bad{color:var(--bad)}"                                              \
+    "</style>"
+
+#define WIFI_PAGE_OPEN(title)                                                                 \
+    "<!doctype html><html><head><meta charset=\"utf-8\">"                                     \
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"                 \
+    "<title>" title "</title>" WIFI_CSS "</head><body><main>"
+
 static const char WIFI_HEAD[] =
-    "<!doctype html><html><head><meta charset=\"utf-8\">"
-    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-    "<title>AERIS-10 Lite Wi-Fi</title></head><body>"
+    WIFI_PAGE_OPEN("AERIS-10 Lite Wi-Fi")
     "<h1>Wi-Fi setup</h1>"
-    "<p>Nearby networks (tap one to fill the SSID) - <a href=\"/wifi\">rescan</a></p>";
+    "<div class=\"card\"><h2>Nearby networks</h2>"
+    "<div class=\"k\">Tap one to fill the SSID &middot; <a href=\"/wifi\">rescan</a></div>";
 
 static const char WIFI_NO_SCAN[] =
-    "<p>Scan unavailable, enter SSID manually.</p>";
-static const char WIFI_NONE[] = "<p>No networks found. Enter SSID manually.</p>";
+    "<p class=\"k\">Scan unavailable, enter SSID manually.</p>";
+static const char WIFI_NONE[] = "<p class=\"k\">No networks found. Enter SSID manually.</p>";
 
 static const char WIFI_FORM[] =
-    "<form method=\"post\" action=\"/wifi\">"
-    "<p><label>SSID<br><input id=\"ssid\" name=\"ssid\" maxlength=\"32\" required></label></p>"
-    "<p><label>Password (empty = open network, otherwise 8-64 characters)<br>"
-    "<input name=\"password\" type=\"password\" maxlength=\"64\"></label></p>"
-    "<p><button type=\"submit\">Save and reboot</button></p>"
-    "</form>"
+    "</div><form class=\"card\" method=\"post\" action=\"/wifi\">"
+    "<label>SSID<input id=\"ssid\" name=\"ssid\" maxlength=\"32\" required></label>"
+    "<label>Password (empty = open network, otherwise 8-64 characters)"
+    "<input name=\"password\" type=\"password\" maxlength=\"64\"></label>"
+    "<button type=\"submit\">Save and reboot</button>"
+    "</form></main>"
     "<script>document.querySelectorAll('a[data-s]').forEach(function(a){"
     "a.onclick=function(){document.getElementById('ssid').value=a.dataset.s;return false}})"
     "</script></body></html>";
+
+/* Small styled result page, sent in chunks (no stack buffer); cls and msg are literals without
+ * markup. */
+static esp_err_t wifi_result(httpd_req_t *req, const char *status, const char *cls, const char *msg)
+{
+    httpd_resp_set_status(req, status);
+    httpd_resp_set_type(req, "text/html");
+    if (httpd_resp_send_chunk(req, WIFI_PAGE_OPEN("AERIS-10 Lite Wi-Fi") "<div class=\"card\"><h1 class=\"",
+                              HTTPD_RESP_USE_STRLEN) != ESP_OK ||
+        httpd_resp_send_chunk(req, cls, HTTPD_RESP_USE_STRLEN) != ESP_OK ||
+        httpd_resp_send_chunk(req, "\">", HTTPD_RESP_USE_STRLEN) != ESP_OK ||
+        httpd_resp_send_chunk(req, msg, HTTPD_RESP_USE_STRLEN) != ESP_OK ||
+        httpd_resp_send_chunk(req,
+                              "</h1><div class=\"k\"><a href=\"/wifi\">Back to Wi-Fi setup</a></div>"
+                              "</div></main></body></html>",
+                              HTTPD_RESP_USE_STRLEN) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
 
 /* One rendered entry at a time; only the single httpd task runs wifi_get, so a static buffer is
  * safe and keeps the 6 KB httpd stack free. */
@@ -139,7 +201,7 @@ static esp_err_t wifi_post(httpd_req_t *req)
 {
     if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
     if (req->content_len == 0 || req->content_len > WF_BODY_MAX) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad length");
+        return wifi_result(req, HTTPD_400, "bad", "Bad request length");
     }
     char body[WF_BODY_MAX];
     size_t got = 0;
@@ -161,16 +223,15 @@ static esp_err_t wifi_post(httpd_req_t *req)
     memset(body, 0, sizeof body);
     if (rc != WF_OK) {
         memset(pass, 0, sizeof pass);
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid ssid or password");
+        return wifi_result(req, HTTPD_400, "bad", "Invalid SSID or password");
     }
     esp_err_t err = wifi_mgr_save_credentials(ssid, pass);
     memset(pass, 0, sizeof pass);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "saving credentials failed: %s", esp_err_to_name(err));
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
+        return wifi_result(req, HTTPD_500, "bad", "Saving failed");
     }
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_send(req, "Saved, rebooting", HTTPD_RESP_USE_STRLEN);
+    wifi_result(req, HTTPD_200, "ok", "Saved, rebooting");
 
     const esp_timer_create_args_t targs = {.callback = restart_cb, .name = "wifi_restart"};
     esp_timer_handle_t t;

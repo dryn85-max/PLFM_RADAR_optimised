@@ -158,10 +158,22 @@ static void test_render_entry(void)
     TT_ASSERT(strstr(o, "ch 6") != NULL);
     TT_ASSERT(strstr(o, "secured") != NULL);
     TT_ASSERT(strstr(o, "<b>") == NULL);
+    TT_ASSERT(strstr(o, "<a class=\"r\" href=\"#\" data-s=") != NULL);
+    TT_ASSERT(strstr(o, "class=\"q q4\"") != NULL); /* -55 dBm: strong */
     TT_ASSERT(strncmp(o, "<li>", 4) == 0 && strcmp(o + n - 6, "</li>\n") == 0);
     r = mk("cafe", -90, 13, 0);
     n = wsc_render_entry(o, sizeof o, &r);
     TT_ASSERT(n > 0 && strstr(o, "open") != NULL && strstr(o, "secured") == NULL);
+    TT_ASSERT(strstr(o, "class=\"q q1\"") != NULL); /* -90 dBm: weak */
+    /* signal level thresholds */
+    const int thr[][2] = {{-30, 4}, {-55, 4}, {-56, 3}, {-65, 3}, {-66, 2}, {-75, 2}, {-76, 1}, {-127, 1}};
+    for (size_t i = 0; i < sizeof thr / sizeof thr[0]; i++) {
+        char want[24];
+        r = mk("t", thr[i][0], 1, 0);
+        wsc_render_entry(o, sizeof o, &r);
+        snprintf(want, sizeof want, "class=\"q q%d\"", thr[i][1]);
+        TT_ASSERT(strstr(o, want) != NULL);
+    }
     /* lossy SSID: not a link */
     r = mk("a", -40, 1, 1);
     r.ssid[0] = 0xFF;

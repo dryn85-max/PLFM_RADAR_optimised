@@ -172,22 +172,22 @@ static void entry_into(sink *s, const wsc_rec *r)
         s->full = 1; /* cannot happen: 32 bytes expand to at most 32 * 6 */
         return;
     }
-    char num[40];
+    char num[96];
+    int q = r->rssi >= -55 ? 4 : r->rssi >= -65 ? 3 : r->rssi >= -75 ? 2 : 1;
     puts_(s, "<li>");
+    puts_(s, lossy ? "<div class=\"r\">" : "<a class=\"r\" href=\"#\" data-s=\"");
     if (!lossy) {
-        puts_(s, "<a href=\"#\" data-s=\"");
         puts_(s, esc);
         puts_(s, "\">");
-        puts_(s, esc);
-        puts_(s, "</a>");
-    } else {
-        puts_(s, esc);
     }
-    snprintf(num, sizeof num, " <small>%d dBm, ch %u, ", (int)r->rssi, (unsigned)r->channel);
+    puts_(s, "<span class=\"nm\">");
+    puts_(s, esc);
+    snprintf(num, sizeof num, "</span><span class=\"mt\"><i class=\"q q%d\"></i>%d dBm &middot; ch %u &middot; ", q,
+             (int)r->rssi, (unsigned)r->channel);
     puts_(s, num);
-    puts_(s, r->secure ? "secured" : "open");
-    if (lossy) puts_(s, ", enter manually");
-    puts_(s, "</small></li>\n");
+    puts_(s, r->secure ? "&#128274; secured" : "open");
+    if (lossy) puts_(s, " &middot; enter manually");
+    puts_(s, lossy ? "</span></div></li>\n" : "</span></a></li>\n");
 }
 
 int wsc_render_entry(char *out, size_t cap, const wsc_rec *r)
