@@ -57,10 +57,14 @@ idf.py build flash monitor
 ```
 
 `sdkconfig.defaults` is committed (octal flash and PSRAM, console on
-USB-Serial-JTAG, WebSocket support, `CONFIG_LWIP_MAX_SOCKETS=16`: httpd uses
+USB-Serial-JTAG, WebSocket support with the post-handshake callback
+(`CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT`: from v5.5.5 on, esp_http_server
+reports a new WebSocket client only through it), `CONFIG_LWIP_MAX_SOCKETS=16`: httpd uses
 up to 7 sessions + listen + control, the recording server a listen socket, a
 client and one transient socket); `sdkconfig`, `build/` and
-`managed_components/` are git-ignored. The `espressif/mdns` component is fetched
+`managed_components/` are git-ignored. An existing `sdkconfig` takes
+precedence over `sdkconfig.defaults`: after a change to the defaults, delete
+`esp32/sdkconfig` before building (`idf.py fullclean` does not remove it). The `espressif/mdns` component is fetched
 at build time, pinned exactly (`main/idf_component.yml`, `==1.14.0`).
 
 If the board does not enter download mode by itself: hold **BOOT**, tap
@@ -115,6 +119,11 @@ clients). The page shows:
   unavailable". If the enable sequence gets no ACK at boot, it is retried every
   5 s (at most 5 retries) while no engineering frame has been seen; data
   reception continues meanwhile.
+
+The console logs `ws client added fd=.. slot=..` / `ws client removed fd=..`
+for each WebSocket client, a warning for each failed send, and every 10 s
+`live: clients=N sent=N skipped_inflight=N queue_fail=N` (counts for those
+10 s; one client normally shows `sent=100`).
 
 ## Recorder (PC side)
 

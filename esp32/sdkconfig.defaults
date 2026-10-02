@@ -21,6 +21,11 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 
 # WebSocket support in esp_http_server (live view /ws).
 CONFIG_HTTPD_WS_SUPPORT=y
+# ESP-IDF v5.5.5 no longer calls the /ws handler for the handshake; live.c
+# registers new clients from the post-handshake callback, which needs this.
+# An existing esp32/sdkconfig overrides these defaults: delete it after
+# pulling this change (live.c stops the build with #error otherwise).
+CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 
 # Sockets: httpd (7 sessions + listen + control) + recording server (listen,
 # client, one transient while it is being replaced). httpd requires
