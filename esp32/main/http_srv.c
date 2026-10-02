@@ -397,12 +397,22 @@ static esp_err_t ld2410_get(httpd_req_t *req)
         LSEND("<div class=\"card\"><div class=\"k\">Firmware unknown &middot; " LD_LINKS_INNER "</div></div>");
     }
     LSEND("<form class=\"card\" method=\"post\" action=\"/ld2410\">");
+    /* Display only: the module may report 1 (PDF 1.2.2 p.6, e.g. set by the Hi-Link app) while the
+     * command allows 2..8 (protocol 2.2.3 p.10). Show the nearest settable value plus a note. */
+    unsigned mg = (unsigned)s->max_move_gate, sg = (unsigned)s->max_still_gate;
+    const bool low = mg < 2 || sg < 2;
+    mg = mg < 2 ? 2 : (mg > 8 ? 8 : mg);
+    sg = sg < 2 ? 2 : (sg > 8 ? 8 : sg);
     LSENDF("<label>Max moving gate (2-8)<input type=\"number\" name=\"mg\" min=\"2\" max=\"8\" "
            "value=\"%u\" required></label>",
-           (unsigned)s->max_move_gate);
+           mg);
     LSENDF("<label>Max still gate (2-8)<input type=\"number\" name=\"sg\" min=\"2\" max=\"8\" "
            "value=\"%u\" required></label>",
-           (unsigned)s->max_still_gate);
+           sg);
+    if (low) {
+        LSEND("<p class=\"k\">module reports 1; the minimum settable here is 2 "
+              "(Hi-Link protocol &sect;2.2.3 p.10)</p>");
+    }
     LSENDF("<label>No-one duration, seconds (0-65535)<input type=\"number\" name=\"dur\" min=\"0\" "
            "max=\"65535\" value=\"%u\" required></label>",
            (unsigned)s->duration_s);

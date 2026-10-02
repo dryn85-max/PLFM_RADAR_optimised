@@ -222,10 +222,19 @@ esp_err_t ld2410_request(ld_req_t *req, uint32_t timeout_ms)
     if (s_req_q == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    TickType_t wait = pdMS_TO_TICKS(timeout_ms);
+    /* One deadline for the whole call: the wait for s_req_mtx and the wait for completion
+     * share timeout_ms. */
+    const TickType_t wait = pdMS_TO_TICKS(timeout_ms);
+    const TickType_t t0 = xTaskGetTickCount();
     if (xSemaphoreTake(s_req_mtx, wait) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
+    const TickType_t used = xTaskGetTickCount() - t0; /* unsigned: tick wrap-around is fine */
+    if (used >= wait) { /* the mutex took the whole budget: nothing is submitted */
+        xSemaphoreGive(s_req_mtx);
+        return ESP_ERR_TIMEOUT;
+    }
+    const TickType_t remaining = wait - used;
     esp_err_t err;
 
     xSemaphoreTake(s_st_mtx, portMAX_DELAY);
@@ -252,7 +261,7 @@ esp_err_t ld2410_request(ld_req_t *req, uint32_t timeout_ms)
         return ESP_ERR_NO_MEM;
     }
 
-    bool completed = xSemaphoreTake(s_done, wait) == pdTRUE;
+    bool completed = xSemaphoreTake(s_done, remaining) == pdTRUE;
     if (!completed) {
         xSemaphoreTake(s_st_mtx, portMAX_DELAY);
         if (s_busy) {

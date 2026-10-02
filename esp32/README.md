@@ -670,8 +670,8 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 - mDNS (`aeris-mvp.local`) on the home network.
 - A 64-character hexadecimal Wi-Fi password (WPA2 treats it as a raw PSK; the
   63-character ASCII case is the normal one).
-- Task stack sizes (LD2410C task 4096 B, recording tasks 4096 B, HTTP server
-  6144 B, main task 6144 B, BOOT monitor 3072 B, status LED task 3072 B, GPS task 4096 B, IMU task
+- Task stack sizes (LD2410C task 6144 B, recording tasks 4096 B, HTTP server
+  8192 B, main task 6144 B, BOOT monitor 4096 B, status LED task 3072 B, GPS task 4096 B, IMU task
   5120 B) under real load.
 - The AP password stays stable across reboots and a credential reset.
 - GPS wiring and pins (GPIO4/5 UART2, GPIO8/9 I2C) on the real boards, and that

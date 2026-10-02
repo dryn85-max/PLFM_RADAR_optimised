@@ -292,6 +292,11 @@ esp_err_t wifi_mgr_start(void)
         wifi_config_t sta_cfg;
         fill_sta_config(&sta_cfg, ssid, pass);
         s_sta_wanted = true;
+        /* Store the AP config in RAM now, so a later switch to APSTA (on demand, or the STA-failed
+         * fallback) never starts the AP with the driver default (open, ESP_xxxx). set_config for
+         * an interface needs that interface enabled by the current mode, hence APSTA first. */
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
         ESP_ERROR_CHECK(esp_wifi_start()); /* STA_START event triggers esp_wifi_connect() */
@@ -416,10 +421,10 @@ esp_err_t wifi_mgr_ap_on_demand(void)
         char ap_ssid[33];
         wifi_config_t ap_cfg;
         fill_ap_config(&ap_cfg, ap_pass, ap_ssid, sizeof ap_ssid);
+        s_ap_clients = 0; /* before the AP can start: its events must count from zero */
         err = esp_wifi_set_mode(WIFI_MODE_APSTA);
         if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
         if (err == ESP_OK) {
-            s_ap_clients = 0;
             s_ap_kind = AP_KIND_DEMAND;
             status_led_set_ap(SL_AP_ON_DEMAND);
             idle_timer_restart();
@@ -471,6 +476,6 @@ esp_err_t wifi_mgr_boot_monitor_start(void)
     };
     esp_err_t err = gpio_config(&io);
     if (err != ESP_OK) return err;
-    return xTaskCreate(boot_monitor_task, "boot_btn", 3072, NULL, 3, NULL) == pdPASS ? ESP_OK
+    return xTaskCreate(boot_monitor_task, "boot_btn", 4096, NULL, 3, NULL) == pdPASS ? ESP_OK
                                                                                       : ESP_ERR_NO_MEM;
 }

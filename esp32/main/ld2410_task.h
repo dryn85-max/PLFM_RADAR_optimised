@@ -75,8 +75,9 @@ typedef struct {
     ld_settings_t after;
 } ld_req_t;
 
-/* Run a request in the LD2410C task and wait up to timeout_ms (callers are serialised;
- * the wait for another caller counts against the same timeout). Returns ESP_OK when the
+/* Run a request in the LD2410C task and wait up to timeout_ms in total (callers are
+ * serialised; the wait for another caller and the wait for completion share one
+ * deadline, and nothing is submitted when the deadline passed while waiting). Returns ESP_OK when the
  * task completed it (look at req->result), ESP_ERR_TIMEOUT, ESP_ERR_INVALID_STATE (not
  * started, or an earlier timed-out request is still running), ESP_ERR_INVALID_ARG,
  * ESP_ERR_NO_MEM. On any non-OK return *req is left untouched. A timed-out request may
