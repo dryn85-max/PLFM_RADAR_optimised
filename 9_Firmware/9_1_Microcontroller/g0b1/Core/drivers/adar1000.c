@@ -2,7 +2,7 @@
  * ADAR1000_Manager.cpp; see adar1000.h for the contract.
  *
  * Datasheet citations: "DS" = ADAR1000 Rev. B, "ADTR" = ADTR1107 Rev. C
- * (7_Components Datasheets and Application notes/).
+ * (hardware/datasheets/).
  */
 #include <errno.h>
 #include "adar1000.h"
@@ -17,7 +17,7 @@
 // Source: Analog Devices ADAR1000 datasheet Rev. B, Tables 13-16, page 34
 //   [port note: in the Rev. B PDF in this repo the phase tables are Tables 10-13,
 //    pp. 35-37; the values below were re-spot-checked against them]
-//   (7_Components Datasheets and Application notes/ADAR1000.pdf)
+//   (hardware/datasheets/ADAR1000.pdf)
 // Cross-checked against the ADI Linux mainline driver (GPL-2.0, NOT vendored):
 //   https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/
 //     drivers/iio/beamformer/adar1000.c  (adar1000_phase_values[])

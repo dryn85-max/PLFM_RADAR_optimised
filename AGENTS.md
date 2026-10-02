@@ -64,7 +64,7 @@ GPT-5.5 is not used.
 - **Never ask for or accept secrets in chat** (API keys, tokens, licence
   keys).
 - Anything outward-facing or hard to reverse — merging to `main`, releases,
-  force-pushes, deleting hardware design files (`4_Schematics and Boards
+  force-pushes, deleting hardware design files (`legacy/4_Schematics and Boards
   Layout/`, datasheets) — needs the owner's explicit go-ahead.
 
 ## Git workflow
@@ -123,6 +123,7 @@ GPT-5.5 is not used.
   minimally, and report every deviation.
 - Delete any `uv.lock` that `uv run` creates; it is not part of this repo.
 - Hardware facts (register bits, pin functions, polarities) are checked
-  against the datasheets in `7_Components Datasheets and Application notes/`
+  against the datasheets in `hardware/datasheets/` (datasheets of parts we
+  do not use are in `legacy/7_Components Datasheets and Application notes/`)
   and cited by table/page in code comments; anything not verifiable there is
   marked VERIFY and listed in `BACKLOG.md`.

@@ -12,7 +12,7 @@
  *   or ch > 3, no SPI traffic in that case; -EIO/-ETIMEDOUT from the bus).
  *
  * Datasheet references are to ADAR1000 Rev. B and ADTR1107 Rev. C in
- * "7_Components Datasheets and Application notes/".
+ * "hardware/datasheets/".
  */
 #ifndef ADAR1000_H
 #define ADAR1000_H

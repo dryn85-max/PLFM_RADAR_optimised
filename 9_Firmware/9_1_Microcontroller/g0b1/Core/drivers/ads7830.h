@@ -1,6 +1,6 @@
 /* ADS7830 8-bit 8-channel I2C ADC, single-ended reads (port of upstream
  * ADS7830.c; HAL-free, timeouts come from hal_i2c, errors are negative errno).
- * Datasheet: TI SBAS302C, "7_Components Datasheets and Application notes/ads7830.pdf". */
+ * Datasheet: TI SBAS302C, "hardware/datasheets/ads7830.pdf". */
 #ifndef ADS7830_H
 #define ADS7830_H
 #include <stdint.h>
