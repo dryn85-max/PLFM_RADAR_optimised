@@ -8,14 +8,22 @@ the HLK-LD2410C, a ready 24 GHz FMCW presence radar, over UART and offers:
   9 + 9 gate energies in engineering mode);
 - a **recording server** (TCP 5410) from which a PC tool stores the raw
   LD2410C frames, with sequence numbers and timestamps, and survives Wi-Fi
-  drops.
+  drops;
+- optional **GPS** (GY-NEO6MV2, u-blox NEO-6M) and **IMU** (GY-BMI160, 6-axis,
+  no magnetometer): UTC time and position, and absolute radar tilt (pitch and
+  roll), shown on the live page and stored in the same recording as separate
+  typed records (recording protocol v3). A missing GPS or IMU never affects the
+  LD2410C path.
 
 Specification and plan: [spec](../docs/superpowers/specs/2026-10-02-esp32-ld2410-mvp.md),
-[plan](../docs/superpowers/plans/2026-10-02-esp32-ld2410-mvp.md). System context:
+[plan](../docs/superpowers/plans/2026-10-02-esp32-ld2410-mvp.md); GPS and IMU:
+[spec](../docs/superpowers/specs/2026-10-02-esp32-gps-imu.md),
+[plan](../docs/superpowers/plans/2026-10-02-esp32-gps-imu.md). System context:
 [docs/architecture.md](../docs/architecture.md).
 
-> **Status: host tests and a CI build only. Nothing here has been run on the
-> hardware yet.** Everything not verifiable from the repository is marked
+> **Status: host tests and a CI build only. The only hardware-confirmed item is
+> the LD2410C engineering frame layout (two real captures, 2026-10-02); the GPS
+> and IMU parts have never been run on the boards.** Everything not verifiable from the repository is marked
 > **VERIFY**; the list is at the end.
 
 ## Hardware
@@ -24,6 +32,8 @@ Specification and plan: [spec](../docs/superpowers/specs/2026-10-02-esp32-ld2410
 |---|---|
 | ESP32-S3-DevKitC-1 v1.1, module N32R8V | 32 MB octal flash, 8 MB octal PSRAM (VERIFY on the real board) |
 | HLK-LD2410C | 24 GHz FMCW presence radar, UART 256000 8N1 |
+| GY-NEO6MV2 | u-blox NEO-6M GPS module, UART 9600 8N1, 3.3 V logic (optional) |
+| GY-BMI160 | Bosch BMI160 6-axis IMU (accelerometer + gyroscope), I2C (optional) |
 | USB cable | to the native **USB** connector (USB-Serial-JTAG) |
 
 ### Wiring
@@ -44,6 +54,40 @@ GND between the module and the DevKit.
 **Use the native "USB" connector** (USB-Serial-JTAG, GPIO19/20) for flashing and
 the console, not the "UART" one: the UART connector of the owner's board was
 re-soldered and is not relied on.
+
+### GPS and IMU wiring
+
+GY-NEO6MV2 (UART2):
+
+| GPS module pin | ESP32-S3 DevKit | Note |
+|---|---|---|
+| VCC | 3V3 | 3.3 V supply (see the power note) |
+| GND | G | common ground |
+| TX | GPIO5 | UART2 RX of the ESP32 |
+| RX | GPIO4 | UART2 TX of the ESP32 (the firmware sends nothing) |
+
+GY-BMI160 (I2C, 400 kHz):
+
+| IMU board pin | ESP32-S3 DevKit | Note |
+|---|---|---|
+| 3V3 / VIN | 3V3 | 3.3 V supply |
+| GND | G | common ground |
+| SCL | GPIO9 | I2C clock |
+| SDA | GPIO8 | I2C data |
+| CS | 3V3 | selects I2C mode (CS low would select SPI) |
+| SA0 (SDO) | GND | I2C address 0x68; the firmware also probes 0x69 |
+
+GPIO4, 5, 8 and 9 were chosen as free pins: not the LD2410C pins (17, 18), not
+native USB (19, 20), not BOOT (0). That they are not strapping or PSRAM pins on
+the DevKitC-1 v1.1 is **VERIFY** against the ESP32-S3 datasheet and the board
+pinout.
+
+**POWER NOTE.** Both modules run from the DevKit **3V3** pin; their logic is 3.3 V.
+Only the LD2410C is on 5 V (see the warning above). Never connect two 5 V
+sources together, and do not feed 5 V into a 3.3 V module. The internal
+pull-ups of GPIO8/9 (about 45 kOhm) are enabled as a fallback; the GY-BMI160
+normally has its own pull-ups. Whether 400 kHz works with them is **VERIFY**
+(fall back to 100 kHz via `IMU_I2C_HZ` in `main/imu_task.c` if not).
 
 ## Build, flash, monitor
 
@@ -131,12 +175,150 @@ clients). The page shows:
   engineering mode was acknowledged, otherwise "engineering mode
   unavailable". If the enable sequence gets no ACK at boot, it is retried every
   5 s (at most 5 retries) while no engineering frame has been seen; data
-  reception continues meanwhile.
+  reception continues meanwhile;
+- a **GPS card**: badge (`fix`, `no fix`, `no data` = module silent for more than
+  3 s, `not connected` = no byte ever received), fix state with the GGA fix
+  quality, satellites and HDOP, latitude, longitude (7 decimals), altitude,
+  speed (km/h), course, UTC (only when time and date are valid) and the **time
+  source** currently shown (`GPS`, `SNTP` or `none`);
+- a **Tilt card**: badge (`ok`, `no data`, `error`, `not connected`), pitch
+  (nose up +) and roll (right side down +) in degrees with two decimals, and a
+  level indicator (artificial horizon; the ring turns to the "level" colour when
+  both angles are within 1 degree). The IMU counts as `error` when its last
+  record is older than 1 s.
+
+Values that are not valid show `-`; the snapshot JSON carries `null` for them
+(top-level keys `gps`, `imu`, `time_source`). The page needs no new connection:
+the same 10 Hz WebSocket snapshot carries everything.
 
 The console logs `ws client added fd=.. slot=..` / `ws client removed fd=..`
 for each WebSocket client, a warning for each failed send, and every 10 s
 `live: clients=N sent=N skipped_inflight=N queue_fail=N` (counts for those
 10 s; one client normally shows `sent=100`).
+
+Other 10 s status lines (all also appear without the sensor, so a wiring
+problem is visible in the console):
+
+- `gps`: `no data from the module (not connected?)`; or `ok|silent, no epoch
+  yet, lines good N bad N dropped N`; or `ok|silent, fix Q, sats N, hdop H.HH,
+  lines good N bad N dropped N` (`fix Q` is the GGA fix quality, 0 = no fix;
+  `bad` counts checksum and malformed-line errors, `dropped` overlong or
+  abandoned lines).
+- `imu`: `no BMI160 on I2C (SDA 8, SCL 9, 0x68/0x69; not connected?), i2c errors
+  N`; or `ok|error, pitch X.X deg, roll Y.Y deg, i2c errors N, reinits N`
+  (or `no attitude yet`). One-off lines: `BMI160 at 0x68 configured (+-4 g,
+  +-500 deg/s, 100 Hz)`, `... consecutive I2C failures ..., re-initialising`,
+  `0x.. answers, but CHIP_ID is ... not a BMI160`, `ERR_REG 0x.. after
+  configuration`.
+- `sntp`: one line `SNTP sync: YYYY-MM-DDTHH:MM:SSZ` per synchronisation
+  (STA connected with internet access only).
+
+## GPS (GY-NEO6MV2)
+
+UART2, 9600 8N1, module TX -> GPIO5, module RX -> GPIO4 (wiring above). The
+module is used in its **factory configuration**: the firmware sends nothing (no
+UBX configuration) and reads the default NMEA output. The `gps` task (core 1,
+priority 4, below the LD2410C task) feeds `components/core/nmea.[ch]`, which
+decodes **RMC** and **GGA** sentences of talker IDs `GP` and `GN` (a checksum is
+required; other sentences are ignored).
+
+- **One `gps_fix` record per NMEA epoch** (RMC and GGA with the same UTC time
+  field; about 1 Hz), written **also without a fix**, with the validity flags
+  clear, so the recording shows the fix state over time.
+- **Validity rules (conservative).** Position, time and date are flagged valid
+  only when the RMC status is `A` (and the NMEA 2.3 mode field, when present, is
+  not `N`); GGA position and altitude need fix quality > 0. An empty field is
+  "not valid" (flag clear, value 0). `utc_unix_ms` is non-zero only when time
+  and date are both valid. Leap second 60 is rejected.
+- **No fix.** The `gps_fix` records keep coming with flags 0 (and no `time_sync`
+  record). **Time from an RMC sentence with status `V` is never used**: a
+  receiver without a fix can report a free-running RTC time or the GPS epoch date
+  (possible with this module; **VERIFY**), which must not become a
+  UTC time stamp. The live page shows `no fix` (module talking) or `no data`
+  (nothing valid for more than 3 s) or `not connected` (no byte ever received).
+- **Cold start.** The first fix after power-up typically takes about half a
+  minute to a few minutes with a clear sky (u-blox quotes about 27 s cold start
+  for the NEO-6M; from memory, not in the repository, **VERIFY**). Without sky
+  view it never comes. **Place the antenna near a window** (or outdoors, flat,
+  with the ceramic patch facing up); a fix at a desk deep inside a building is
+  not to be expected.
+- A one-line GPS status is logged every 10 s (see "Live page").
+
+## Time sources and accuracy
+
+Every recorded ESP32 time stamp is `esp_timer` microseconds since boot. UTC
+comes from `time_sync` records `{utc_unix_us, source}` whose record `esp_time_us`
+is the matching ESP32 time. There are two sources:
+
+| Source | Code | When a record is written | Accuracy |
+|---|---|---|---|
+| GPS | 1 | on every RMC with status `A` and valid time and date (about 1 Hz); stamped when the parser completes the RMC line | no PPS on the board: about **+-50 to 300 ms** expected (**VERIFY** on the bench): the UTC value belongs to the second boundary but the sentence arrives later (a 70-character RMC takes about 70 ms at 9600 Bd, plus the receiver's output delay) |
+| SNTP | 2 | on each synchronisation with `pool.ntp.org` (ESP-IDF `esp_netif_sntp`), started once the STA link has an IP address; needs the home Wi-Fi with internet access | typically tens of ms over the internet (**VERIFY**); the time is the ESP32 system clock right after the SNTP callback |
+
+**Priority.** The live page shows GPS while the latest GPS `time_sync` is less
+than 5 s old, otherwise SNTP once at least one SNTP sync happened, otherwise
+`none`. This only decides what is *shown*: **both sources are recorded**. The PC
+tool converts a record's `esp_time_us` to UTC with the nearest preceding
+`time_sync` record of the same boot (if none precedes it, the first following
+one; none at all: empty), whatever its source, and writes that source into the
+`time_source` column. A reboot starts a new time base.
+
+## IMU (GY-BMI160) and tilt
+
+The `imu` task (core 1, priority 3, below the LD2410C and GPS tasks) reads the
+BMI160 over I2C (400 kHz, address 0x68, 0x69 also probed) every 10 ms, **about
+100 Hz** (sensor ODR 100 Hz, accelerometer +-4 g, gyroscope +-500 deg/s). Every
+10 samples (**10 Hz**, a single constant) it writes one `imu` record: the mean
+raw acceleration (mg) and angular rate (0.1 deg/s) per axis, the current
+pitch and roll (0.01 deg), the number of averaged samples and a status byte
+(bit0 = data valid). Tilt is **absolute**, relative to the horizon (complementary
+filter on the gravity direction, gyro weight 0.98; no magnetometer, so no
+azimuth). There is no "zero tilt" button. A missing sensor is retried every 1 s;
+5 failed reads in a row trigger a re-initialisation; errors and re-inits are
+counted and logged.
+
+**Axis and sign conventions** (exactly as in `components/core/tilt.h`). Body
+frame = the radar frame: **+X = radar boresight (forward), +Y = left, +Z = up**,
+right-handed. Level and at rest the accelerometer reads (0, 0, +1000 mg).
+
+- `pitch` positive = **nose up** (boresight above the horizon), range -90..+90 deg.
+- `roll` positive = **right side down** (left side up), range (-180, +180] deg.
+- Static: `pitch = atan2(ax, hypot(ay, az))`, `roll = atan2(ay, az)`. At pitch
+  +-90 deg roll is undefined; the previous roll is kept there.
+- An accelerometer sample with a magnitude outside 0.5 g to 1.5 g (free fall,
+  shock) is not used for correction; the gyro still propagates.
+
+**Default mounting:** the GY-BMI160 board lies **flat, components up**, with the
+sensor's **X axis along the radar boresight**. The BMI160 axes are right-handed,
+so its Y axis then points left and Z up, and the mapping is the identity. For
+another mounting edit the six constants in `components/core/tilt.h`
+(`body[i] = TILT_MAP_SIGN_i * sensor[TILT_MAP_SRC_i]`, source index 0 = X, 1 = Y,
+2 = Z; defaults `SRC` 0, 1, 2 and `SIGN` +1, +1, +1), then rebuild; keep the
+mapping right-handed (an odd number of sign flips or swaps mirrors the frame and
+gives wrong angles). Whether the sensor really sits this way on the owner's
+board is **VERIFY** (silkscreen axis arrows).
+
+### BMI160 registers used (all VERIFY)
+
+The BMI160 datasheet (Bosch BST-BMI160-DS000) is **not** in
+`hardware/datasheets/`; every value below is from `main/imu_task.c`, written
+from memory of that datasheet, and is **unverified** (BACKLOG). Check each against
+the datasheet before trusting the sensor data.
+
+| Item | Value |
+|---|---|
+| I2C address | 0x68 (SA0/SDO low), 0x69 (high) |
+| 0x00 CHIP_ID | 0xD1 expected; any other value = "not a BMI160", device rejected |
+| 0x02 ERR_REG | read once after configuration (read-clear), leftovers logged |
+| 0x03 PMU_STATUS | mask 0x3C, 0x14 = accelerometer and gyroscope in normal mode; polled up to 20 x 10 ms |
+| 0x0C..0x17 DATA | 12-byte burst: gyro X/Y/Z (0x0C..0x11) then accelerometer X/Y/Z (0x12..0x17), little-endian int16 |
+| 0x40 ACC_CONF | 0x28 (ODR 100 Hz, normal filter) |
+| 0x41 ACC_RANGE | 0x05 (+-4 g) |
+| 0x42 GYR_CONF | 0x28 (ODR 100 Hz, normal filter) |
+| 0x43 GYR_RANGE | 0x02 (+-500 deg/s) |
+| 0x7E CMD | 0xB6 soft reset, 0x11 accelerometer normal mode, 0x15 gyroscope normal mode |
+| Delays | 100 ms after reset, 10 ms after acc normal, 85 ms after gyro normal, 5 ms after each configuration write (each is read back and compared) |
+| Sensitivity | accelerometer 8192 LSB/g at +-4 g; gyroscope 65.6 LSB/(deg/s) at +-500 deg/s |
 
 ## Recorder (PC side)
 
@@ -145,6 +327,7 @@ for each WebSocket client, a warning for each failed send, and every 10 s
 ```
 uv run python host/ld2410_rec.py record aeris-mvp.local -o run.ldrec   # --port 5410 is the default
 uv run python host/ld2410_rec.py export-csv run.ldrec -o run.csv       # without -o: CSV to stdout
+uv run python host/ld2410_rec.py export-csv run.ldrec -o run.csv --gps gps.csv --imu imu.csv
 uv run python host/ld2410_rec.py info run.ldrec
 ```
 
@@ -284,16 +467,6 @@ helpers, WebSocket slot table), built with `-Wall -Wextra -Werror` and
 AddressSanitizer/UBSan. The Python side:
 `uv run pytest host/test_ld2410_rec.py -v`.
 
-## GPS (GY-NEO6MV2)
-
-UART2, 9600 8N1, module TX -> GPIO5, module RX -> GPIO4 (VERIFY on the board;
-full wiring table and no-fix behaviour follow in the docs task). The
-`gps` task (core 1, priority 4, below the LD2410C task) parses RMC/GGA
-(`components/core/nmea.[ch]`), writes one `gps_fix` record per epoch and a
-`time_sync` record (source GPS) on every RMC with status A and valid time and
-date. Without a fix the records still appear, with the validity flags clear.
-A one-line GPS status is logged every 10 s.
-
 ## CI
 
 Job `esp32-mvp` in `.github/workflows/ci-tests.yml`: `make -C esp32/tests test`,
@@ -322,5 +495,23 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 - A 64-character hexadecimal Wi-Fi password (WPA2 treats it as a raw PSK; the
   63-character ASCII case is the normal one).
 - Task stack sizes (LD2410C task 4096 B, recording tasks 4096 B, HTTP server
-  6144 B, main task 6144 B, BOOT monitor 3072 B) under real load.
+  6144 B, main task 6144 B, BOOT monitor 3072 B, GPS task 4096 B, IMU task
+  5120 B) under real load.
 - The AP password stays stable across reboots and a credential reset.
+- GPS wiring and pins (GPIO4/5 UART2, GPIO8/9 I2C) on the real boards, and that
+  these GPIOs are free of strapping/PSRAM functions on the DevKitC-1 v1.1.
+- GY-NEO6MV2: 9600 Bd factory output (RMC and GGA present, `GN` or `GP`
+  talker), no-fix behaviour (time and date reported with status `V`), cold
+  start time at the owner's window, NEO-6M datasheet not in
+  `hardware/datasheets/`.
+- GPS time accuracy without PPS (expected +-50 to 300 ms) against SNTP.
+- SNTP: sync cadence (the ESP-IDF default interval is assumed, not checked),
+  that a record is written on every sync, and accuracy on the home network.
+- GY-BMI160: every register value, delay and sensitivity in "BMI160 registers
+  used" (datasheet not in `hardware/datasheets/`); board pull-ups at 400 kHz;
+  address 0x68 with SA0 to GND; I2C mode with CS to 3V3.
+- Axis mapping and sign conventions (pitch nose up +, roll right side down +)
+  on the real mounting; `TILT_MAP_*` defaults; filter weight 0.98 and a
+  possible gyro offset drift (no bias calibration).
+- Snapshot JSON size and live-page behaviour with GPS and IMU at 10 Hz on the
+  real hardware.
