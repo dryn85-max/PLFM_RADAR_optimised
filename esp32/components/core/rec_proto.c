@@ -54,7 +54,7 @@ int rec_batch_begin(rec_batch_t *b, uint8_t *buf, size_t cap,
     return 0;
 }
 
-int rec_batch_add(rec_batch_t *b, uint32_t seq, uint64_t esp_time_us,
+int rec_batch_add(rec_batch_t *b, uint32_t seq, uint64_t esp_time_us, uint8_t type,
                   const uint8_t *raw, size_t len)
 {
     if (!b || !b->buf || (len > 0 && !raw) || len > 0xFFFF)
@@ -64,7 +64,8 @@ int rec_batch_add(rec_batch_t *b, uint32_t seq, uint64_t esp_time_us,
     uint8_t *p = b->buf + b->len;
     put32(p, seq);
     put64(p + 4, esp_time_us);
-    put16(p + 12, (uint32_t)len);
+    p[12] = type;
+    put16(p + 13, (uint32_t)len);
     if (len)
         memcpy(p + REC_RECORD_HDR_LEN, raw, len);
     b->len += REC_RECORD_HDR_LEN + len;
@@ -107,13 +108,14 @@ static int fill_batch(const rb_t *rb, rb_cursor_t *cur, int gap, uint32_t boot_i
     for (;;) {
         uint32_t seq;
         uint64_t t;
+        uint8_t type;
         size_t len;
-        rc = rb_cursor_peek(rb, cur, &seq, &t, raw, sizeof raw, &len);
+        rc = rb_cursor_peek(rb, cur, &seq, &t, &type, raw, sizeof raw, &len);
         if (rc == -ENOENT)
             break;
         if (rc)
             return rc;
-        rc = rec_batch_add(&b, seq, t, raw, len);
+        rc = rec_batch_add(&b, seq, t, type, raw, len);
         if (rc == -ENOSPC) {
             if (b.count == 0)
                 return -EMSGSIZE;
@@ -159,8 +161,9 @@ int rec_stream_batch(const rb_t *rb, rec_stream_t *st, uint32_t from_seq,
         /* cap 0 probe: only the position check matters (-EMSGSIZE = a record is there). */
         uint32_t seq;
         uint64_t t;
+        uint8_t type;
         size_t len;
-        rc = rb_cursor_peek(rb, &st->cur, &seq, &t, NULL, 0, &len);
+        rc = rb_cursor_peek(rb, &st->cur, &seq, &t, &type, NULL, 0, &len);
         if (rc == -ESTALE) {
             /* evicted under the cursor: restart at the oldest record, with GAP */
             rc = rb_cursor_open(rb, st->cur.seq, &st->cur, &gap);

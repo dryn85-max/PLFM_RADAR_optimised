@@ -1,0 +1,8 @@
+{
+  "record_type": 3,
+  "payload_hex": "001c7fc2da5c060001",
+  "time_sync": {
+    "utc_unix_us": 1790944496000000,
+    "source": 1
+  }
+}

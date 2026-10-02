@@ -13,6 +13,7 @@
 
 #include "ld2410_cmd.h"
 #include "ld2410_parser.h"
+#include "rec_payload.h"
 #include "rec_proto.h"
 
 #define LD_UART UART_NUM_1
@@ -61,7 +62,7 @@ static void on_data(const ld_frame_t *f, ld_ctx_t *ctx)
     int rc;
 
     xSemaphoreTake(s_ring_mtx, portMAX_DELAY);
-    rc = rb_push(&s_ring, now, f->raw, f->raw_len, &seq);
+    rc = rb_push(&s_ring, now, REC_TYPE_LD2410_FRAME, f->raw, f->raw_len, &seq);
     xSemaphoreGive(s_ring_mtx);
     if (rc != 0) {
         ESP_LOGW(TAG, "ring push failed (%d)", rc);

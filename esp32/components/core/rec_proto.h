@@ -1,11 +1,17 @@
-/* Recording protocol codec (plain C11), all integers little-endian.
- *   request (client -> device, 12 B): "LDRQ", version u8 = 2, reserved u8[3] = 0, from_seq u32
- *   batch header (device -> client, 20 B): "LDRB", version u8 = 2, flags u8
+/* Recording protocol codec, version 3 (plain C11), all integers little-endian.
+ *   request (client -> device, 12 B): "LDRQ", version u8 = 3, reserved u8[3] = 0, from_seq u32
+ *   batch header (device -> client, 20 B): "LDRB", version u8 = 3, flags u8
  *     (bit0 GAP), reserved u16 = 0, first_seq u32, count u16, reserved u16 = 0,
  *     boot_id u32 (random per ESP32 boot, never 0: the sequence restarts at 0
  *     after a reboot, the client uses boot_id to tell)
- *   then count records: seq u32, esp_time_us u64, len u16, raw[len]
- * count = 0 is a keep-alive. Not thread-safe (see rec_batch_from_ring). */
+ *   then count records: seq u32, esp_time_us u64, type u8, len u16, payload[len]
+ * One shared seq counts records of every type. count = 0 is a keep-alive.
+ * Record types and payload layouts: rec_payload.h. The transport (ring,
+ * batch builder, stream) is type-agnostic: it stores and forwards any type
+ * byte unchanged, so a newer producer does not break an older relay. A
+ * receiver (host recorder) must keep or skip types it does not know, never
+ * fail on them; rec_record_check() classifies a (type, len) pair.
+ * Not thread-safe (see rec_batch_from_ring). */
 #ifndef REC_PROTO_H
 #define REC_PROTO_H
 
@@ -13,7 +19,7 @@
 #include <stdint.h>
 #include "ringbuf.h"
 
-#define REC_VERSION 2u
+#define REC_VERSION 3u
 #define REC_REQ_LEN 12u
 #define REC_BATCH_HDR_LEN 20u
 #define REC_RECORD_HDR_LEN RB_REC_HDR
@@ -21,7 +27,7 @@
 
 int rec_req_encode(uint8_t out[REC_REQ_LEN], uint32_t from_seq);
 /* Exactly 12 bytes. 0, or -EINVAL (null), -EBADMSG (length, magic, reserved
- * bytes), -ENOTSUP (version). */
+ * bytes), -ENOTSUP (any version other than 3: the server closes). */
 int rec_req_parse(const uint8_t *buf, size_t len, uint32_t *from_seq);
 
 typedef struct {
@@ -37,7 +43,7 @@ int rec_batch_begin(rec_batch_t *b, uint8_t *buf, size_t cap,
                     uint32_t first_seq, uint8_t flags, uint32_t boot_id);
 /* Append a record. -ENOSPC if it does not fit (batch unchanged) or count
  * would exceed 65535; -EINVAL for bad args or len > 65535. */
-int rec_batch_add(rec_batch_t *b, uint32_t seq, uint64_t esp_time_us,
+int rec_batch_add(rec_batch_t *b, uint32_t seq, uint64_t esp_time_us, uint8_t type,
                   const uint8_t *raw, size_t len);
 /* Patch the count; returns the total encoded length. */
 size_t rec_batch_finish(rec_batch_t *b);

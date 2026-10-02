@@ -159,49 +159,78 @@ uv run python host/ld2410_rec.py info run.ldrec
   `esp_time_us` for the spacing of frames inside a batch). Frames evicted from
   the ring before the first request of a recording are not reported as a gap
   (there is no baseline sequence to compare with).
-- `export-csv` decodes the raw frames. Columns: `seq, esp_time_us, pc_time_ns,
-  data_type, target_state, moving_dist_cm, moving_energy, still_dist_cm,
-  still_energy, detect_dist_cm, max_moving_gate, max_still_gate, move_g0..8,
-  still_g0..8, record, gap_to_seq, error, old_boot_id, new_boot_id`. `record` is
-  `frame`, `gap` or `reboot`.
-- `info` prints the frame count, sequence range, PC and ESP durations, reboots
-  and gaps.
+- `export-csv [--gps FILE] [--imu FILE]` decodes the raw frames. Columns: `seq,
+  esp_time_us, pc_time_ns, data_type, target_state, moving_dist_cm, moving_energy,
+  still_dist_cm, still_energy, detect_dist_cm, max_moving_gate, max_still_gate,
+  move_g0..8, still_g0..8, record, gap_to_seq, error, old_boot_id, new_boot_id,
+  frame_utc, time_source, gps_utc, gps_lat, gps_lon, gps_alt_m, gps_sats, gps_hdop,
+  gps_fix_quality, gps_flags, pitch_deg, roll_deg`. `record` is `frame`, `gap` or
+  `reboot`. `frame_utc` (ISO 8601, microseconds) is the frame's `esp_time_us`
+  converted with the nearest preceding `time_sync` record of the same boot (if none
+  precedes it, the following one; none at all: empty); `time_source` is `gps` or
+  `sntp`. `gps_*` is the latest fix recorded before the frame, `pitch_deg` /
+  `roll_deg` the latest IMU sample (empty while the IMU status is invalid); both are
+  forgotten at a reboot. `gps_lat`/`gps_lon` are empty without a position,
+  `gps_alt_m` without an altitude, `gps_utc` without valid time and date. GPS fixes,
+  IMU samples and time syncs have no rows in the main CSV; `--gps` / `--imu` write
+  them to their own CSV files (`GPS_CSV_COLUMNS` / `IMU_CSV_COLUMNS` in
+  `host/ld2410_rec.py`; a damaged payload gives a row with `error` set).
+- `info` prints the frame count, sequence range, PC and ESP durations, reboots,
+  gaps, the number of gps/imu/time_sync records, the GPS fix ratio (fixes with a
+  valid position and fix quality > 0, over all gps records) and the time-sync
+  sources.
 
 One recording client at a time: a new connection replaces the old one. The
 ring buffer holds 4 MiB in PSRAM (if that allocation fails the firmware falls
 back to 32 KiB of internal RAM and logs a warning), so a recording survives a
 Wi-Fi drop as long as the buffer still covers the outage.
 
-## Protocol layouts (version 2, all little-endian)
+## Protocol layouts (version 3, all little-endian)
 
-Source of truth: `esp32/components/core/rec_proto.[ch]` and `host/ld2410_rec.py`;
-both are tested against the shared vectors in `esp32/tests/vectors/`
-(mostly synthetic; two engineering frames are real captures, confirmed on
-hardware 2026-10-02).
+Source of truth: `esp32/components/core/rec_proto.[ch]`, `rec_payload.[ch]` and
+`host/ld2410_rec.py`; all are tested against the shared vectors in
+`esp32/tests/vectors/` (mostly synthetic; two engineering frames are real
+captures, confirmed on hardware 2026-10-02).
 
-**Request** (PC to ESP32, 12 B): `"LDRQ"`, `version u8 = 2`, `reserved u8[3] = 0`,
+**Request** (PC to ESP32, 12 B): `"LDRQ"`, `version u8 = 3`, `reserved u8[3] = 0`,
 `from_seq u32`. The server closes the connection on a bad length, magic,
-reserved bytes or version, and after 5 s without a complete request.
+reserved bytes or any other version (a v2 recorder is refused, a v3 recorder
+refuses a v2 device), and after 5 s without a complete request.
 
 **Batch** (ESP32 to PC): header 20 B, then `count` records.
 
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 4 | `"LDRB"` |
-| 4 | 1 | `version = 2` |
-| 5 | 1 | `flags`: bit0 `GAP` (requested start older than the oldest stored frame; the batch starts at the oldest) |
+| 4 | 1 | `version = 3` |
+| 5 | 1 | `flags`: bit0 `GAP` (requested start older than the oldest stored record; the batch starts at the oldest) |
 | 6 | 2 | reserved = 0 |
 | 8 | 4 | `first_seq` |
 | 12 | 2 | `count` |
 | 14 | 2 | reserved = 0 |
 | 16 | 4 | `boot_id` (random per ESP32 boot, never 0; the sequence restarts at 0 after every reboot) |
 
-Record: `seq u32, esp_time_us u64, len u16, raw[len]` (14 B header). A batch
-with `count = 0` is a keep-alive and is sent about once per second while idle.
-The client resumes from `first_seq + count` of the last batch of the current
-boot. Sequence numbers wrap at 2^32.
+Record: `seq u32, esp_time_us u64, type u8, len u16, payload[len]` (15 B header).
+All record types share one sequence. A batch with `count = 0` is a keep-alive and
+is sent about once per second while idle. The client resumes from `first_seq +
+count` of the last batch of the current boot. Sequence numbers wrap at 2^32.
 
-**File `.ldrec` (version 2)**: header 20 B = `"LDREC1\0\0"` (8), `version u16 = 2`,
+| Type | Payload |
+|---|---|
+| 0 `ld2410_frame` | the raw LD2410C frame byte for byte, header to footer |
+| 1 `gps_fix` (32 B) | `utc_unix_ms i64` (0 if time/date invalid), `lat_e7 i32`, `lon_e7 i32`, `alt_cm i32`, `speed_cmps u16` (saturating), `course_cdeg u16`, `hdop_x100 u16`, `sats u8`, `fix_quality u8` (GGA value), `flags u8` (bit0 time valid, bit1 date valid, bit2 position valid, bit3 altitude valid), `reserved u8[3] = 0` |
+| 2 `imu` (18 B) | `acc_mg i16[3]`, `gyr_ddps i16[3]` (0.1 deg/s), `pitch_cdeg i16`, `roll_cdeg i16`, `n_samples u8`, `status u8` (bit0 data valid) |
+| 3 `time_sync` (9 B) | `utc_unix_us i64`, `source u8` (1 GPS, 2 SNTP); the record's `esp_time_us` is the matching ESP32 time |
+
+Unknown record types: the ESP32 ring, batch builder and server are type-agnostic and
+forward any type byte unchanged (`rec_record_check()` classifies a type and length:
+known and valid, wrong length, or unknown). The PC recorder never fails on an
+unknown type: it stores the record as file type 6 (below) and `info` counts it. A
+known type with a wrong payload length is stored as is and shows up as a decode error
+(`error` column) instead of stopping the recording. Decoders reject nonzero reserved
+bytes of `gps_fix`; undefined flag, status and source values pass through.
+
+**File `.ldrec` (version 3)**: header 20 B = `"LDREC1\0\0"` (8), `version u16 = 3`,
 `reserved u16 = 0`, `created_unix_ns u64`; then records, each starting with a
 `type u8`:
 
@@ -210,8 +239,12 @@ boot. Sequence numbers wrap at 2^32.
 | 0 frame | `seq u32, esp_time_us u64, pc_time_ns u64, len u16, raw[len]` |
 | 1 gap | `from_seq u32, to_seq u32, pc_time_ns u64` (missing range `[from_seq, to_seq)`) |
 | 2 reboot | `old_boot_id u32, new_boot_id u32, pc_time_ns u64` |
+| 3 gps_fix, 4 imu, 5 time_sync | `seq u32, esp_time_us u64, pc_time_ns u64, len u16, payload[len]` (payload as in the table above) |
+| 6 unknown | `seq u32, esp_time_us u64, pc_time_ns u64, wire_type u8, len u16, payload[len]` (a wire type this recorder does not know) |
 
-`raw` is the LD2410C frame byte for byte, header to footer.
+Gap and reboot records and the sequence bookkeeping work over all record types
+together. The recorder still reads version 2 files (types 0 to 2, same layouts,
+no sensor columns filled in); it only writes version 3.
 
 ## LD2410C protocol summary
 
