@@ -210,8 +210,8 @@ problem is visible in the console):
   +-500 deg/s, 100 Hz)`, `... consecutive I2C failures ..., re-initialising`,
   `0x.. answers, but CHIP_ID is ... not a BMI160`, `ERR_REG 0x.. after
   configuration`.
-- `sntp`: one line `SNTP sync: YYYY-MM-DDTHH:MM:SSZ` per synchronisation
-  (STA connected with internet access only).
+- `sntp`: one line `SNTP time YYYY-MM-DDTHH:MM:SSZ` per synchronisation and every
+  60 s (STA connected with internet access only).
 
 ## GPS (GY-NEO6MV2)
 
@@ -258,10 +258,12 @@ is the matching ESP32 time. There are two sources:
 **Priority.** The live page shows GPS while the latest GPS `time_sync` is less
 than 5 s old, otherwise SNTP once at least one SNTP sync happened, otherwise
 `none`. This only decides what is *shown*: **both sources are recorded**. The PC
-tool converts a record's `esp_time_us` to UTC with the nearest preceding
-`time_sync` record of the same boot (if none precedes it, the first following
-one; none at all: empty), whatever its source, and writes that source into the
-`time_source` column. A reboot starts a new time base.
+tool converts a record's `esp_time_us` to UTC with the nearest GPS `time_sync`
+record of the same boot within +-2 s of it (GPS has priority); otherwise with the
+nearest preceding `time_sync` of any source (if none precedes it, the first
+following one; none at all: empty), and writes that source into the
+`time_source` column. Since SNTP syncs hourly by default, the firmware re-emits an
+SNTP `time_sync` every 60 s once SNTP has synced, so a recording always has one. A reboot starts a new time base.
 
 ## IMU (GY-BMI160) and tilt
 
@@ -349,8 +351,9 @@ uv run python host/ld2410_rec.py info run.ldrec
   frame_utc, time_source, gps_utc, gps_lat, gps_lon, gps_alt_m, gps_sats, gps_hdop,
   gps_fix_quality, gps_flags, pitch_deg, roll_deg`. `record` is `frame`, `gap` or
   `reboot`. `frame_utc` (ISO 8601, microseconds) is the frame's `esp_time_us`
-  converted with the nearest preceding `time_sync` record of the same boot (if none
-  precedes it, the following one; none at all: empty); `time_source` is `gps` or
+  converted with the nearest GPS `time_sync` of the same boot within +-2 s, else the
+  nearest preceding `time_sync` of any source (if none precedes it, the following one;
+  none at all: empty); `time_source` is `gps` or
   `sntp`. `gps_*` is the latest fix recorded before the frame, `pitch_deg` /
   `roll_deg` the latest IMU sample (empty while the IMU status is invalid); both are
   forgotten at a reboot. `gps_lat`/`gps_lon` are empty without a position,

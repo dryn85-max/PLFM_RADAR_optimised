@@ -150,10 +150,10 @@ static void test_no_fix_and_partial_flags(void)
     s.gps.flags = GPS_FLAG_TIME_VALID;
     TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
     TT_ASSERT(strstr(out, "\"utc\":null,\"time_valid\":false,"));
-    /* position valid but fix_quality 0: not a fix */
+    /* position valid (RMC A only, no GGA yet, quality 0): shown position means fix */
     s.gps.flags = GPS_FLAG_POS_VALID;
     TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
-    TT_ASSERT(strstr(out, "\"fix\":false,"));
+    TT_ASSERT(strstr(out, "\"fix\":true,\"fix_quality\":0,"));
     TT_ASSERT(strstr(out, "\"lat\":47.8500000,"));
     /* out-of-range utc is not formatted */
     s.gps.flags = GPS_FLAG_TIME_VALID | GPS_FLAG_DATE_VALID;

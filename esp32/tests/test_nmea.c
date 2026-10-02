@@ -239,6 +239,21 @@ static void test_time_without_date_or_bad_date(void)
     TT_ASSERT(!(rmc_ev(&c, 3)->fix.flags & GPS_FLAG_TIME_VALID));
 }
 
+static void test_pre_2025_date_rejected(void)
+{
+    nmea_t p;
+    col_t c = {0};
+    nmea_init(&p);
+    /* week-rollover clone: status A but date 2005 */
+    feed_body(&p, &c, "GPRMC,123519.00,A,4807.0380,N,01131.0000,E,1.0,2.0,230305,,,A");
+    TT_ASSERT(!(rmc_ev(&c, 0)->fix.flags & (GPS_FLAG_DATE_VALID | GPS_FLAG_TIME_VALID)));
+    TT_ASSERT_EQ(0, rmc_ev(&c, 0)->fix.utc_unix_ms);
+    feed_body(&p, &c, "GPRMC,123519.00,A,4807.0380,N,01131.0000,E,1.0,2.0,311224,,,A"); /* 2024 */
+    TT_ASSERT(!(rmc_ev(&c, 1)->fix.flags & GPS_FLAG_DATE_VALID));
+    feed_body(&p, &c, "GPRMC,123519.00,A,4807.0380,N,01131.0000,E,1.0,2.0,010125,,,A"); /* 2025 ok */
+    TT_ASSERT(rmc_ev(&c, 2)->fix.flags & GPS_FLAG_DATE_VALID);
+}
+
 static void test_midnight_rollover(void)
 {
     nmea_t p;
@@ -567,6 +582,7 @@ int main(void)
     TT_RUN(test_no_fix_empty_fields);
     TT_RUN(test_status_v_with_time_not_trusted);
     TT_RUN(test_time_without_date_or_bad_date);
+    TT_RUN(test_pre_2025_date_rejected);
     TT_RUN(test_midnight_rollover);
     TT_RUN(test_leap_day);
     TT_RUN(test_hemispheres);

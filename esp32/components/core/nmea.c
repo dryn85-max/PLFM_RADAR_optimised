@@ -143,13 +143,20 @@ int32_t nmea_days_from_civil(int year, int month, int day)
     return (int32_t)(era * 146097 + doe - 719468);
 }
 
-/* ddmmyy -> days since epoch, -1 invalid. */
+#define NMEA_MIN_YEAR 2025
+#define NMEA_DATE_STALE (-2) /* well-formed but year < NMEA_MIN_YEAR: the clock is not trusted */
+
+/* ddmmyy -> days since epoch, -1 invalid, NMEA_DATE_STALE for year < NMEA_MIN_YEAR. */
 static int32_t parse_date(const char *s)
 {
     if (!all_digits(s, 6) || s[6] != '\0') {
         return -1;
     }
-    return nmea_days_from_civil(2000 + dig2(s + 4), dig2(s + 2), dig2(s));
+    int year = 2000 + dig2(s + 4);
+    if (year < NMEA_MIN_YEAR) { /* GPS week-rollover clones report 2005/2006 dates */
+        return NMEA_DATE_STALE;
+    }
+    return nmea_days_from_civil(year, dig2(s + 2), dig2(s));
 }
 
 /* [d]ddmm.mmmm + hemisphere -> degrees * 1e7. int_digits = 4 (lat) or 5 (lon). */
@@ -198,7 +205,7 @@ static int32_t decode_rmc(char *const *f, size_t nf, rec_gps_fix_t *o)
         active = false;
     }
     int32_t days = fld_empty(f[9]) ? -1 : parse_date(f[9]);
-    if (active && tod >= 0) {
+    if (active && tod >= 0 && days != NMEA_DATE_STALE) {
         o->flags |= GPS_FLAG_TIME_VALID;
     }
     if (active && days >= 0) {

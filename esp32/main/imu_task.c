@@ -32,6 +32,7 @@
 #define IMU_FAIL_LIMIT 5        /* consecutive failed reads before the sensor is re-initialised */
 #define IMU_BACKOFF_MS 1000     /* wait before a re-probe/re-init (also while absent) */
 #define IMU_LOG_US 10000000
+#define IMU_WARN_EVERY 30       /* rounds (x IMU_BACKOFF_MS) between repeated warnings */
 #define IMU_DT_MIN_S 0.005f     /* measured sample interval is clamped to this window */
 #define IMU_DT_MAX_S 0.030f
 /* Core 1 with the LD2410C (prio 5) and GPS (prio 4) tasks, but below both: the
@@ -183,8 +184,11 @@ static uint8_t find_sensor(void)
         if (reg_read(BMI160_REG_CHIP_ID, &id, 1) == ESP_OK && id == BMI160_CHIP_ID_VALUE) {
             return addrs[i];
         }
-        ESP_LOGW(TAG, "0x%02X answers, but CHIP_ID is 0x%02X (expected 0x%02X): not a BMI160",
-                 addrs[i], (unsigned)id, BMI160_CHIP_ID_VALUE);
+        static unsigned s_wrong_id_rounds;
+        if (s_wrong_id_rounds++ % IMU_WARN_EVERY == 0) {
+            ESP_LOGW(TAG, "0x%02X answers, but CHIP_ID is 0x%02X (expected 0x%02X): not a BMI160",
+                     addrs[i], (unsigned)id, BMI160_CHIP_ID_VALUE);
+        }
         close_device();
     }
     return 0;
@@ -387,7 +391,14 @@ static void imu_task(void *arg)
 {
     (void)arg;
     int64_t last_log = esp_timer_get_time();
+    unsigned miss = 0; /* consecutive rounds without a working sensor */
     for (;;) {
+        if (miss >= IMU_FAIL_LIMIT) { /* bus may be wedged (SDA held low): reset before re-probing */
+            esp_err_t rerr = i2c_master_bus_reset(s_bus);
+            if (rerr != ESP_OK && (miss - IMU_FAIL_LIMIT) % IMU_WARN_EVERY == 0) {
+                ESP_LOGW(TAG, "i2c_master_bus_reset failed: %s", esp_err_to_name(rerr));
+            }
+        }
         uint8_t addr = find_sensor();
         if (addr != 0) {
             esp_err_t err = configure();
@@ -398,14 +409,19 @@ static void imu_task(void *arg)
                 s_snap.reinits++;
                 s_link = IMU_LINK_OK;
                 xSemaphoreGive(s_mtx);
+                miss = 0;
                 ESP_LOGI(TAG, "BMI160 at 0x%02X configured (+-4 g, +-500 deg/s, 100 Hz)", addr);
                 sample_loop(&last_log);
+                miss = IMU_FAIL_LIMIT - 1; /* read failures: reset the bus before the next probe */
             } else {
                 count_error();
-                ESP_LOGW(TAG, "BMI160 configuration failed: %s", esp_err_to_name(err));
+                if (miss % IMU_WARN_EVERY == 0) { /* first failure, then every 30 s */
+                    ESP_LOGW(TAG, "BMI160 configuration failed: %s", esp_err_to_name(err));
+                }
             }
             close_device();
         }
+        miss++;
         xSemaphoreTake(s_mtx, portMAX_DELAY);
         s_link = s_ever_seen ? IMU_LINK_ERROR : IMU_LINK_ABSENT;
         xSemaphoreGive(s_mtx);

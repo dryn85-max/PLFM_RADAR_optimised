@@ -88,7 +88,8 @@ static void put_gps(w_t *w, const snapshot_t *s)
     int alt = live && (g->flags & GPS_FLAG_ALT_VALID);
     int tm = live && (g->flags & GPS_FLAG_TIME_VALID) && (g->flags & GPS_FLAG_DATE_VALID) &&
              g->utc_unix_ms >= 0 && g->utc_unix_ms <= UTC_MS_MAX;
-    put(w, ",\"gps\":{\"status\":\"%s\",\"fix\":%s", st, pos && g->fix_quality > 0 ? "true" : "false");
+    /* pos_valid already means GGA quality > 0 or RMC status A */
+    put(w, ",\"gps\":{\"status\":\"%s\",\"fix\":%s", st, pos ? "true" : "false");
     put_uint_or_null(w, "fix_quality", live, g->fix_quality);
     put_uint_or_null(w, "sats", live, g->sats);
     put_fixed_or_null(w, "hdop", live && g->hdop_x100 != 0, g->hdop_x100, 2);

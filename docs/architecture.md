@@ -211,7 +211,8 @@ Data flow:
    `A` and valid time and date (no PPS, so about +-50 to 300 ms, VERIFY), SNTP
    on each synchronisation over the STA link. Both are recorded; the live page
    shows GPS while its latest sync is under 5 s old, else SNTP. The PC converts
-   `esp_time_us` to UTC with the nearest preceding `time_sync` of the same boot.
+   `esp_time_us` to UTC with a GPS `time_sync` of the same boot within +-2 s, else
+   the nearest preceding `time_sync` of any source.
 2c. **Tilt.** Pitch and roll are absolute (complementary filter on the gravity
    direction; body frame +X boresight, +Y left, +Z up; sensor-to-body mapping is
    a firmware constant). There is no azimuth: no magnetometer.

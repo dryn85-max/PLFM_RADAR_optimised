@@ -176,6 +176,16 @@ esp_err_t gps_start(void)
     if (err != ESP_OK) {
         return err;
     }
+    /* Short FIFO threshold and idle timeout: RMC bytes reach the task promptly
+     * (time-stamp latency), not only when the default 120-byte threshold fills. */
+    err = uart_set_rx_full_threshold(GPS_UART, 16);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = uart_set_rx_timeout(GPS_UART, 2);
+    if (err != ESP_OK) {
+        return err;
+    }
     err = uart_param_config(GPS_UART, &cfg);
     if (err != ESP_OK) {
         return err;

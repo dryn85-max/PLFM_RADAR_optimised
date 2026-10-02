@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import datetime
 import io
+import itertools
 import json
 import socket
 import struct
@@ -1107,6 +1109,75 @@ def test_utc_never_uses_a_sync_of_another_boot():
     idx = lr.TimeIndex(recs)
     assert idx.utc_us(0, 2_000_000) == (U0 + 1_000_000, 1)
     assert idx.utc_us(2, 7_000_000) is None and idx.utc_us(7, 1) is None
+
+
+def test_gps_priority_with_interleaved_sntp():
+    # GPS syncs at esp 10 s and 12 s; an SNTP sync at 11 s carries a 40 ms-different clock.
+    recs = [
+        sync_rec(0, 10_000_000, U0, 1),
+        sync_rec(1, 11_000_000, U0 + 1_000_000 + 40_000, 2),
+        sync_rec(2, 12_000_000, U0 + 2_000_000, 1),
+        frame_at(3, 11_500_000),  # after the SNTP sync: still GPS-based (nearest GPS = 12 s)
+        frame_at(4, 11_000_000),
+        frame_at(5, 10_500_000),
+    ]
+    assert utc_of(recs, 0) == (lr.format_utc_us(U0 + 1_500_000), "gps")
+    assert utc_of(recs, 1) == (lr.format_utc_us(U0 + 1_000_000), "gps")  # tie: no SNTP jump
+    assert utc_of(recs, 2) == (lr.format_utc_us(U0 + 500_000), "gps")
+
+
+def test_gps_gap_over_window_falls_back_to_sntp():
+    recs = [
+        sync_rec(0, 10_000_000, U0, 1),
+        sync_rec(1, 20_000_000, U0 + 10_000_000 + 5_000, 2),
+        frame_at(2, 12_000_000),  # exactly 2 s from the GPS sync: still GPS
+        frame_at(3, 12_000_001),  # just outside: nearest preceding sync of any source (GPS)
+        frame_at(4, 20_100_000),  # GPS 10.1 s away -> preceding sync is SNTP
+        frame_at(5, 5_000_000),  # 5 s before the GPS sync: outside window, only following sync
+    ]
+    assert utc_of(recs, 0) == (lr.format_utc_us(U0 + 2_000_000), "gps")
+    assert utc_of(recs, 1) == (lr.format_utc_us(U0 + 2_000_001), "gps")
+    assert utc_of(recs, 2) == (lr.format_utc_us(U0 + 10_105_000), "sntp")
+    assert utc_of(recs, 3) == (lr.format_utc_us(U0 - 5_000_000), "gps")
+
+
+def test_gps_of_another_boot_never_used_for_priority():
+    recs = [
+        sync_rec(0, 1_000_000, U0, 1),
+        lr.RebootRec(1, 2, 5),
+        sync_rec(0, 1_000_000, U0 + 3_600_000_000, 2),  # boot 1: SNTP only
+        frame_at(1, 1_500_000),  # boot 0's GPS sync is 0.5 s away in esp time: must be ignored
+    ]
+    assert utc_of(recs, 0) == (lr.format_utc_us(U0 + 3_600_000_000 + 500_000), "sntp")
+
+
+def test_frame_utc_monotonic_over_an_hour_with_hourly_sntp():
+    # 1 Hz GPS syncs for an hour, SNTP syncs (+3 ms offset error) at 0 s, 1800 s, 3600 s,
+    # a frame every 0.25 s: frame_utc must never go backwards or jump at an SNTP sync.
+    recs = []
+    seq = 0
+    base = 5_000_000
+    for sec in range(3601):
+        recs.append(sync_rec(seq, base + sec * 1_000_000 + 7, U0 + sec * 1_000_000, 1))
+        seq += 1
+        if sec in (0, 1800, 3600):
+            recs.append(sync_rec(seq, base + sec * 1_000_000 + 400_000,
+                                 U0 + sec * 1_000_000 + 400_000 + 3_000, 2))
+            seq += 1
+    for q in range(3600 * 4):
+        recs.append(frame_at(seq, base + q * 250_000))
+        seq += 1
+    rows = [r for r in lr.csv_rows(recs) if r["record"] == "frame"]
+    utc = [r["frame_utc"] for r in rows]
+    assert utc == sorted(utc) and len(set(utc)) == len(utc)
+    assert {r["time_source"] for r in rows} == {"gps"}
+    # constant 0.25 s steps: no SNTP jump anywhere
+    ts = [
+        int(datetime.datetime.strptime(u, "%Y-%m-%dT%H:%M:%S.%fZ")
+            .replace(tzinfo=datetime.UTC).timestamp() * 1e6 + 0.5)
+        for u in utc
+    ]
+    assert {b - a for a, b in itertools.pairwise(ts)} == {250_000}
 
 
 def test_utc_ignores_damaged_sync_and_handles_odd_values():

@@ -6,6 +6,10 @@ Sub-commands:
   export-csv FILE [-o CSV]              decode a recording to CSV
   info FILE                             counts, sequence range, duration, gaps, GPS/IMU/time stats
 
+export-csv also takes --gps FILE (write the GPS fixes to a second CSV) and --imu FILE
+(write the IMU samples to a third CSV). frame_utc uses the nearest GPS time_sync of the
+same boot within +-2 s, else the nearest preceding sync of any source.
+
 Recording protocol v3: the device sends typed records (0 LD2410C frame, 1 gps_fix,
 2 imu, 3 time_sync) sharing one sequence. Byte layouts (all little-endian) are fixed in
 docs/superpowers/plans/2026-10-02-esp32-gps-imu.md and mirrored by esp32/components/core
@@ -62,6 +66,10 @@ GPS_FLAG_POS = 0x04
 GPS_FLAG_ALT = 0x08
 IMU_STATUS_VALID = 0x01
 SOURCE_NAMES = {1: "gps", 2: "sntp"}
+SOURCE_GPS = 1
+# GPS has priority over other time sources in the host UTC conversion (spec R4): a GPS
+# sync of the same boot within this distance (either side) of the instant is used.
+GPS_PRIORITY_WINDOW_US = 2_000_000
 
 FILE_MAGIC = b"LDREC1\x00\x00"
 FILE_VERSION = 3
@@ -551,8 +559,10 @@ def boot_indices(records: list[FileRec]) -> list[int]:
 class TimeIndex:
     """esp_time_us -> UTC, using the time_sync records of the same boot.
 
-    The nearest sync at or before the instant is used; if none precedes it, the
-    earliest following sync of that boot. UTC = sync.utc + (esp_time - sync.esp_time).
+    A GPS sync within GPS_PRIORITY_WINDOW_US (+-2 s) of the instant wins (the nearest
+    such one). Otherwise the nearest sync of any source at or before the instant is
+    used; if none precedes it, the earliest following sync of that boot.
+    UTC = sync.utc + (esp_time - sync.esp_time).
     Syncs with an undecodable payload are ignored. No sync in the boot -> None.
     """
 
@@ -568,16 +578,30 @@ class TimeIndex:
                 per_boot.setdefault(b, []).append((r.esp_time_us, t.utc_unix_us, t.source))
         self._esp: dict[int, list[int]] = {}
         self._syncs: dict[int, list[tuple[int, int, int]]] = {}
+        self._gps: dict[int, list[tuple[int, int, int]]] = {}
+        self._gps_esp: dict[int, list[int]] = {}
         for b, lst in per_boot.items():
             lst.sort(key=lambda x: x[0])  # stable: file order kept among equal esp times
             self._syncs[b] = lst
             self._esp[b] = [x[0] for x in lst]
+            g = [x for x in lst if x[2] == SOURCE_GPS]
+            self._gps[b] = g
+            self._gps_esp[b] = [x[0] for x in g]
 
     def utc_us(self, boot: int, esp_time_us: int) -> tuple[int, int] | None:
         """(utc_unix_us, source) for an ESP time of the given boot, or None."""
         lst = self._syncs.get(boot)
         if not lst:
             return None
+        g = self._gps[boot]
+        if g:
+            ge = self._gps_esp[boot]
+            j = bisect_right(ge, esp_time_us)  # g[j-1] precedes, g[j] follows
+            near = [c for c in (j - 1, j) if 0 <= c < len(g)]
+            best = min(near, key=lambda c: abs(g[c][0] - esp_time_us))
+            if abs(g[best][0] - esp_time_us) <= GPS_PRIORITY_WINDOW_US:
+                esp0, utc0, src = g[best]
+                return utc0 + (esp_time_us - esp0), src
         i = bisect_right(self._esp[boot], esp_time_us) - 1
         if i < 0:
             i = 0  # fallback: the following sync
