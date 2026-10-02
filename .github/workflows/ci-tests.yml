@@ -51,6 +51,7 @@ jobs:
           uv run pytest
           host/test_v7.py
           host/test_radar_protocol.py
+          host/test_ld2410_rec.py
           -v --tb=short
 
   # ===========================================================================
