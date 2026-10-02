@@ -193,7 +193,7 @@ static void stats_log(void)
     unsigned sent = s_sent, skipped = s_skipped_inflight, qfail = s_queue_fail;
     s_sent = s_skipped_inflight = s_queue_fail = 0;
     xSemaphoreGive(s_lock);
-    ESP_LOGI(TAG, "live: clients=%d sent=%u skipped_inflight=%u queue_fail=%u", clients, sent,
+    ESP_LOGI(TAG, "clients=%d sent=%u skipped_inflight=%u queue_fail=%u", clients, sent,
              skipped, qfail);
 }
 
