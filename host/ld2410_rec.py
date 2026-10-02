@@ -8,7 +8,8 @@ Sub-commands:
 
 export-csv also takes --gps FILE (write the GPS fixes to a second CSV) and --imu FILE
 (write the IMU samples to a third CSV). frame_utc uses the nearest GPS time_sync of the
-same boot within +-2 s, else the nearest preceding sync of any source.
+same boot within +-2 s, else the nearest preceding sync of any source; a GPS sync that
+disagrees with the nearest SNTP sync of its boot by more than 1 s is rejected.
 
 Recording protocol v3: the device sends typed records (0 LD2410C frame, 1 gps_fix,
 2 imu, 3 time_sync) sharing one sequence. Byte layouts (all little-endian) are fixed in
@@ -67,9 +68,14 @@ GPS_FLAG_ALT = 0x08
 IMU_STATUS_VALID = 0x01
 SOURCE_NAMES = {1: "gps", 2: "sntp"}
 SOURCE_GPS = 1
+SOURCE_SNTP = 2
 # GPS has priority over other time sources in the host UTC conversion (spec R4): a GPS
 # sync of the same boot within this distance (either side) of the instant is used.
 GPS_PRIORITY_WINDOW_US = 2_000_000
+# A GPS time_sync whose offset (utc - esp_time) differs from the nearest SNTP sync of the
+# same boot by more than this is rejected: the receiver can report UTC whole seconds off
+# after a cold-start fix (bench 2026-10-02: +3 s for 5.6 min after the first fix).
+GPS_SNTP_MAX_DIFF_US = 1_000_000
 
 FILE_MAGIC = b"LDREC1\x00\x00"
 FILE_VERSION = 3
@@ -562,6 +568,9 @@ class TimeIndex:
     A GPS sync within GPS_PRIORITY_WINDOW_US (+-2 s) of the instant wins (the nearest
     such one). Otherwise the nearest sync of any source at or before the instant is
     used; if none precedes it, the earliest following sync of that boot.
+    A GPS sync whose offset differs by more than GPS_SNTP_MAX_DIFF_US (1 s) from the
+    nearest SNTP sync (by esp time, tie: the preceding one) of its boot is rejected and
+    not used at all; boots without SNTP keep all GPS syncs. `gps_rejected` counts them.
     UTC = sync.utc + (esp_time - sync.esp_time).
     Syncs with an undecodable payload are ignored. No sync in the boot -> None.
     """
@@ -576,17 +585,38 @@ class TimeIndex:
                 except PayloadError:
                     continue
                 per_boot.setdefault(b, []).append((r.esp_time_us, t.utc_unix_us, t.source))
+        self.gps_rejected = 0
         self._esp: dict[int, list[int]] = {}
         self._syncs: dict[int, list[tuple[int, int, int]]] = {}
         self._gps: dict[int, list[tuple[int, int, int]]] = {}
         self._gps_esp: dict[int, list[int]] = {}
         for b, lst in per_boot.items():
             lst.sort(key=lambda x: x[0])  # stable: file order kept among equal esp times
+            sntp = [x for x in lst if x[2] == SOURCE_SNTP]
+            if sntp:
+                sntp_esp = [x[0] for x in sntp]
+                kept = []
+                for x in lst:
+                    if x[2] == SOURCE_GPS and not self._gps_plausible(x, sntp, sntp_esp):
+                        self.gps_rejected += 1
+                    else:
+                        kept.append(x)
+                lst = kept
             self._syncs[b] = lst
             self._esp[b] = [x[0] for x in lst]
             g = [x for x in lst if x[2] == SOURCE_GPS]
             self._gps[b] = g
             self._gps_esp[b] = [x[0] for x in g]
+
+    @staticmethod
+    def _gps_plausible(
+        g: tuple[int, int, int], sntp: list[tuple[int, int, int]], sntp_esp: list[int]
+    ) -> bool:
+        j = bisect_right(sntp_esp, g[0])  # sntp[j-1] precedes (or equals), sntp[j] follows
+        near = [c for c in (j - 1, j) if 0 <= c < len(sntp)]
+        # min() keeps the first minimum: the preceding sync wins a tie
+        s = sntp[min(near, key=lambda c: abs(sntp[c][0] - g[0]))]
+        return abs((g[1] - g[0]) - (s[1] - s[0])) <= GPS_SNTP_MAX_DIFF_US
 
     def utc_us(self, boot: int, esp_time_us: int) -> tuple[int, int] | None:
         """(utc_unix_us, source) for an ESP time of the given boot, or None."""
@@ -866,6 +896,7 @@ def summarize(created_unix_ns: int, records: list[FileRec]) -> dict[str, object]
         "imu_records": len(imus),
         "time_syncs": len(syncs),
         "time_sources": sources,
+        "gps_syncs_rejected": TimeIndex(records).gps_rejected,
         "unknown_records": sum(isinstance(r, UnknownRec) for r in records),
     }
     if len(frames) >= 2:
@@ -1120,6 +1151,8 @@ def cmd_info(args: argparse.Namespace) -> int:
     srcs = s["time_sources"]
     srctxt = ", ".join(f"{k} {v}" for k, v in sorted(srcs.items())) or "none"  # type: ignore[attr-defined]
     _out(f"time syncs:    {s['time_syncs']} ({srctxt})")
+    if s["gps_syncs_rejected"]:
+        _out(f"gps rejected:  {s['gps_syncs_rejected']} (off SNTP by > 1 s)")
     if s["unknown_records"]:
         _out(f"unknown type:  {s['unknown_records']} records kept raw")
     _out(f"seq range:     {s['first_seq']} .. {s['last_seq']}")

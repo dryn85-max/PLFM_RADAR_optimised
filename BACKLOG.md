@@ -98,11 +98,12 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   the NEO-6M reported UTC 3 s ahead for 5.6 min after its first fix (likely the
   default leap-second count before the satellites' UTC parameters are decoded;
   VERIFY). The host conversion gives GPS priority, so those records get a UTC
-  about 3 s late. Options for the owner: reject a GPS `time_sync` that differs
-  from SNTP by more than 1 s (only with Wi-Fi STA); ignore GPS time for the
-  first 12.5 min after a fix; ask the receiver via UBX (`NAV-TIMEUTC` validity
-  flags), which ends the "factory configuration, no UBX" rule. Also decide
-  whether to subtract the measured 128 ms RMC delay.
+  about 3 s late. Partly handled (owner decision 2026-10-02): the host rejects
+  a GPS `time_sync` more than 1 s off SNTP, which needs Wi-Fi STA. Open: the
+  case without SNTP (ignore GPS time for the first 12.5 min after a fix, or ask
+  the receiver via UBX `NAV-TIMEUTC` validity flags, which ends the "factory
+  configuration, no UBX" rule), and whether to subtract the measured 128 ms
+  RMC delay.
 - [ ] **BMI160 and NEO-6M datasheets into `hardware/datasheets/`**, then verify
   the BMI160 register values, delays and sensitivities in `esp32/main/imu_task.c`
   (marked VERIFY there and in the README) and the NEO-6M default NMEA output,

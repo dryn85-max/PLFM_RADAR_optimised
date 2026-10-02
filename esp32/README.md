@@ -256,9 +256,10 @@ required; other sentences are ignored).
   decoded the GPS-UTC leap-second count from the satellites (broadcast every
   12.5 min) it uses a default built into its firmware (from memory, **VERIFY**
   against the NEO-6M documentation); NMEA has no flag for this. The host
-  conversion gives GPS priority, so records in that window get a UTC about 3 s
-  late. Not handled yet (BACKLOG); compare with the SNTP rows of the
-  recording if the first minutes matter.
+  conversion therefore **rejects a GPS `time_sync` that differs from the
+  nearest SNTP sync of the same boot by more than 1 s** (owner decision
+  2026-10-02); `info` prints how many were rejected. Without SNTP (no Wi-Fi
+  STA) nothing can be checked and those first minutes stay about 3 s off.
 - A one-line GPS status is logged every 10 s (see "Live page").
 
 ## Time sources and accuracy
@@ -276,7 +277,8 @@ is the matching ESP32 time. There are two sources:
 than 5 s old, otherwise SNTP once at least one SNTP sync happened, otherwise
 `none`. This only decides what is *shown*: **both sources are recorded**. The PC
 tool converts a record's `esp_time_us` to UTC with the nearest GPS `time_sync`
-record of the same boot within +-2 s of it (GPS has priority); otherwise with the
+record of the same boot within +-2 s of it (GPS has priority; GPS syncs more than
+1 s off the nearest SNTP sync of the boot are rejected first); otherwise with the
 nearest preceding `time_sync` of any source (if none precedes it, the first
 following one; none at all: empty), and writes that source into the
 `time_source` column. Since SNTP syncs hourly by default, the firmware re-emits an
@@ -377,7 +379,8 @@ uv run python host/ld2410_rec.py info run.ldrec
   frame_utc, time_source, gps_utc, gps_lat, gps_lon, gps_alt_m, gps_sats, gps_hdop,
   gps_fix_quality, gps_flags, pitch_deg, roll_deg`. `record` is `frame`, `gap` or
   `reboot`. `frame_utc` (ISO 8601, microseconds) is the frame's `esp_time_us`
-  converted with the nearest GPS `time_sync` of the same boot within +-2 s, else the
+  converted with the nearest GPS `time_sync` of the same boot within +-2 s (GPS
+  syncs more than 1 s off SNTP are rejected), else the
   nearest preceding `time_sync` of any source (if none precedes it, the following one;
   none at all: empty); `time_source` is `gps` or
   `sntp`. `gps_*` is the latest fix recorded before the frame, `pitch_deg` /
