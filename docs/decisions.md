@@ -48,6 +48,7 @@ B). Fork baseline: upstream `b46dd71`.
 | **Console echo is on by default;** `echo on` / `echo off` switches it, `echo` alone reports `ECHO on|off`; accepted while a fault is latched (like `status`); the state is not persisted. | Owner decision after the first bench run: typed commands were invisible in `screen`. Spec `docs/superpowers/specs/2026-10-02-console-echo-backspace.md`. | this change |
 | **Command-line editing:** BS (0x08) and DEL (0x7F) delete the last character; all other control characters and ANSI escape sequences (arrow keys) are discarded and never enter the line. | Owner decision after the first bench run: a Backspace-corrected typo reached the parser as garbage (`status` was answered `ERR latched`). | this change |
 | **`DIAG` log lines end with `\r\n`** (were `\n` only). | Owner request after the first bench run: `screen` showed the log as a staircase; banner and command replies already used `\r\n`. | this change |
+| **`firmware/` renamed `stm32/`** alongside the new `esp32/` folder (ESP32-S3 + LD2410C MVP). | Owner decision in the esp32-ld2410-mvp brainstorming: with two MCU targets in the tree, `firmware/` no longer says which one it holds. The row above that lists `firmware/` among the semantic names is historical. | this change | <!-- path-gate: legacy-ref -->
 
 ## Process decisions (earlier)
 

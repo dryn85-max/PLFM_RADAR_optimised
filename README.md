@@ -72,13 +72,13 @@ git checkout -- fpga/tb/cosim          # the script rewrites tracked CSVs; resto
 Module guide, signal chain, rates/widths, resource budget and hand-off list:
 [fpga/README.md](fpga/README.md).
 
-### Firmware (`firmware/`)
+### Firmware (`stm32/`)
 
 Needs `arm-none-eabi-gcc` (13.2.1 used), `gcc`, `make`; `st-flash` or
 `STM32_Programmer_CLI` for flashing.
 
 ```
-cd firmware
+cd stm32
 make test                              # host unit tests (ADAR_COUNT=1 and 4)
 make                                   # build ELF/BIN/HEX and run the size check
 make DIAG=0 clean all                  # build without diagnostic logging
@@ -87,7 +87,7 @@ make flash                             # ST-LINK (make flash PROGRAMMER=cube for
 ```
 
 Pin map, serial command interface, fault model and memory report:
-[firmware/README.md](firmware/README.md).
+[stm32/README.md](stm32/README.md).
 
 ### Host (`host/`)
 
@@ -120,7 +120,7 @@ uv run ruff check .
 | Path | Contents |
 |---|---|
 | `fpga/` | Vendor-neutral Verilog RTL, testbenches, golden vectors, regression script ([README](fpga/README.md)) |
-| `firmware/` | STM32G0B1 (NUCLEO-G0B1RE) bare-metal C firmware, host unit tests ([README](firmware/README.md)) |
+| `stm32/` | STM32G0B1 (NUCLEO-G0B1RE) bare-metal C firmware, host unit tests ([README](stm32/README.md)) |
 | `host/` | V7 PyQt6 GUI, USB protocol layer, smoke test ([README](host/README.md)) |
 | `tests/cross_layer/` | Cross-layer contract tests (RTL / firmware / host) |
 | `tools/` | Helper scripts (`uart_capture.py`) and the path gate (`check_paths.sh`) |
@@ -139,7 +139,7 @@ uv run ruff check .
 - [docs/bom-optimization.md](docs/bom-optimization.md) - historical analysis of the upstream design (Russian)
 - [docs/superpowers/](docs/superpowers/) - specs and plans of the work done so far
 - [BACKLOG.md](BACKLOG.md) - open items
-- Module READMEs: [fpga](fpga/README.md), [firmware](firmware/README.md), [host](host/README.md), [legacy](legacy/README.md)
+- Module READMEs: [fpga](fpga/README.md), [firmware](stm32/README.md), [host](host/README.md), [legacy](legacy/README.md)
 
 ## Upstream and attribution
 

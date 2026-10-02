@@ -1,4 +1,4 @@
-# Host unit tests. Run from firmware/ as `make -C tests` (ADAR_COUNT=1 by default).
+# Host unit tests. Run from stm32/ as `make -C tests` (ADAR_COUNT=1 by default).
 # The top-level `make test` runs this twice: ADAR_COUNT=1 and ADAR_COUNT=4.
 ADAR_COUNT ?= 1
 # '=' not '?=': make's built-in default CC=cc is always defined, so ?= never

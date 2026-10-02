@@ -173,7 +173,7 @@ rewrites tracked `tb/cosim/*.csv`, restore them with `git checkout -- fpga/tb/co
   Re-run with `cd formal && for f in *.sby; do sby -f "$f"; done` where `sby`
   is available.
 - Cross-layer contract tests (host / RTL opcodes and packet layout) moved to
-  `tests/cross_layer/` and were retargeted to `firmware/` (STM32G0B1); they run
+  `tests/cross_layer/` and were retargeted to `stm32/` (STM32G0B1); they run
   in their own CI job.
 
 ## Known limitations

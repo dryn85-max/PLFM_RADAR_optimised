@@ -19,7 +19,7 @@ Nothing has been run on hardware; see [bring-up.md](bring-up.md).
                                                                     +-------------v-v--+
  LO PLL eval board (ADF4372 / LMX2594) <-- SPI1 8 MHz + CE/LD ----- |  NUCLEO-G0B1RE   |
  ADAR1000 (4 ch) + 4x ADTR1107          <-- SPI2 16 MHz + 4 CS ---- |  STM32G0B1       |
- ADS7830 (temperature)                  <-- I2C1 100 kHz ---------- |  firmware/       |
+ ADS7830 (temperature)                  <-- I2C1 100 kHz ---------- |  stm32/          |
  power rail enables (7x EN_*)           <-- GPIO ------------------ |                  |
  ST-LINK VCP (USART2, 115200 8N1)       <-> text commands / STATUS  +------------------+
 ```
@@ -29,7 +29,7 @@ Roles:
 - **FPGA** (`fpga/`): captures the ADC, down-converts, pulse-compresses, Doppler
   processes, runs CFAR, generates the TX chirp through the DAC and streams
   results to the host.
-- **MCU** (`firmware/`): sequences power rails, programs the LO PLL and the
+- **MCU** (`stm32/`): sequences power rails, programs the LO PLL and the
   ADAR1000, steers the beam, runs the outer AGC loop, monitors temperature,
   enforces the fault model and offers a text command interface on the ST-LINK
   virtual COM port.
@@ -63,7 +63,7 @@ about 43 800 clk (0.44 ms) per long chirp.
 ### FPGA <-> MCU: DIG0-7
 
 DIG0..DIG7 are MCU pins PC0..PC7, so one read of the GPIO input register
-returns the whole bus (`firmware/Core/hal/pins.h`, `pins_table.c`). Direction is
+returns the whole bus (`stm32/Core/hal/pins.h`, `pins_table.c`). Direction is
 from the MCU's point of view. Idle level is low for all of them.
 
 | Line | MCU pin | Direction | Signal | FPGA side (`radar_system_top.v`) |
@@ -92,13 +92,13 @@ FPGA balls); those do not apply to Lite. The contract tests
 | GPIO | PA0, PA1, PA4, PA6, PA7, PA8, PC8 | active-high enables | EN_FPGA, EN_LO, EN_ADAR, EN_ADTR_VDD_SW, EN_ADTR_VSS_SW, EN_LNA, EN_PA |
 
 Full wiring table with the Nucleo connector column (many entries still
-**VERIFY vs UM2324**): [firmware/README.md](../firmware/README.md#wiring-corehalpinsh-corehalhal_gpioc).
+**VERIFY vs UM2324**): [stm32/README.md](../stm32/README.md#wiring-corehalpinsh-corehalhal_gpioc).
 Whether the ADAR1000 SPI also passes through the FPGA (the RTL still has
 `stm32_*_3v3` / `*_1v8` pass-through ports) on the Lite board: **VERIFY**.
 
 The MCU command interface (`beam`, `gain`, `tx`, `rx`, `auto`, `status`, `stop`)
 and the `STATUS` line format are documented in
-[firmware/README.md](../firmware/README.md#serial-command-interface).
+[stm32/README.md](../stm32/README.md#serial-command-interface).
 
 ### Host USB link
 
@@ -147,7 +147,7 @@ been run, there is no Quartus project yet):
 
 MCU (STM32G0B1RET6 has 512 KB flash / 144 KB RAM; the build budget is 128 KB
 flash / 32 KB RAM including a 4 KB stack and 1 KB heap reserve), from
-[firmware/README.md](../firmware/README.md#memory-report):
+[stm32/README.md](../stm32/README.md#memory-report):
 
 | Configuration | Flash (of 131072) | RAM (of 32768) |
 |---|---|---|
@@ -158,7 +158,7 @@ flash / 32 KB RAM including a 4 KB stack and 1 KB heap reserve), from
 ## Known limitations
 
 Full lists: [fpga/README.md](../fpga/README.md#known-limitations) (limitations
-a-l), [firmware/README.md](../firmware/README.md#not-covered-here) and
+a-l), [stm32/README.md](../stm32/README.md#not-covered-here) and
 [BACKLOG.md](../BACKLOG.md). Main points:
 
 - Nothing has been tested on hardware; the PLL register tables are placeholders

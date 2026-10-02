@@ -14,7 +14,7 @@ Tier 2 — Verilog Cosimulation (iverilog):
   runs Python parsers on the captured bytes to verify round-trip
   correctness.
 
-MCU side = the active STM32G0B1 firmware in firmware/ (pins_table.c,
+MCU side = the active STM32G0B1 firmware in stm32/ (pins_table.c,
 fpga_if.c, agc.c, hal_gpio.c, adar1000.c).  The upstream F7 checks that have
 no G0B1 equivalent (RadarSettings USB packet, USB start flag, C++ settings
 stub execution) were removed; see the NOTE before Tier 2 below.
@@ -465,7 +465,7 @@ class TestTier1AgcCrossLayerInvariant:
             "expected 0 (AGC off at boot)"
         )
 
-    # ---- MCU side: STM32G0B1 firmware (firmware/Core) -------------------
+    # ---- MCU side: STM32G0B1 firmware (stm32/Core) -------------------
     @staticmethod
     def _src(rel: str) -> str:
         return (cp.MCU_CORE_DIR / rel).read_text()
@@ -651,11 +651,11 @@ class TestTier1AgcCrossLayerInvariant:
 class TestTier1GpioDirections:
     """
     FPGA <-> STM32G0B1 DIG0-7 contract: pin roles and directions in
-    firmware/Core/hal/pins_table.c must be the mirror image of the port
+    stm32/Core/hal/pins_table.c must be the mirror image of the port
     directions in fpga/radar_system_top.v (MCU output <-> FPGA input).
     """
 
-    # DIG index -> FPGA top-level port (see firmware/Core/hal/pins.h)
+    # DIG index -> FPGA top-level port (see stm32/Core/hal/pins.h)
     DIG_TO_FPGA: ClassVar[dict[int, str]] = {
         0: "stm32_new_chirp",
         1: "stm32_new_elevation",
@@ -737,8 +737,8 @@ class TestTier1DataPacketLayout:
 # minimum-length overread, USB start flag [23,46,158,237]) and TestTier3CStub
 # (compiled stm32_settings_stub.cpp round trip) covered the F7 USB binary
 # "SET...END" settings packet and USBHandler.  The G0B1 firmware has no USB and
-# no RadarSettings (firmware/README.md, "Not ported"); runtime settings are text
-# commands over UART, covered by firmware/tests/test_cmd.c.  The stub moved to
+# no RadarSettings (stm32/README.md, "Not ported"); runtime settings are text
+# commands over UART, covered by stm32/tests/test_cmd.c.  The stub moved to
 # legacy/9_Firmware/tests/cross_layer/.
 
 
@@ -748,7 +748,7 @@ class TestTier1DataPacketLayout:
 #
 # Cross-layer contract: the firmware constants
 #   VM_I[128] / VM_Q[128]
-# (in firmware/Core/drivers/adar1000.c)
+# (in stm32/Core/drivers/adar1000.c)
 # MUST equal the byte values published in the ADAR1000 datasheet Rev. B,
 # Tables 13-16 page 34 ("Phase Shifter Programming"), on a uniform 2.8125 deg
 # grid (index N == phase N * 360/128 deg).

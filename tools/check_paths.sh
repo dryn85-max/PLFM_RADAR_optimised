@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Path gate: fail if a tracked file references the old upstream layout
 # (9_Firmware, 9_1_Microcontroller, 9_2_FPGA, 9_3_GUI, 7_Components,
-# 4_Schematics, BOM_OPTIMIZATION_REPORT) other than as a legacy/... path.
+# 4_Schematics, BOM_OPTIMIZATION_REPORT) other than as a legacy/... path, or
+# to the old `firmware/` directory (renamed `stm32/`).
 #
 # Exempt: legacy/ (the archive itself) and docs/superpowers/ (specs and plans
 # describe the move). A line may opt out with the marker
@@ -15,6 +16,11 @@ cd "$(git rev-parse --show-toplevel)"
 # A name is allowed right after `legacy/` or after `legacy/9_Firmware/`.
 pattern='(?<!legacy/)(?<!legacy/9_Firmware/)(9_Firmware|9_1_Microcontroller|9_2_FPGA|9_3_GUI|7_Components|4_Schematics|BOM_OPTIMIZATION_REPORT)'
 
+# The pre-rename MCU directory `firmware/` (now `stm32/`) as a path: it must
+# not be preceded by a path or word character, so `stm32/firmware/` and
+# `legacy/.../firmware/` are not flagged, only a top-level `firmware/`.
+pattern_fw='(^|[^A-Za-z0-9_./-])firmware/'
+
 errfile=$(mktemp)
 listfile=$(mktemp)
 trap 'rm -f "$errfile" "$listfile"' EXIT
@@ -25,6 +31,9 @@ trap 'rm -f "$errfile" "$listfile"' EXIT
 git ls-files -z | { grep -zvE '^(legacy/|docs/superpowers/|tools/check_paths\.sh$)' || [ $? -eq 1 ]; } >"$listfile"
 hits=$({ xargs -0 grep -InP -e "$pattern" -- <"$listfile" 2>"$errfile" || true; } \
   | { grep -v 'path-gate: legacy-ref' || [ $? -eq 1 ]; })
+hits_fw=$({ xargs -0 grep -InP -e "$pattern_fw" -- <"$listfile" 2>>"$errfile" || true; } \
+  | { grep -v 'path-gate: legacy-ref' || [ $? -eq 1 ]; })
+hits="$hits${hits_fw:+${hits:+$'\n'}$hits_fw}"
 
 if [ -s "$errfile" ]; then
   echo "path gate: grep reported errors:" >&2

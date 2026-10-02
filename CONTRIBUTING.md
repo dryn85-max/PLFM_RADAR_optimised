@@ -32,7 +32,7 @@ Never run bare package installation commands without the `sfw` prefix.
 | Path | Contents |
 |------|----------|
 | `fpga/` | Vendor-neutral Verilog RTL, testbenches, golden vectors, `run_regression.sh` |
-| `firmware/` | STM32G0B1 (NUCLEO-G0B1RE) firmware and host unit tests |
+| `stm32/` | STM32G0B1 (NUCLEO-G0B1RE) firmware and host unit tests |
 | `host/` | V7 PyQt6 GUI, protocol layer, smoke test |
 | `tests/cross_layer/` | Python system invariant / contract tests |
 | `tools/` | Helper scripts |
@@ -52,7 +52,7 @@ Never run bare package installation commands without the `sfw` prefix.
   boundary conditions, race conditions, unexpected input sequences, and reset
   mid-operation. Add a `#1` delay after `@(posedge clk)` before driving DUT
   inputs with blocking assignments (or use non-blocking assignments).
-- **C (MCU firmware):** `make test` in `firmware/` runs the host unit tests with
+- **C (MCU firmware):** `make test` in `stm32/` runs the host unit tests with
   recording mocks; `make`, `make DIAG=0` and `make ADAR_COUNT=4` must all build
   (`arm-none-eabi-gcc`).
 - **System-level invariants:** whenever you change code, check that invariants
@@ -117,7 +117,7 @@ change legitimately alters the output (re-blessing procedure in AGENTS.md,
 ### 3. Firmware (STM32G0B1)
 
 ```bash
-cd firmware
+cd stm32
 make test
 make
 make DIAG=0 clean all
@@ -156,7 +156,7 @@ uv run pytest tests/cross_layer/test_cross_layer_contract.py -v
 - [ ] `uv run ruff check .` - no lint errors
 - [ ] `QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py host/test_radar_protocol.py -v` - all pass
 - [ ] `(cd fpga && bash run_regression.sh)` - all phases pass; `git checkout -- fpga/tb/cosim` afterwards
-- [ ] `cd firmware && make test && make && make DIAG=0 clean all && make ADAR_COUNT=4 clean all` - pass
+- [ ] `cd stm32 && make test && make && make DIAG=0 clean all && make ADAR_COUNT=4 clean all` - pass
 - [ ] `cd legacy/9_Firmware/9_1_Microcontroller/tests && make clean && make` - pass
 - [ ] `uv run pytest tests/cross_layer/test_cross_layer_contract.py` - pass
 - [ ] `git diff --check` - no whitespace issues; line-ending counts match (see above)

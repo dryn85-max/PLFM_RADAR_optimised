@@ -5,7 +5,7 @@ hardware requirements and an ordered bring-up checklist from the module READMEs
 and the backlog. Each item names its source; follow the link for the reasoning.
 Items that could not be verified from the repository are marked **VERIFY**.
 
-Sources: [firmware/README.md](../firmware/README.md) (firmware),
+Sources: [stm32/README.md](../stm32/README.md) (firmware),
 [fpga/README.md](../fpga/README.md) (FPGA, "Hand-off" section),
 [BACKLOG.md](../BACKLOG.md).
 
@@ -14,24 +14,24 @@ Sources: [firmware/README.md](../firmware/README.md) (firmware),
 1. **External pull-downs on all `EN_*` lines (EN_FPGA, EN_LO, EN_ADAR,
    EN_ADTR_VDD_SW, EN_ADTR_VSS_SW, EN_LNA, EN_PA) and on DIG0..DIG4.** MCU pins
    are high-Z during reset and flashing; the FPGA reset (DIG4) must not float
-   released. Source: [firmware/README.md, Hardware requirements](../firmware/README.md#wiring-corehalpinsh-corehalhal_gpioc),
+   released. Source: [stm32/README.md, Hardware requirements](../stm32/README.md#wiring-corehalpinsh-corehalhal_gpioc),
    BACKLOG "Hardware bring-up checklist". Note: the upstream FPGA reset has an
    internal pull-up in the old Xilinx constraints (`legacy/9_Firmware/9_2_FPGA/constraints/xc7a50t_ftg256.xdc:121`);
    what the Cyclone board does is **VERIFY**.
 2. **Nucleo solder bridges (UM2324):** PB8/PB9 (I2C1, Arduino D15/D14) must NOT be
    tied to A4/A5 (PC1/PC0 = DIG1/DIG0): verify the bridges are open. PA2/PA3 stay
    routed to the ST-LINK VCP. Exact bridge names **VERIFY vs UM2324**. Source:
-   firmware/README.md, BACKLOG.
+   stm32/README.md, BACKLOG.
 3. **ADAR1000 `PA_ON` (pin B3) must not be pulled low** on the board (internal
    100 kohm pull-up to the 1.8 V LDO; low forces the PA bias OFF values in TR-pin
    mode; ADAR1000 DS p. 39, Table 16). The MCU does not drive it. Source:
-   firmware/README.md, BACKLOG "Idq calibration".
+   stm32/README.md, BACKLOG "Idq calibration".
 4. **ADTR1107 `CTRL_SW` must be driven by the ADAR1000 `TR_SW_POS` output**;
    confirm on the schematic (the `SW_DRV_TR_STATE` polarity fix depends on it).
-   Source: BACKLOG, firmware/README.md "Upstream defects fixed".
+   Source: BACKLOG, stm32/README.md "Upstream defects fixed".
 5. **Connector column of the wiring table checked against UM2324** (all "VERIFY vs
    UM2324" entries), together with pin AF numbers and I2C `TIMINGR` `0x10B17DB5`
-   against the STM32G0B1 datasheet. Source: firmware/README.md, BACKLOG.
+   against the STM32G0B1 datasheet. Source: stm32/README.md, BACKLOG.
 6. **Real PLL register exports** (placeholders do not lock). See step 3 below.
 7. **FPGA board choice and wrapper:** Cyclone dev board is TBD; a top-level
    wrapper, pin assignments and constraints are needed before any FPGA bring-up
@@ -46,7 +46,7 @@ Tick items on the bench; record anything unexpected in `BACKLOG.md`.
 - [ ] With RF parts not yet populated or rails disconnected, power the board and
   check the rail order with a scope: base rails (FPGA, LO, ADAR, VDD_SW, VSS_SW)
   first, then LNA 3V3, then PA 5 V (the ADTR1107 needs a negative `VGG_PA` before
-  `VDD_PA`). Source: [firmware/README.md, Fault model](../firmware/README.md#fault-model).
+  `VDD_PA`). Source: [stm32/README.md, Fault model](../stm32/README.md#fault-model).
 - [ ] Measure the `CTRL_SW` level (must be receive) **before** the PA rail rises.
   Source: BACKLOG.
 - [ ] Check that the chip-select lines are not back-powering unpowered chips:
@@ -57,17 +57,17 @@ Tick items on the bench; record anything unexpected in `BACKLOG.md`.
 
 ### 2. MCU flash and VCP
 
-- [ ] `cd firmware && make test && make`, then `make flash` (ST-LINK).
-  Source: [firmware/README.md, Build, flash, test](../firmware/README.md#build-flash-test).
+- [ ] `cd stm32 && make test && make`, then `make flash` (ST-LINK).
+  Source: [stm32/README.md, Build, flash, test](../stm32/README.md#build-flash-test).
 - [ ] Open the ST-LINK virtual COM port, 115200 8N1 (USART2, PA2/PA3). Capture the
   log with `python tools/uart_capture.py -p <port>` (give the port explicitly;
   **VERIFY** that the tool's log format matches `diag_log.h`).
 - [ ] The boot log must report the placeholder PLL tables; `status` must answer
-  (`STATUS lock=0 ... fault=1` until the PLL is real). Source: firmware/README.md
+  (`STATUS lock=0 ... fault=1` until the PLL is real). Source: stm32/README.md
   "Warnings", "Serial command interface".
 - [ ] Deliberate watchdog drill: a watchdog reset leaves `fault=13` latched; only a
   power cycle clears it. Also drill `stop` (latched e-stop) and over-temperature
-  handling. Source: BACKLOG "Hardware bring-up checklist", firmware/README.md
+  handling. Source: BACKLOG "Hardware bring-up checklist", stm32/README.md
   "Fault model".
 
 ### 3. PLL export and lock
@@ -75,11 +75,11 @@ Tick items on the bench; record anything unexpected in `BACKLOG.md`.
 - [ ] Export the register table from TICS Pro (LMX2594, "Hex Registers") or ADI ACE
   (ADF4372) for the 10.5 GHz LO setting (symbol names `LMX2594_10500MHZ` /
   `ADF4372_10500MHZ`).
-- [ ] Convert with `firmware/tools/regtable_to_h.py` (run from `firmware/`), for
+- [ ] Convert with `stm32/tools/regtable_to_h.py` (run from `stm32/`), for
   example:
   `tools/regtable_to_h.py --chip lmx2594 --name LMX2594_10500MHZ --settle-ms 10 -o Core/drivers/pll_tables/lmx2594_10500MHz.h tics_export.txt`.
   Do not hand-type the 113 LMX2594 words. Source:
-  [firmware/README.md, PLL register tables](../firmware/README.md#pll-register-tables-from-vendor-exports),
+  [stm32/README.md, PLL register tables](../stm32/README.md#pll-register-tables-from-vendor-exports),
   BACKLOG "Real PLL register exports".
 - [ ] Rebuild, flash, check the lock-detect (PB6, `lock=1` in `status`) and look at
   SPI1 waveforms (8 MHz) and the 100 ms lock timeout. `FAULT_PLL_LOCK` is
@@ -90,7 +90,7 @@ Tick items on the bench; record anything unexpected in `BACKLOG.md`.
 - [ ] Confirm the ADAR1000 scratchpad write/read works; a failure raises
   `FAULT_ADAR_COMM` (code 2, non-latched). Check SPI2 waveforms (16 MHz, mode 0) and
   I2C1 (100 kHz, ADS7830 at `0x48`, temperature on channel 0). Source:
-  firmware/README.md "Fault model", BACKLOG "Hardware bring-up checklist".
+  stm32/README.md "Fault model", BACKLOG "Hardware bring-up checklist".
 - [ ] Verify the temperature reading (`temp=` in deci-degC, `temp_err=0`) and
   that the `HAL`-level SPI/I2C timeouts do not trip.
 - [ ] Check `tx` / `rx` / `auto` mode switching with a scope on TR/`CTRL_SW`
@@ -104,7 +104,7 @@ Tick items on the bench; record anything unexpected in `BACKLOG.md`.
   pinch-off while measuring Idq; the datasheet example is ON `0x39` for about
   220 mA and OFF `0x85`. Then raise `kPaBiasOperational` (the `kBiasDacMaxSafe`
   limit only with the owner's agreement). Source: BACKLOG "Idq calibration",
-  [firmware/README.md, Fault model](../firmware/README.md#fault-model).
+  [stm32/README.md, Fault model](../stm32/README.md#fault-model).
 - [ ] Confirm `PA_ON` is high during this (requirement 3).
 
 ### 6. DIG0-7 against the FPGA
@@ -113,7 +113,7 @@ Tick items on the bench; record anything unexpected in `BACKLOG.md`.
   [architecture.md](architecture.md#fpga---mcu-dig0-7): DIG0..DIG3 toggles/levels
   from the MCU, DIG4 as FPGA reset, DIG5/DIG6 back to the MCU, DIG7 low.
   Source: BACKLOG "Hardware bring-up checklist".
-- [ ] E-stop drill: DIG lines go low before `EN_FPGA`. Source: firmware/README.md
+- [ ] E-stop drill: DIG lines go low before `EN_FPGA`. Source: stm32/README.md
   "Fault model".
 
 ### 7. FPGA board
