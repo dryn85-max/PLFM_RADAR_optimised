@@ -57,9 +57,11 @@ idf.py build flash monitor
 ```
 
 `sdkconfig.defaults` is committed (octal flash and PSRAM, console on
-USB-Serial-JTAG, WebSocket support); `sdkconfig`, `build/` and
+USB-Serial-JTAG, WebSocket support, `CONFIG_LWIP_MAX_SOCKETS=16`: httpd uses
+up to 7 sessions + listen + control, the recording server a listen socket, a
+client and one transient socket); `sdkconfig`, `build/` and
 `managed_components/` are git-ignored. The `espressif/mdns` component is fetched
-at build time (`main/idf_component.yml`, `^1.8.0`).
+at build time, pinned exactly (`main/idf_component.yml`, `==1.14.0`).
 
 If the board does not enter download mode by itself: hold **BOOT**, tap
 **RESET**, release **BOOT**, then flash again.
@@ -109,8 +111,10 @@ clients). The page shows:
 - presence state (none / moving / still / both);
 - moving distance and energy, still distance and energy, detection distance;
 - bar charts of the 9 moving and 9 still gate energies (0-100), only when
-  engineering mode was acknowledged at start, otherwise "engineering mode
-  unavailable".
+  engineering mode was acknowledged, otherwise "engineering mode
+  unavailable". If the enable sequence gets no ACK at boot, it is retried every
+  5 s (at most 5 retries) while no engineering frame has been seen; data
+  reception continues meanwhile.
 
 ## Recorder (PC side)
 
@@ -129,6 +133,10 @@ uv run python host/ld2410_rec.py info run.ldrec
   and written as a gap record. If the ESP32 rebooted (`boot_id` changed) a
   reboot record is written, the sequence baseline is reset and the recorder
   asks again from sequence 0 of the new boot.
+- `pc_time_ns` is taken per batch: all frames of one batch share it (use
+  `esp_time_us` for the spacing of frames inside a batch). Frames evicted from
+  the ring before the first request of a recording are not reported as a gap
+  (there is no baseline sequence to compare with).
 - `export-csv` decodes the raw frames. Columns: `seq, esp_time_us, pc_time_ns,
   data_type, target_state, moving_dist_cm, moving_energy, still_dist_cm,
   still_energy, detect_dist_cm, max_moving_gate, max_still_gate, move_g0..8,

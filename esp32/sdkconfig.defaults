@@ -21,3 +21,8 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 
 # WebSocket support in esp_http_server (live view /ws).
 CONFIG_HTTPD_WS_SUPPORT=y
+
+# Sockets: httpd (7 sessions + listen + control) + recording server (listen,
+# client, one transient while it is being replaced). httpd requires
+# max_open_sockets (7) <= LWIP_MAX_SOCKETS - 3.
+CONFIG_LWIP_MAX_SOCKETS=16

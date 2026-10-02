@@ -81,6 +81,8 @@ static void restart_cb(void *arg)
     esp_restart();
 }
 
+#define WF_RECV_RETRIES 3 /* recv timeouts tolerated while reading the /wifi body */
+
 static esp_err_t wifi_post(httpd_req_t *req)
 {
     if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
@@ -89,9 +91,16 @@ static esp_err_t wifi_post(httpd_req_t *req)
     }
     char body[WF_BODY_MAX];
     size_t got = 0;
+    int timeouts = 0;
     while (got < req->content_len) {
         int r = httpd_req_recv(req, body + got, req->content_len - got);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++timeouts > WF_RECV_RETRIES) {
+                memset(body, 0, sizeof body);
+                return httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, NULL);
+            }
+            continue;
+        }
         if (r <= 0) return ESP_FAIL;
         got += (size_t)r;
     }
@@ -128,6 +137,8 @@ esp_err_t http_srv_start(void)
     if (s_server != NULL) return ESP_ERR_INVALID_STATE;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = 8;
+    /* httpd needs max_open_sockets <= CONFIG_LWIP_MAX_SOCKETS - 3 (16 in sdkconfig.defaults) */
+    cfg.max_open_sockets = 7;
     cfg.close_fn = on_session_close;
     cfg.stack_size = 6144;
     cfg.lru_purge_enable = true;

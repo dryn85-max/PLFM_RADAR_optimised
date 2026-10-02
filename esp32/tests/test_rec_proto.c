@@ -241,6 +241,77 @@ static void test_from_ring(void)
     TT_ASSERT_EQ(-EINVAL, rec_batch_from_ring(NULL, 0, 0x1234u, out, sizeof out, &on, &cnt));
 }
 
+static uint8_t streammem[400];
+
+/* Cursor reuse across batches must equal reopening from the next seq. */
+static void test_stream_equals_reopen(void)
+{
+    rb_t rb; rec_stream_t st; uint8_t a[300], b[300]; size_t an, bn; uint16_t ac, bc;
+    uint8_t raw[30]; uint32_t next = 0xFFFFFFFDu;
+    rb_init(&rb, streammem, sizeof streammem, 0xFFFFFFFDu); /* wraps at 2^32 */
+    rec_stream_init(&st);
+    for (uint32_t round = 0; round < 12; round++) {
+        /* 1-3 new records per round; the 400 B ring holds 9, never evicts a pending one */
+        for (uint32_t i = 0; i < 1 + round % 3; i++) {
+            memset(raw, (int)(round * 7 + i), sizeof raw);
+            rb_push(&rb, round * 100 + i, raw, 30, NULL);
+        }
+        /* cap 20 + 2*44 + 10: two records per batch, so batches continue the cursor */
+        for (int k = 0; k < 3; k++) {
+            size_t cap = 20 + 2 * 44 + 10;
+            TT_ASSERT_EQ(0, rec_stream_batch(&rb, &st, next, 0x77u, a, cap, &an, &ac));
+            TT_ASSERT_EQ(0, rec_batch_from_ring(&rb, next, 0x77u, b, cap, &bn, &bc));
+            TT_ASSERT_EQ(bn, an); TT_ASSERT_EQ(bc, ac);
+            TT_ASSERT(memcmp(a, b, an) == 0);
+            TT_ASSERT_EQ(0, rec_batch_next_seq(a, an, &next));
+        }
+    }
+    TT_ASSERT_EQ(next, rb_next_seq(&rb));
+}
+
+static void test_stream_stale(void)
+{
+    rb_t rb; rec_stream_t st; uint8_t out[400]; size_t on; uint16_t cnt; rec_batch_hdr_t h;
+    uint8_t raw[30]; uint8_t m[200];
+    rb_init(&rb, m, sizeof m, 0);
+    rec_stream_init(&st);
+    memset(raw, 1, sizeof raw);
+    for (uint32_t i = 0; i < 3; i++) rb_push(&rb, i, raw, 30, NULL);
+    TT_ASSERT_EQ(0, rec_stream_batch(&rb, &st, 0, 0x77u, out, sizeof out, &on, &cnt));
+    TT_ASSERT_EQ(3, cnt); TT_ASSERT_EQ(0, out[5]);
+    /* caught up: keep-alive, no gap */
+    TT_ASSERT_EQ(0, rec_stream_batch(&rb, &st, 0, 0x77u, out, sizeof out, &on, &cnt));
+    TT_ASSERT_EQ(0, cnt); TT_ASSERT_EQ(0, out[5]); TT_ASSERT_EQ(3, rd32(out + 8));
+    /* push 10 more: cursor (seq 3) is evicted (ring holds 4) */
+    for (uint32_t i = 3; i < 13; i++) rb_push(&rb, i, raw, 30, NULL);
+    TT_ASSERT_EQ(0, rec_stream_batch(&rb, &st, 0, 0x77u, out, sizeof out, &on, &cnt));
+    TT_ASSERT_EQ(0, rec_batch_parse_header(out, on, &h));
+    TT_ASSERT_EQ(REC_FLAG_GAP, h.flags); TT_ASSERT_EQ(9, h.first_seq); TT_ASSERT_EQ(4, h.count);
+    /* afterwards no gap again */
+    rb_push(&rb, 13, raw, 30, NULL);
+    TT_ASSERT_EQ(0, rec_stream_batch(&rb, &st, 0, 0x77u, out, sizeof out, &on, &cnt));
+    TT_ASSERT_EQ(0, out[5]); TT_ASSERT_EQ(13, rd32(out + 8)); TT_ASSERT_EQ(1, cnt);
+    TT_ASSERT_EQ(-EINVAL, rec_stream_batch(&rb, NULL, 0, 0x77u, out, sizeof out, &on, &cnt));
+}
+
+static void test_stream_wrap_stale(void)
+{
+    /* eviction across the 2^32 seq wrap */
+    rb_t rb; rec_stream_t st; uint8_t out[400]; size_t on; uint16_t cnt; rec_batch_hdr_t h;
+    uint8_t raw[30] = {0}; uint8_t m[200];
+    rb_init(&rb, m, sizeof m, 0xFFFFFFFEu);
+    rec_stream_init(&st);
+    rb_push(&rb, 0, raw, 30, NULL);
+    TT_ASSERT_EQ(0, rec_stream_batch(&rb, &st, 0xFFFFFFFEu, 0x77u, out, sizeof out, &on, &cnt));
+    TT_ASSERT_EQ(1, cnt);
+    for (uint32_t i = 0; i < 8; i++) rb_push(&rb, i, raw, 30, NULL); /* oldest = 0xFFFFFFFF+5-3.. */
+    TT_ASSERT_EQ(0, rec_stream_batch(&rb, &st, 0, 0x77u, out, sizeof out, &on, &cnt));
+    TT_ASSERT_EQ(0, rec_batch_parse_header(out, on, &h));
+    TT_ASSERT_EQ(REC_FLAG_GAP, h.flags);
+    uint32_t oldest; rb_oldest_seq(&rb, &oldest);
+    TT_ASSERT_EQ(oldest, h.first_seq); TT_ASSERT_EQ(4, h.count);
+}
+
 int main(void)
 {
     TT_RUN(test_request);
@@ -250,5 +321,8 @@ int main(void)
     TT_RUN(test_vector_reboot);
     TT_RUN(test_batch_helpers);
     TT_RUN(test_from_ring);
+    TT_RUN(test_stream_equals_reopen);
+    TT_RUN(test_stream_stale);
+    TT_RUN(test_stream_wrap_stale);
     return TT_RESULT();
 }

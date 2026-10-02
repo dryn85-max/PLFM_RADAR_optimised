@@ -8,6 +8,7 @@
 
 #include "esp_err.h"
 #include "ld2410_frame.h"
+#include "rec_proto.h"
 #include "ringbuf.h"
 
 typedef enum {
@@ -31,7 +32,7 @@ esp_err_t ld2410_start(void *ring_mem, size_t ring_cap);
 bool ld2410_get_snapshot(ld_snapshot_t *out);
 
 ld_link_t ld2410_link_status(void);
-/* Whether engineering mode was acknowledged at start. */
+/* Whether engineering mode was acknowledged (at boot or by a later retry). */
 bool ld2410_engineering_enabled(void);
 
 /* Ring access for readers. Hold the lock only while copying; never block
@@ -40,9 +41,9 @@ void ld2410_ring_lock(void);
 void ld2410_ring_unlock(void);
 const rb_t *ld2410_ring(void); /* use only between lock and unlock */
 
-/* Convenience: lock, rec_batch_from_ring(), unlock. Returns what
- * rec_batch_from_ring returns. */
-int ld2410_ring_batch(uint32_t from_seq, uint32_t boot_id, uint8_t *buf, size_t cap,
-                      size_t *out_len, uint16_t *count);
+/* Convenience: lock, rec_stream_batch(), unlock. Returns what
+ * rec_stream_batch returns. st is the caller's per-connection cursor. */
+int ld2410_ring_batch(rec_stream_t *st, uint32_t from_seq, uint32_t boot_id,
+                      uint8_t *buf, size_t cap, size_t *out_len, uint16_t *count);
 
 #endif

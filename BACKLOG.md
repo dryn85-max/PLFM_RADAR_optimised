@@ -89,9 +89,9 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   (`esp32/tests/vectors/`, currently synthetic) against it and a real capture
   (engineering frame layout incl. the extra module-specific bytes, ACK
   sequence, frame rate, maximum payload length).
-- [ ] **Pin the `espressif/mdns` component version and commit
-  `esp32/dependencies.lock`** (now `^1.8.0` and the lock file is git-ignored),
-  so builds are reproducible.
+- [ ] **Commit `esp32/dependencies.lock`.** The `espressif/mdns` version is now
+  pinned exactly (`==1.14.0`, as resolved by CI) but the lock file is still
+  git-ignored and not committed; commit it for fully reproducible builds.
 - [ ] **TCP keepalive for the recording server** (only 1 s keep-alive batches and
   5 s socket timeouts today); a half-open connection from a vanished client is
   noticed by the send timeout only.

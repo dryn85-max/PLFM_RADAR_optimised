@@ -3,16 +3,16 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #include "http_srv.h"
 #include "ld2410_task.h"
 #include "snapshot_json.h"
 #include "ws_slots.h"
 
-#define LIVE_PERIOD_US 100000 /* 10 Hz */
+#define LIVE_PERIOD_MS 100 /* 10 Hz */
 /* Longest snapshot JSON is about 330 bytes (engineering frame); keep wide margin. */
 #define LIVE_JSON_MAX 768
 #define LIVE_RX_MAX 128 /* client frames are ignored; bigger ones close the socket */
@@ -25,8 +25,8 @@ static SemaphoreHandle_t s_lock;
 static ws_slots_t s_slots;                 /* guarded by s_lock */
 static char s_buf[WS_SLOTS_MAX][LIVE_JSON_MAX]; /* slot idx buffer: written only while not in flight */
 static size_t s_len[WS_SLOTS_MAX];
-static char s_tmp[LIVE_JSON_MAX];          /* timer task only */
-static esp_timer_handle_t s_timer;
+static char s_tmp[LIVE_JSON_MAX];          /* broadcaster task only */
+static TaskHandle_t s_task;
 
 static void on_close(int fd)
 {
@@ -108,9 +108,8 @@ static void send_work(void *arg)
     }
 }
 
-static void tick(void *arg)
+static void tick(void)
 {
-    (void)arg;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     int clients = ws_slots_count(&s_slots);
     xSemaphoreGive(s_lock);
@@ -153,17 +152,27 @@ static void tick(void *arg)
     }
 }
 
+/* Dedicated task (not the shared esp_timer task): it takes mutexes and queues
+ * work to httpd. Latest-only: a slot with a send still pending is skipped. */
+static void live_task(void *arg)
+{
+    (void)arg;
+    TickType_t last = xTaskGetTickCount();
+    for (;;) {
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(LIVE_PERIOD_MS));
+        tick();
+    }
+}
+
 esp_err_t live_start(void)
 {
-    if (s_lock == NULL || http_srv_handle() == NULL || s_timer != NULL) return ESP_ERR_INVALID_STATE;
+    if (s_lock == NULL || http_srv_handle() == NULL || s_task != NULL) return ESP_ERR_INVALID_STATE;
     static const httpd_uri_t get_page = {.uri = "/", .method = HTTP_GET, .handler = page_get};
     static const httpd_uri_t get_ws = {.uri = "/ws", .method = HTTP_GET, .handler = ws_handler,
                                        .is_websocket = true};
     esp_err_t err = http_srv_register(&get_page);
     if (err == ESP_OK) err = http_srv_register(&get_ws);
     if (err != ESP_OK) return err;
-    const esp_timer_create_args_t targs = {.callback = tick, .name = "live_10hz"};
-    err = esp_timer_create(&targs, &s_timer);
-    if (err == ESP_OK) err = esp_timer_start_periodic(s_timer, LIVE_PERIOD_US);
-    return err;
+    BaseType_t ok = xTaskCreate(live_task, "live_10hz", 4096, NULL, 4, &s_task);
+    return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

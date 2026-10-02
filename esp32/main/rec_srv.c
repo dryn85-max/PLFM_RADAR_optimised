@@ -84,6 +84,8 @@ static void serve(int fd)
 {
     uint8_t req[REC_REQ_LEN];
     uint32_t seq = 0;
+    rec_stream_t stream; /* cursor kept across batches, see rec_stream_batch() */
+    rec_stream_init(&stream);
 
     set_timeout(fd, SO_RCVTIMEO, REQ_TIMEOUT_S);
     set_timeout(fd, SO_SNDTIMEO, SEND_TIMEOUT_S);
@@ -101,7 +103,7 @@ static void serve(int fd)
     while (!preempted()) {
         size_t len = 0;
         uint16_t count = 0;
-        rc = ld2410_ring_batch(seq, s_boot_id, s_batch, sizeof s_batch, &len, &count);
+        rc = ld2410_ring_batch(&stream, seq, s_boot_id, s_batch, sizeof s_batch, &len, &count);
         if (rc != 0) {
             ESP_LOGE(TAG, "batch build failed (%d)", rc);
             return;
@@ -110,7 +112,8 @@ static void serve(int fd)
             ESP_LOGW(TAG, "send failed (errno %d)", errno);
             return;
         }
-        /* first_seq + count, not seq + count: after a GAP the batch starts later. */
+        /* Only the first call uses seq; later batches continue the cursor
+         * (and reopen it with GAP if its record was evicted). */
         if (rec_batch_next_seq(s_batch, len, &seq) != 0)
             return;
         if (count > 0 && rec_batch_maybe_truncated(len, sizeof s_batch))
@@ -128,8 +131,15 @@ static void serve_task(void *arg)
         int fd;
         if (xQueueReceive(s_new_fd_q, &fd, portMAX_DELAY) != pdTRUE)
             continue;
+        /* Taking ownership and the "was I already replaced?" check are one
+         * critical section; the accept task queues new sockets under the same
+         * mutex. Either it ran before (the queue is non-empty here and we
+         * shutdown() our own fd, so serve() fails at once) or after (it sees
+         * s_cur_fd and shutdown()s it). A new client never waits for a timeout. */
         xSemaphoreTake(s_cur_mtx, portMAX_DELAY);
         s_cur_fd = fd;
+        if (preempted())
+            shutdown(fd, SHUT_RDWR);
         xSemaphoreGive(s_cur_mtx);
 
         serve(fd);
@@ -175,14 +185,14 @@ static void accept_task(void *arg)
                 break; /* recreate the listening socket */
             }
             /* A new connection replaces the current one. */
+            xSemaphoreTake(s_cur_mtx, portMAX_DELAY);
             int stale;
             while (xQueueReceive(s_new_fd_q, &stale, 0) == pdTRUE)
                 close(stale); /* accepted but never served */
-            xSemaphoreTake(s_cur_mtx, portMAX_DELAY);
             if (s_cur_fd >= 0)
                 shutdown(s_cur_fd, SHUT_RDWR);
-            xSemaphoreGive(s_cur_mtx);
             xQueueSend(s_new_fd_q, &fd, 0); /* queue is empty: cannot fail */
+            xSemaphoreGive(s_cur_mtx);
             xTaskNotifyGive(s_serve_task);  /* cut the 1 s wait short */
         }
         close(lfd);

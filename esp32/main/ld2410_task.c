@@ -24,6 +24,8 @@
 #define LD_ACK_TIMEOUT_MS 500
 #define LD_LOST_US 1000000
 #define LD_RATE_LOG_US 10000000
+#define LD_ENG_RETRY_US 5000000 /* between engineering-mode enable attempts */
+#define LD_ENG_RETRIES 5        /* retries after the boot attempt */
 
 static const char *TAG = "ld2410";
 
@@ -40,6 +42,7 @@ typedef struct {
     bool ack_seen;
     uint16_t ack_status;
     uint32_t frames_window; /* data frames since last rate log */
+    bool eng_frames_seen;   /* an engineering data frame was decoded */
 } ld_ctx_t;
 
 static void on_data(const ld_frame_t *f, ld_ctx_t *ctx)
@@ -49,7 +52,11 @@ static void on_data(const ld_frame_t *f, ld_ctx_t *ctx)
         ESP_LOGW(TAG, "bad data frame (%u bytes)", (unsigned)f->raw_len);
         return;
     }
+    /* Stamped when the parser completes the frame, not once per UART read. */
     uint64_t now = (uint64_t)esp_timer_get_time();
+    if (d.engineering) {
+        ctx->eng_frames_seen = true;
+    }
     uint32_t seq = 0;
     int rc;
 
@@ -85,13 +92,25 @@ static void on_frame(const ld_frame_t *f, void *vctx)
     }
 }
 
+/* Wait up to `wait` for at least one byte, then take whatever is buffered
+ * (never more than one chunk) without waiting, so frames are parsed as soon as
+ * they arrive instead of being batched behind a 256-byte read. */
 static void pump(ld_ctx_t *ctx, TickType_t wait)
 {
     uint8_t chunk[LD_READ_CHUNK];
-    int n = uart_read_bytes(LD_UART, chunk, sizeof(chunk), wait);
-    if (n > 0) {
-        ld_parser_feed(&s_parser, chunk, (size_t)n, on_frame, ctx);
+    int n = uart_read_bytes(LD_UART, chunk, 1, wait);
+    if (n <= 0) {
+        return;
     }
+    size_t buffered = 0;
+    if (uart_get_buffered_data_len(LD_UART, &buffered) == ESP_OK && buffered > 0) {
+        size_t room = sizeof(chunk) - (size_t)n;
+        int m = uart_read_bytes(LD_UART, chunk + n, buffered < room ? buffered : room, 0);
+        if (m > 0) {
+            n += m;
+        }
+    }
+    ld_parser_feed(&s_parser, chunk, (size_t)n, on_frame, ctx);
 }
 
 /* Send one encoded command and wait for its ACK. Returns true on ACK status 0. */
@@ -160,9 +179,21 @@ static void ld2410_task(void *arg)
     enable_engineering(&ctx);
 
     int64_t window_start = esp_timer_get_time();
+    int64_t last_eng_try = window_start;
+    int eng_retries = 0;
     for (;;) {
         pump(&ctx, pdMS_TO_TICKS(100));
         int64_t now = esp_timer_get_time();
+        /* Engineering mode was not acknowledged at boot: retry now and then.
+         * Data frames keep being parsed inside send_cmd()'s pump loop. */
+        if (!s_engineering && !ctx.eng_frames_seen && eng_retries < LD_ENG_RETRIES &&
+            now - last_eng_try >= LD_ENG_RETRY_US) {
+            eng_retries++;
+            ESP_LOGI(TAG, "retrying engineering mode (%d/%d)", eng_retries, LD_ENG_RETRIES);
+            enable_engineering(&ctx);
+            last_eng_try = esp_timer_get_time();
+            now = last_eng_try;
+        }
         if (now - window_start >= LD_RATE_LOG_US) {
             float secs = (float)(now - window_start) / 1e6f;
             ESP_LOGI(TAG, "%.1f frames/s, parser dropped %" PRIu32 " bytes",
@@ -255,11 +286,11 @@ const rb_t *ld2410_ring(void)
     return &s_ring;
 }
 
-int ld2410_ring_batch(uint32_t from_seq, uint32_t boot_id, uint8_t *buf, size_t cap,
-                      size_t *out_len, uint16_t *count)
+int ld2410_ring_batch(rec_stream_t *st, uint32_t from_seq, uint32_t boot_id,
+                      uint8_t *buf, size_t cap, size_t *out_len, uint16_t *count)
 {
     ld2410_ring_lock();
-    int rc = rec_batch_from_ring(&s_ring, from_seq, boot_id, buf, cap, out_len, count);
+    int rc = rec_stream_batch(&s_ring, st, from_seq, boot_id, buf, cap, out_len, count);
     ld2410_ring_unlock();
     return rc;
 }

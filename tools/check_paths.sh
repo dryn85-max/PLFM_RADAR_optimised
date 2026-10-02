@@ -20,6 +20,10 @@ pattern='(?<!legacy/)(?<!legacy/9_Firmware/)(9_Firmware|9_1_Microcontroller|9_2_
 # not be preceded by a path or word character, so `stm32/firmware/` and
 # `legacy/.../firmware/` are not flagged, only a top-level `firmware/`.
 pattern_fw='(^|[^A-Za-z0-9_./-])firmware/'
+# Relative forms `./firmware/`, `../firmware/` and bare directory uses such as
+# `cd firmware`, `make -C firmware`, `working-directory: firmware`. Prose
+# ("G0B1 firmware", "firmware `STATUS`") does not match.
+pattern_fw2='\.\.?/firmware/|(\bcd|-C|working-directory:)[ \t]+["'"'"']?\.?/?firmware(?![A-Za-z0-9_.-])'
 
 errfile=$(mktemp)
 listfile=$(mktemp)
@@ -33,6 +37,9 @@ hits=$({ xargs -0 grep -InP -e "$pattern" -- <"$listfile" 2>"$errfile" || true; 
   | { grep -v 'path-gate: legacy-ref' || [ $? -eq 1 ]; })
 hits_fw=$({ xargs -0 grep -InP -e "$pattern_fw" -- <"$listfile" 2>>"$errfile" || true; } \
   | { grep -v 'path-gate: legacy-ref' || [ $? -eq 1 ]; })
+hits_fw2=$({ xargs -0 grep -InP -e "$pattern_fw2" -- <"$listfile" 2>>"$errfile" || true; } \
+  | { grep -v 'path-gate: legacy-ref' || [ $? -eq 1 ]; })
+hits_fw="$hits_fw${hits_fw2:+${hits_fw:+$'\n'}$hits_fw2}"
 hits="$hits${hits_fw:+${hits:+$'\n'}$hits_fw}"
 
 if [ -s "$errfile" ]; then

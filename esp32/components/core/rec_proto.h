@@ -61,6 +61,23 @@ int rec_batch_parse_header(const uint8_t *buf, size_t len, rec_batch_hdr_t *h);
 int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint32_t boot_id,
                         uint8_t *buf, size_t cap, size_t *out_len, uint16_t *count);
 
+/* Streaming variant: keeps an rb_cursor_t across batches so each batch
+ * continues where the previous one stopped instead of walking the ring from
+ * the oldest record. The first call opens the cursor at from_seq (GAP like
+ * rec_batch_from_ring); later calls ignore from_seq and continue. If the
+ * cursor's next record was evicted meanwhile (-ESTALE), it is reopened at the
+ * oldest stored record and the batch carries GAP. Same return codes as
+ * rec_batch_from_ring. The caller holds the ring lock for the duration. */
+typedef struct {
+    rb_cursor_t cur;
+    int open;
+} rec_stream_t;
+
+void rec_stream_init(rec_stream_t *st);
+int rec_stream_batch(const rb_t *rb, rec_stream_t *st, uint32_t from_seq,
+                     uint32_t boot_id, uint8_t *buf, size_t cap, size_t *out_len,
+                     uint16_t *count);
+
 /* Seq the client should request next after this encoded batch: first_seq +
  * count (wrap-safe). Differs from the requested seq after a GAP. 0, -EINVAL,
  * -EBADMSG (shorter than a header, bad header). */

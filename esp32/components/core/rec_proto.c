@@ -95,18 +95,12 @@ int rec_batch_parse_header(const uint8_t *buf, size_t len, rec_batch_hdr_t *h)
     return 0;
 }
 
-int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint32_t boot_id,
-                        uint8_t *buf, size_t cap, size_t *out_len, uint16_t *count)
+/* Fill one batch from an already positioned cursor. */
+static int fill_batch(const rb_t *rb, rb_cursor_t *cur, int gap, uint32_t boot_id,
+                      uint8_t *buf, size_t cap, size_t *out_len, uint16_t *count)
 {
-    if (!rb || !buf || !out_len || !count)
-        return -EINVAL;
-    rb_cursor_t cur;
-    int gap = 0;
-    int rc = rb_cursor_open(rb, from_seq, &cur, &gap);
-    if (rc)
-        return rc;
     rec_batch_t b;
-    rc = rec_batch_begin(&b, buf, cap, cur.seq, gap ? REC_FLAG_GAP : 0, boot_id);
+    int rc = rec_batch_begin(&b, buf, cap, cur->seq, gap ? REC_FLAG_GAP : 0, boot_id);
     if (rc)
         return rc;
     uint8_t raw[RB_MAX_RAW];
@@ -114,7 +108,7 @@ int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint32_t boot_id,
         uint32_t seq;
         uint64_t t;
         size_t len;
-        rc = rb_cursor_peek(rb, &cur, &seq, &t, raw, sizeof raw, &len);
+        rc = rb_cursor_peek(rb, cur, &seq, &t, raw, sizeof raw, &len);
         if (rc == -ENOENT)
             break;
         if (rc)
@@ -127,11 +121,61 @@ int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint32_t boot_id,
         }
         if (rc)
             return rc;
-        rb_cursor_advance(rb, &cur);
+        rb_cursor_advance(rb, cur);
     }
     *out_len = rec_batch_finish(&b);
     *count = b.count;
     return 0;
+}
+
+int rec_batch_from_ring(const rb_t *rb, uint32_t from_seq, uint32_t boot_id,
+                        uint8_t *buf, size_t cap, size_t *out_len, uint16_t *count)
+{
+    if (!rb || !buf || !out_len || !count)
+        return -EINVAL;
+    rb_cursor_t cur;
+    int gap = 0;
+    int rc = rb_cursor_open(rb, from_seq, &cur, &gap);
+    if (rc)
+        return rc;
+    return fill_batch(rb, &cur, gap, boot_id, buf, cap, out_len, count);
+}
+
+void rec_stream_init(rec_stream_t *st)
+{
+    if (st)
+        st->open = 0;
+}
+
+int rec_stream_batch(const rb_t *rb, rec_stream_t *st, uint32_t from_seq,
+                     uint32_t boot_id, uint8_t *buf, size_t cap, size_t *out_len,
+                     uint16_t *count)
+{
+    if (!rb || !st || !buf || !out_len || !count)
+        return -EINVAL;
+    int gap = 0;
+    int rc;
+    if (st->open) {
+        /* cap 0 probe: only the position check matters (-EMSGSIZE = a record is there). */
+        uint32_t seq;
+        uint64_t t;
+        size_t len;
+        rc = rb_cursor_peek(rb, &st->cur, &seq, &t, NULL, 0, &len);
+        if (rc == -ESTALE) {
+            /* evicted under the cursor: restart at the oldest record, with GAP */
+            rc = rb_cursor_open(rb, st->cur.seq, &st->cur, &gap);
+            if (rc)
+                return rc;
+        } else if (rc != 0 && rc != -ENOENT && rc != -EMSGSIZE) {
+            return rc;
+        }
+    } else {
+        rc = rb_cursor_open(rb, from_seq, &st->cur, &gap);
+        if (rc)
+            return rc;
+        st->open = 1;
+    }
+    return fill_batch(rb, &st->cur, gap, boot_id, buf, cap, out_len, count);
 }
 
 int rec_batch_next_seq(const uint8_t *buf, size_t len, uint32_t *next)
