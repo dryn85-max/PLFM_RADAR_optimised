@@ -37,7 +37,7 @@
 ## Task 2: LED driver, BOOT monitor, AP on demand (esp32/main)
 
 - [ ] `main/rgb_led.[ch]`: RMT TX (`esp_driver_rmt`) bytes encoder, WS2812 timing, GRB, GPIO38
-  constant (VERIFY), brightness constant ~5 %; `rgb_led_set(r,g,b)`.
+  constant (confirmed, see spec R1; WS2812 timing VERIFY), brightness constant ~5 %; `rgb_led_set(r,g,b)`.
 - [ ] `main/status_led_task.c` (or inside `rgb_led.c`): 20 ms tick, computes the colour with
   core `status_led`, writes only on change. Setters: button zone, AP state, flash.
 - [ ] `wifi_mgr.c`: BOOT monitor uses core `boot_btn` (action on release); `wifi_mgr_ap_on_demand()`;

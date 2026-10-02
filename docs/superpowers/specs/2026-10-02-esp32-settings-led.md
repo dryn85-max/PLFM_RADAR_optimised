@@ -42,7 +42,11 @@ erases the home Wi-Fi credentials). The live page has no authentication.
 
 ### R1. RGB LED
 - The DevKitC-1 v1.1 on-board addressable RGB LED (WS2812-type), data on **GPIO38**
-  (**VERIFY** against the board silkscreen/user guide; v1.0 boards use GPIO48). One constant.
+  (`hardware/datasheets/esp_dev_kits_en_master_esp32s3-3540495.pdf`, ch. 1 ESP32-S3-DevKitC-1,
+  "Description of Components", p. 4: "Addressable RGB LED, driven by GPIO38"; "Hardware Revision
+  Details", p. 5: the initial version uses GPIO48, v1.1 GPIO38). One constant. GPIO38 is not a
+  strapping pin and not one of GPIO35-37 taken by the octal flash/PSRAM (same document, p. 4-5).
+  The WS2812 part number and its timing are not in the document: timing VERIFY.
 - Driven with the ESP-IDF v5.5 RMT TX driver (`esp_driver_rmt`) and a small bytes encoder
   (WS2812 timing, GRB order), no new managed component. Brightness about 5 % (one constant).
 - One `status_led` task owns the LED; others only set state. A failing LED init is logged and
