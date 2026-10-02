@@ -23,3 +23,6 @@ restructure plan and stay referenced from here).
 | `7_Components Datasheets and Application notes/` | Datasheets of parts Lite does not use. The five we do use (ADAR1000, ADTR1107, ADS7830, TMP35/36/37, FT2232H) live in `hardware/datasheets/`. |
 | `8_Utils/` | Upstream images, Eagle CAD libraries, mechanical drawings and helper scripts for the original hardware. |
 | `docs-site/` (`*.html`, `*.pdf`, `assets/`, `artifacts/`, `.nojekyll`) | Upstream GitHub Pages site, reports and Xilinx TE0713 bring-up artifacts; they describe the upstream system. Lite's own plans and specs stay in `docs/superpowers/`. |
+| `9_Firmware/9_1_Microcontroller/` | Upstream STM32F7 firmware (libraries, algorithms, application code) and its unit tests. Kept as reference for the G0B1 port; the unit tests under `tests/` still run in CI as "Legacy F7 MCU tests" per the G0B1 spec. |
+| `9_Firmware/9_2_FPGA/` | Xilinx-only parts of the upstream FPGA tree: build scripts, constraints (XC7A50T/XC7A200T boards) and the TE0712/TE0713 development tops. Lite's FPGA design is in `fpga/`. |
+| `9_Firmware/9_3_GUI/` | Older GUIs (V5, V6, V6.5 Tk, PyQt map) with their requirements, `adi_agc_analysis.py` (needs `host/v7/agc_sim.py` on its import path) and `test_radar_data.csv`. `test_GUI_V65_Tk.py` is no longer run in CI. Lite uses the V7 GUI in `host/`. |

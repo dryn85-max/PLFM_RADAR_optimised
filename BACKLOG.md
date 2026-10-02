@@ -131,3 +131,7 @@ Context: `fpga/README.md` (known limitations a-l).
   equation were written without `sby` available; run them (bmc and cover) and
   fix the wrapper if clk2fflogic timing makes the monitor off by one. The
   simulation stress test in `tb/tb_cdc_modules.v` is the evidence so far.
+- [ ] **Adapt the host GUI (`host/`) to the 4-channel prototype and the G0B1
+  `STATUS` line.** The V7 GUI is the unchanged upstream one: it assumes the
+  upstream channel/beam configuration and does not parse the G0B1 `STATUS`
+  line (see also "GUI parser for `STATUS` lines" in the G0B1 track).

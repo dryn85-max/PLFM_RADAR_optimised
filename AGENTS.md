@@ -90,7 +90,7 @@ GPT-5.5 is not used.
   The RTL (`radar_system_top.v`) is the single source of truth for opcode
   values, bit widths and reset defaults. No SystemVerilog, no `$clog2`.
 - Python (GUI/scripts/tests): `uv run ruff check .`;
-  `cd 9_Firmware/9_3_GUI && uv run pytest test_GUI_V65_Tk.py test_v7.py -v`.
+  `cd host && uv run pytest test_v7.py -v`.
 - MCU, legacy F7 tree (reference only, do not modify):
   `cd legacy/9_Firmware/9_1_Microcontroller/tests && make clean && make`.
 - MCU, STM32G0B1 port: `cd firmware && make test && make`

@@ -23,7 +23,7 @@ if USB_AVAILABLE:
 
 # Import production protocol layer — single source of truth for FPGA comms
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from radar_protocol import (  # noqa: F401 — re-exported for v7 package
+from radar_protocol import (
     FT2232HConnection,
     FT601Connection,
     RadarProtocol,

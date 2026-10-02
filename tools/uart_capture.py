@@ -47,7 +47,7 @@ except ImportError:
 
 DEFAULT_BAUD = 115200
 ENCODING = "utf-8"
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "logs")
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
 
 # ANSI color codes for terminal
 COLORS = {

@@ -24,7 +24,7 @@ from pathlib import Path
 # Repository layout (relative to repo root)
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[3]
-GUI_DIR = REPO_ROOT / "9_Firmware" / "9_3_GUI"
+GUI_DIR = REPO_ROOT / "host"
 FPGA_DIR = REPO_ROOT / "fpga"
 MCU_DIR = REPO_ROOT / "legacy" / "9_Firmware" / "9_1_Microcontroller"
 MCU_LIB_DIR = MCU_DIR / "9_1_1_C_Cpp_Libraries"
