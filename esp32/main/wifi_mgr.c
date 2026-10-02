@@ -443,11 +443,11 @@ static void boot_monitor_task(void *arg)
 {
     (void)arg;
     bb_t bb;
-    bb_init(&bb, gpio_get_level(BOOT_GPIO) == 0); /* low at start: ignore until released once */
+    bootbtn_init(&bb, gpio_get_level(BOOT_GPIO) == 0); /* low at start: ignore until released once */
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(BOOT_POLL_MS));
-        bb_act_t act = bb_step(&bb, gpio_get_level(BOOT_GPIO) == 0, BOOT_POLL_MS);
-        status_led_set_button(bb_is_held(&bb), bb_held_zone(&bb));
+        bb_act_t act = bootbtn_step(&bb, gpio_get_level(BOOT_GPIO) == 0, BOOT_POLL_MS);
+        status_led_set_button(bootbtn_is_held(&bb), bootbtn_held_zone(&bb));
         if (act == BB_ACT_AP) {
             if (wifi_mgr_ap_on_demand() == ESP_OK) status_led_flash(SL_BLUE); /* no flash on failure */
         } else if (act == BB_ACT_RESET) {

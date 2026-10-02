@@ -25,15 +25,15 @@ typedef struct {
 
 /* pressed_at_boot: the button was already down when the application started
  * (GPIO0 low at reset is download mode); nothing fires until it is released once. */
-void bb_init(bb_t *b, bool pressed_at_boot);
+void bootbtn_init(bb_t *b, bool pressed_at_boot);
 /* Zone of a hold time. */
-bb_zone_t bb_zone(uint32_t held_ms);
+bb_zone_t bootbtn_zone(uint32_t held_ms);
 /* One sample. Returns the action on the release edge (BB_ACT_NONE otherwise, and for the
  * NONE/CANCEL zones and the release of a held-at-boot press). */
-bb_act_t bb_step(bb_t *b, bool pressed, uint32_t dt_ms);
+bb_act_t bootbtn_step(bb_t *b, bool pressed, uint32_t dt_ms);
 /* Current zone while a real press is held; BB_ZONE_NONE when not held or ignored. */
-bb_zone_t bb_held_zone(const bb_t *b);
+bb_zone_t bootbtn_held_zone(const bb_t *b);
 /* True while a real (not ignored) press is held: the LED shows the zone colour. */
-bool bb_is_held(const bb_t *b);
+bool bootbtn_is_held(const bb_t *b);
 
 #endif

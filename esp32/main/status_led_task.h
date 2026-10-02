@@ -11,7 +11,7 @@
 /* rgb_led_init() + the task. An error is returned for logging; nothing else depends on it. */
 esp_err_t status_led_start(void);
 
-/* BOOT button held (bb_is_held) and its zone (bb_held_zone). */
+/* BOOT button held (bootbtn_is_held) and its zone (bootbtn_held_zone). */
 void status_led_set_button(bool held, bb_zone_t zone);
 /* AP state; a change to SL_AP_ON_DEMAND restarts the blink phase. */
 void status_led_set_ap(sl_ap_t ap);

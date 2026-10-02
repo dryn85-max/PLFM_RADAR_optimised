@@ -25,8 +25,8 @@ typedef struct { uint8_t r, g, b; } sl_rgb_t;
 typedef enum { SL_AP_OFF = 0, SL_AP_ON_DEMAND = 1, SL_AP_ONLY = 2 } sl_ap_t;
 
 typedef struct {
-    bool held;              /* button currently held (bb_is_held) */
-    bb_zone_t zone;         /* its zone (bb_held_zone); NONE/CANCEL zones show off */
+    bool held;              /* button currently held (bootbtn_is_held) */
+    bb_zone_t zone;         /* its zone (bootbtn_held_zone); NONE/CANCEL zones show off */
     sl_ap_t ap;
     sl_rgb_t flash_color;   /* confirmation flash: SL_FLASH_COUNT x (100 ms on, 100 ms off) */
     uint32_t flash_start_ms;
