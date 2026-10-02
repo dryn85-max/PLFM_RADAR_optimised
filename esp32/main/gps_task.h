@@ -32,4 +32,7 @@ bool gps_get_snapshot(gps_snapshot_t *out);
 
 gps_link_t gps_status(void);
 
+/* esp_timer time of the latest GPS time_sync record, 0 if none yet. */
+uint64_t gps_last_time_sync_us(void);
+
 #endif

@@ -36,6 +36,7 @@ static SemaphoreHandle_t s_mtx; /* guards everything shared below */
 static gps_snapshot_t s_snap;
 static bool s_any_bytes;
 static uint64_t s_last_good_us;
+static uint64_t s_last_sync_us; /* esp_time of the latest GPS time_sync record, 0 = none */
 
 /* Callback context, only the GPS task touches it. */
 typedef struct {
@@ -66,6 +67,9 @@ static void on_event(const nmea_event_t *ev, void *vctx)
             uint8_t buf[REC_TIME_SYNC_LEN];
             if (rec_time_sync_encode(buf, &ts) == 0) {
                 push_record(ctx->rmc_us, REC_TYPE_TIME_SYNC, buf, sizeof(buf));
+                xSemaphoreTake(s_mtx, portMAX_DELAY);
+                s_last_sync_us = ctx->rmc_us;
+                xSemaphoreGive(s_mtx);
             }
         }
         return;
@@ -158,6 +162,7 @@ esp_err_t gps_start(void)
     memset(&s_snap, 0, sizeof(s_snap));
     s_any_bytes = false;
     s_last_good_us = 0;
+    s_last_sync_us = 0;
 
     const uart_config_t cfg = {
         .baud_rate = GPS_BAUD,
@@ -211,4 +216,15 @@ gps_link_t gps_status(void)
         return GPS_LINK_SILENT;
     }
     return GPS_LINK_OK;
+}
+
+uint64_t gps_last_time_sync_us(void)
+{
+    if (s_mtx == NULL) {
+        return 0;
+    }
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint64_t t = s_last_sync_us;
+    xSemaphoreGive(s_mtx);
+    return t;
 }

@@ -37,6 +37,7 @@
 
 #include "wifi_form.h"
 #include "wifi_scan.h"
+#include "sntp_sync.h"
 
 #define NVS_NS "wifi"
 #define KEY_SSID "ssid"
@@ -158,6 +159,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         s_backoff_ms = BACKOFF_MIN_MS;
         xEventGroupSetBits(s_events, GOT_IP_BIT);
         printf("STA IP: " IPSTR "\n", IP2STR(&ev->ip_info.ip));
+        sntp_sync_start(); /* once; later calls are no-ops */
     }
 }
 
