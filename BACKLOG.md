@@ -97,6 +97,16 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   noticed by the send timeout only.
 - [ ] **Optional authentication on the live page** (none in the MVP; anyone on
   the AP or the home network can open it and the recording port).
+- [ ] **A stalled WebSocket client blocks the httpd task** (final review,
+  2026-10-02): `httpd_ws_send_frame_async` runs synchronously in the httpd task,
+  so one stalled browser delays page loads and the other clients for up to the
+  5 s send timeout per frame. Options: shorter send timeout, or a per-client
+  send task. Proposal, owner decision.
+- [ ] **STA retries disturb the fallback AP** (final review, 2026-10-02): in
+  AP+STA fallback every STA retry scans channels and the AP follows the STA
+  channel, which can disrupt a phone fixing wrong credentials on the AP. Option:
+  pause STA retries while a station is connected to the AP. Proposal, owner
+  decision.
 
 ## RTL track
 
