@@ -41,6 +41,12 @@ void ld2410_ring_lock(void);
 void ld2410_ring_unlock(void);
 const rb_t *ld2410_ring(void); /* use only between lock and unlock */
 
+/* Producer API for other sensor tasks: lock, rb_push(), unlock (the lock is held
+ * only for the copy). Returns rb_push's result, or -ENODEV before ld2410_start()
+ * has created the ring. seq_out may be NULL. */
+int ld2410_ring_push(uint64_t esp_time_us, uint8_t type, const uint8_t *payload,
+                     size_t len, uint32_t *seq_out);
+
 /* Convenience: lock, rec_stream_batch(), unlock. Returns what
  * rec_stream_batch returns. st is the caller's per-connection cursor. */
 int ld2410_ring_batch(rec_stream_t *st, uint32_t from_seq, uint32_t boot_id,

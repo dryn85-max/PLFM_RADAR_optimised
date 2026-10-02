@@ -287,6 +287,18 @@ const rb_t *ld2410_ring(void)
     return &s_ring;
 }
 
+int ld2410_ring_push(uint64_t esp_time_us, uint8_t type, const uint8_t *payload,
+                     size_t len, uint32_t *seq_out)
+{
+    if (s_ring_mtx == NULL) {
+        return -ENODEV;
+    }
+    ld2410_ring_lock();
+    int rc = rb_push(&s_ring, esp_time_us, type, payload, len, seq_out);
+    ld2410_ring_unlock();
+    return rc;
+}
+
 int ld2410_ring_batch(rec_stream_t *st, uint32_t from_seq, uint32_t boot_id,
                       uint8_t *buf, size_t cap, size_t *out_len, uint16_t *count)
 {

@@ -284,6 +284,16 @@ helpers, WebSocket slot table), built with `-Wall -Wextra -Werror` and
 AddressSanitizer/UBSan. The Python side:
 `uv run pytest host/test_ld2410_rec.py -v`.
 
+## GPS (GY-NEO6MV2)
+
+UART2, 9600 8N1, module TX -> GPIO5, module RX -> GPIO4 (VERIFY on the board;
+full wiring table and no-fix behaviour follow in the docs task). The
+`gps` task (core 1, priority 4, below the LD2410C task) parses RMC/GGA
+(`components/core/nmea.[ch]`), writes one `gps_fix` record per epoch and a
+`time_sync` record (source GPS) on every RMC with status A and valid time and
+date. Without a fix the records still appear, with the validity flags clear.
+A one-line GPS status is logged every 10 s.
+
 ## CI
 
 Job `esp32-mvp` in `.github/workflows/ci-tests.yml`: `make -C esp32/tests test`,
