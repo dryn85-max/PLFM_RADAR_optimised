@@ -61,3 +61,6 @@ fpga/tb/golden/golden_doppler.generated.mem
 
 # uv lock file is not part of this repo
 uv.lock
+
+# ESP32 host test build output
+esp32/tests/build/

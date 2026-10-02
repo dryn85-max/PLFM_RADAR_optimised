@@ -1,0 +1,38 @@
+{
+  "frame_kind": "data",
+  "raw_hex": "f4f3f2f10d0002aa0350004078003255005500f8f7f6f5",
+  "data": {
+    "data_type": 2,
+    "engineering": 0,
+    "target_state": 3,
+    "moving_dist_cm": 80,
+    "moving_energy": 64,
+    "still_dist_cm": 120,
+    "still_energy": 50,
+    "detect_dist_cm": 85,
+    "max_moving_gate": 0,
+    "max_still_gate": 0,
+    "moving_gate_energy": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "still_gate_energy": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  }
+}
