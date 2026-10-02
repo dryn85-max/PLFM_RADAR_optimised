@@ -3,6 +3,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "sdkconfig.h"
 
 #include "gps_task.h"
 #include "http_srv.h"
@@ -10,7 +11,14 @@
 #include "ld2410_task.h"
 #include "live.h"
 #include "rec_srv.h"
+#include "status_led_task.h"
 #include "wifi_mgr.h"
+
+/* sdkconfig.defaults selects the 1.5 MB single-app partition table; an existing esp32/sdkconfig
+ * overrides the defaults and would keep the 1 MB table, which the firmware already fills to 97 %. */
+#ifndef CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE
+#error "CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y is required (delete esp32/sdkconfig and rebuild)"
+#endif
 
 #define RING_BYTES_PSRAM (4u * 1024u * 1024u)
 #define RING_BYTES_INTERNAL (32u * 1024u)
@@ -21,7 +29,13 @@ void app_main(void)
 {
     printf("\nAERIS-10 Lite MVP (ESP32-S3)\n");
 
-    esp_err_t err = nvs_flash_init();
+    /* Status LED first so Wi-Fi states are visible; a failure only leaves the LED dark. */
+    esp_err_t err = status_led_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "status_led_start failed: %s", esp_err_to_name(err));
+    }
+
+    err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();

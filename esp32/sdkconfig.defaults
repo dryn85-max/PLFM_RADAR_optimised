@@ -10,6 +10,12 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_ESPTOOLPY_OCT_FLASH=y
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 
+# Partition table: ESP-IDF "single factory app (large)": NVS at 0x9000 (same offset and size
+# as the plain single-app table, so stored Wi-Fi credentials survive), 1.5 MB factory app.
+# The plain table's 1 MB app was 97 % full (owner decision 2026-10-02). app_main.c stops the
+# build with #error if a stale esp32/sdkconfig still selects another table.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
 # Console and flashing through the native USB port (USB-Serial-JTAG, GPIO19/20).
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
