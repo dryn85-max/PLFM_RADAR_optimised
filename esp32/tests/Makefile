@@ -4,7 +4,7 @@ CORE    := ../components/core
 SAN     := -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -g -O1 $(SAN) -I$(CORE) -I. \
            -DVECTOR_DIR='"vectors"'
-LDFLAGS := $(SAN)
+LDFLAGS := $(SAN) -lm
 BUILD   := build
 
 TESTS   := $(patsubst %.c,%,$(wildcard test_*.c))
