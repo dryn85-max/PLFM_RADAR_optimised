@@ -41,15 +41,17 @@
 #include "rec_payload.h"
 
 /* Sensor-to-body axis mapping, a firmware constant: body[i] = SIGN_i * sensor[SRC_i].
- * Default = the owner's bench mounting (2026-10-02): GY-BMI160 board with the BMI160
- * chip facing DOWN (labels up), sensor X axis along the boresight. That is the
- * sensor turned 180 deg about X, so body Y = -sensor Y and body Z = -sensor Z
- * (still right-handed). For a chip-up mounting use signs +1, +1, +1. */
-#define TILT_MAP_SRC_X 0
-#define TILT_MAP_SRC_Y 1
+ * Body frame for the owner's bench stand (owner decision 2026-10-02): the "nose" (+X) is
+ * the short edge of the breadboard with the power module and the GPS antenna, +Z up,
+ * +Y left when looking towards the nose. The GY-BMI160 chip faces DOWN and the board is
+ * turned 90 deg about the vertical, so body X = +sensor Y, body Y = +sensor X,
+ * body Z = -sensor Z (determinant +1, still right-handed). Bench test with the previous
+ * mapping: nose up gave roll -25.6 deg. For another mounting redo the mapping. */
+#define TILT_MAP_SRC_X 1
+#define TILT_MAP_SRC_Y 0
 #define TILT_MAP_SRC_Z 2
 #define TILT_MAP_SIGN_X 1
-#define TILT_MAP_SIGN_Y (-1)
+#define TILT_MAP_SIGN_Y 1
 #define TILT_MAP_SIGN_Z (-1)
 
 #define TILT_ALPHA_DEFAULT 0.98f
