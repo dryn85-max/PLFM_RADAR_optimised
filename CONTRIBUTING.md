@@ -96,7 +96,7 @@ CI runs these jobs on every PR; run them locally before pushing.
 
 ```bash
 uv run ruff check .
-QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py -v
+QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py host/test_radar_protocol.py -v
 ```
 
 ### 2. FPGA regression
@@ -142,7 +142,7 @@ uv run pytest tests/cross_layer/test_cross_layer_contract.py -v
 
 | Job | What it checks |
 |----|---------------|
-| `python-tests` | ruff clean, py_compile, `host/test_v7.py` green |
+| `python-tests` | path gate (`tools/check_paths.sh`), ruff clean, py_compile, `host/test_v7.py` and `host/test_radar_protocol.py` green |
 | `mcu-tests` | legacy F7 unit tests, `make test` exits 0 |
 | `mcu-g0b1` | firmware `make test`, `make`, `make DIAG=0`, `make ADAR_COUNT=4` |
 | `fpga-regression` | `run_regression.sh` exits 0, golden vectors reproduce |
@@ -150,9 +150,10 @@ uv run pytest tests/cross_layer/test_cross_layer_contract.py -v
 
 ## Checklist before push
 
+- [ ] `bash tools/check_paths.sh` - no references to the old layout
 - [ ] `uv run ruff check .` - no lint errors
-- [ ] `QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py -v` - all pass
-- [ ] `cd fpga && bash run_regression.sh` - all phases pass; `git checkout -- fpga/tb/cosim` afterwards
+- [ ] `QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py host/test_radar_protocol.py -v` - all pass
+- [ ] `(cd fpga && bash run_regression.sh)` - all phases pass; `git checkout -- fpga/tb/cosim` afterwards
 - [ ] `cd firmware && make test && make && make DIAG=0 clean all && make ADAR_COUNT=4 clean all` - pass
 - [ ] `cd legacy/9_Firmware/9_1_Microcontroller/tests && make clean && make` - pass
 - [ ] `uv run pytest tests/cross_layer/test_cross_layer_contract.py` - pass

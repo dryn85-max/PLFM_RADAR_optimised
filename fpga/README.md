@@ -171,8 +171,9 @@ Run `python3 tb/golden/count_multipliers.py` for the full per-line report.
   the stale twiddle-file entry in `fv_doppler_processor.sby` was updated.
   Re-run with `cd formal && for f in *.sby; do sby -f "$f"; done` where `sby`
   is available.
-- Cross-layer contract tests (host / RTL opcodes and packet layout) are
-  unchanged and run in their own CI job.
+- Cross-layer contract tests (host / RTL opcodes and packet layout) moved to
+  `tests/cross_layer/` and were retargeted to `firmware/` (STM32G0B1); they run
+  in their own CI job.
 
 ## Known limitations
 

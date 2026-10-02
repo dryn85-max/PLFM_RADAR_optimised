@@ -151,9 +151,9 @@ flash / 32 KB RAM including a 4 KB stack and 1 KB heap reserve), from
 
 | Configuration | Flash (of 131072) | RAM (of 32768) |
 |---|---|---|
-| default (`ADAR_COUNT=1`, `DIAG=1`) | 24232 | 6320 |
-| `DIAG=0` | 16896 | 5896 |
-| `ADAR_COUNT=4` | 24412 | 6360 |
+| default (`ADAR_COUNT=1`, `DIAG=1`) | 24268 | 6320 |
+| `DIAG=0` | 16932 | 5896 |
+| `ADAR_COUNT=4` | 24448 | 6360 |
 
 ## Known limitations
 

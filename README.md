@@ -65,7 +65,7 @@ All commands run from the repository root unless stated. Package installs
 Needs `iverilog`; the golden-vector generators need Python with numpy.
 
 ```
-cd fpga && bash run_regression.sh      # lint, vendor-neutrality and resource gates, 38 testbenches
+(cd fpga && bash run_regression.sh)    # lint, vendor-neutrality and resource gates, 38 testbenches
 git checkout -- fpga/tb/cosim          # the script rewrites tracked CSVs; restore them
 ```
 

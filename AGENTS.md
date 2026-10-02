@@ -88,11 +88,12 @@ GPT-5.5 is not used.
 - **Package installs must use the `sfw` prefix** (supply-chain mandate from
   CONTRIBUTING.md): `sfw uv pip install <pkg>`, `sfw npm install <pkg>`,
   `sfw cargo <cmd>`. Never run bare `pip install`.
-- FPGA (Verilog-2001, Icarus): `cd fpga && bash run_regression.sh`.
+- FPGA (Verilog-2001, Icarus): `(cd fpga && bash run_regression.sh)`.
   The RTL (`radar_system_top.v`) is the single source of truth for opcode
   values, bit widths and reset defaults. No SystemVerilog, no `$clog2`.
 - Python (GUI/scripts/tests): `uv run ruff check .`;
-  `QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py -v`.
+  `QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py host/test_radar_protocol.py -v`.
+- Path gate (no references to the pre-restructure layout): `bash tools/check_paths.sh`.
 - MCU, legacy F7 tree (reference only, do not modify):
   `cd legacy/9_Firmware/9_1_Microcontroller/tests && make clean && make`.
 - MCU, STM32G0B1 port: `cd firmware && make test && make`
