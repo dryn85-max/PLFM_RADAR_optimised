@@ -261,7 +261,8 @@ fails it shows an error text and no form. Fields:
 - **Save** writes only the values that differ from a fresh read, then reads
   the module back and shows what is now in it. The values are **stored in the
   module** (they survive a power cycle). **Data frames pause while the module is
-  being configured** (up to about 1 s; the frame counter continues); each
+  being configured** (about 30 ms for a one-gate write on the bench, 2026-10-02;
+  the frame counter continues); each
   change is logged once on the console as `setting: ... old -> new`. Changes
   are **not recorded** in the `.ldrec` file (recording protocol unchanged).
 - **Bluetooth off**: switches the module's Bluetooth off and restarts it
@@ -654,19 +655,22 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   command ACK sequence is documented there too (§2.2, p. 9-17), but the
   settings commands have not been run on a real module. Maximum payload length
   64 is still VERIFY; the other shared test vectors are synthetic.
-- RGB LED: the WS2812 part number and timing are not in the DevKitC-1 document
-  (`RGB_LED_*` and the RMT timing in `main/rgb_led.c`); that GPIO38 is the LED
-  pin on the owner's board (v1.1) and the 5 % brightness.
-- BOOT zones and AP on demand on the real board: the 2 s / 5 s / 10 s zone
-  colours, the 10 min switch-off after the last client, and that the AP comes
-  up while the STA link stays connected.
-- LD2410C firmware version display: the document's example (§2.2.8, p. 13)
-  shows the minor bytes `16 15 09 22` as "22091615"; the firmware prints the
-  little-endian u32 as `%08x` (0x22091516 gives "22091516"). Compare with the
-  real module.
-- How long data frames pause while the module is configured (assumed up to
-  about 1 s) and whether engineering mode survives end-config (the firmware
-  re-enables it after about 3 s of normal frames either way).
+- Settings cycle **confirmed on the owner's bench 2026-10-02** (module firmware
+  V2.44.25070917): read version and parameters (factory values of Table 7
+  read back exactly; the still sensitivity of gates 0/1 reads 0), a gate 3
+  write 30 -> 60 read back and kept over a power cycle, Bluetooth off +
+  restart (ACKs ok, engineering mode re-enabled automatically after about
+  3 s), data pause about 30 ms for a one-gate write, engineering mode survives
+  end-config. The firmware version shown (`%08x` of the little-endian minor,
+  "25070917") reads as a build date, so the document's example "22091615" for
+  bytes `16 15 09 22` is taken as a typo. Still open: a `0x0064` write for gate
+  0 or 1 (still value sent unchanged) was not exercised.
+- RGB LED, BOOT zones and AP on demand **confirmed on the owner's bench
+  2026-10-02** (GPIO38, colours 2 s / 5 s / 10 s, flashes, steady blue in
+  AP-only mode, AP on demand with the STA link up, switch-off 10 min after the
+  last client, 5-10 s release erases the credentials). The WS2812 part number
+  and its timing are still not in a document (they work as set in
+  `main/rgb_led.c`).
 - WebSocket close handling (slot removal, reconnect of the page).
 - Recording server preemption (a new client replacing the old one) and the
   5 s send/receive timeouts; there is no TCP keepalive (BACKLOG).

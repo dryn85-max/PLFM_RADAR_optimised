@@ -120,15 +120,12 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   the receiver via UBX `NAV-TIMEUTC` validity flags, which ends the "factory
   configuration, no UBX" rule), and whether to subtract the measured 128 ms
   RMC delay.
-- [ ] **Bench-verify the LD2410C settings cycle** (none of the settings commands
-  has run on a real module yet). Open VERIFY points: WS2812 timing (GPIO38 LED);
-  firmware version minor display (`%08x` of the LE u32 vs the PDF example
-  "22091615"); length of the data pause during configuration; whether
-  engineering mode survives end-config; whether the module accepts a `0x0064`
-  write for gate 0/1 with the unchanged still value (Table 7 p.15 says the still
-  sensitivity of gates 0/1 is not settable; if rejected, saving a changed moving
-  sensitivity of gate 0/1 fails with "set-sens gate 0"). See the VERIFY list in
-  `esp32/README.md`.
+- [ ] **LD2410C settings: gate 0/1 write not bench-tested.** The settings cycle
+  passed on the bench 2026-10-02 (see the VERIFY list in `esp32/README.md`),
+  except a `0x0064` write for gate 0 or 1 with the unchanged still value
+  (Table 7 p.15: the still sensitivity of gates 0/1 is not settable). If the
+  module rejects it, saving a changed moving sensitivity of gate 0/1 fails with
+  "set-sens gate 0".
 - [ ] **BMI160 and NEO-6M datasheets into `hardware/datasheets/`**, then verify
   the BMI160 register values, delays and sensitivities in `esp32/main/imu_task.c`
   (marked VERIFY there and in the README) and the NEO-6M default NMEA output,
