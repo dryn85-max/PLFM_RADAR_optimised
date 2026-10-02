@@ -29,8 +29,6 @@ GUI_DIR = REPO_ROOT / "host"
 FPGA_DIR = REPO_ROOT / "fpga"
 MCU_DIR = REPO_ROOT / "firmware"            # STM32G0B1 (active MCU)
 MCU_CORE_DIR = MCU_DIR / "Core"
-# Xilinx constraints are legacy-only (not built or tested).
-XDC_DIR = REPO_ROOT / "legacy" / "9_Firmware" / "9_2_FPGA" / "constraints"  # path-gate: legacy-ref
 
 
 # ===================================================================
@@ -695,40 +693,6 @@ def parse_g0b1_function_body(text: str, name: str) -> str | None:
 # ===================================================================
 # GPIO parser
 # ===================================================================
-
-def parse_xdc_gpio_pins(filepath: Path | None = None) -> list[GpioPin]:
-    """Parse XDC constraints for DIG_* pin assignments."""
-    if filepath is None:
-        filepath = XDC_DIR / "xc7a50t_ftg256.xdc"
-
-    if not filepath.exists():
-        return []
-
-    text = filepath.read_text()
-    pins: list[GpioPin] = []
-
-    # Match: set_property PACKAGE_PIN XX [get_ports {signal_name}]
-    for m in re.finditer(
-        r'set_property\s+PACKAGE_PIN\s+(\w+)\s+\[get_ports\s+\{?(\w+)\}?\]',
-        text
-    ):
-        pin = m.group(1)
-        signal = m.group(2)
-        if any(kw in signal for kw in ("stm32_", "reset_n", "dig_")):
-            # Determine direction from signal name
-            if signal in ("stm32_new_chirp", "stm32_new_elevation",
-                         "stm32_new_azimuth", "stm32_mixers_enable"):
-                direction = "input"  # FPGA receives these
-            elif signal == "reset_n":
-                direction = "input"
-            else:
-                direction = "unknown"
-            pins.append(GpioPin(
-                name=signal, pin_id=pin, direction=direction, layer="fpga"
-            ))
-
-    return pins
-
 
 def parse_g0b1_pin_table(filepath: Path | None = None) -> dict[str, GpioPin]:
     """Parse firmware/Core/hal/pins_table.c.
