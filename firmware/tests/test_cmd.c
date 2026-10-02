@@ -469,7 +469,8 @@ static int tx_eq(const char *s)
     return 1;
 }
 
-static void tx_clear(void) { mock_reset(); }
+void mock_uart_reset(void);                       /* defined in mocks/mock_uart.c */
+static void tx_clear(void) { mock_uart_reset(); }
 
 static void test_echo_default_on(void)
 {
@@ -694,7 +695,18 @@ static void test_init_resets_echo(void)
     tx_clear();
     feed("x");
     TT_ASSERT(tx_eq("x"));
-    feed("\x1b[");                                    /* init also clears a half-received escape and CR flag */
+    feed("x\r");                                      /* s_last_cr = 1 */
+    cmd_init(&g_agc);
+    tx_clear();
+    feed("\n");                                       /* init cleared it: this LF is a blank line, not swallowed */
+    TT_ASSERT(tx_eq("\r\n"));                         /* echo CRLF, empty line produces no reply */
+    feed("\x1b");                                     /* pending ESC */
+    cmd_init(&g_agc);
+    tx_clear();
+    feed("z\r");                                      /* init cleared it: 'z' is echoed, not eaten as an escape final byte */
+    TT_ASSERT(strncmp(mock_uart_tx, "z\r\n", 3) == 0);
+    TT_ASSERT(tx_eq("z\r\nERR unknown\r\n"));
+    feed("\x1b[");                                    /* half-received CSI */
     cmd_init(&g_agc);
     tx_clear();
     feed("\ntx\r");                                   /* leading LF is a line end, not swallowed */

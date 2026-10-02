@@ -56,6 +56,13 @@ Follow-up work that is out of scope for the current plans.
     not record where the panic happened: store the faulting PC/LR (HardFault
     stacked frame) or the `Error_Handler` caller next to the latch and print it on
     the latched boot, so the next occurrence can be diagnosed.
+- [ ] **Console: Linux-console F1-F5 and lone Esc (proposal).** `ESC [ [ A..E`
+  (Linux-console F1-F5) and a lone Esc leak or eat one character because the CSI
+  parser ends on any 0x40-0x7E byte. Harmless in `screen`; decide whether to
+  handle the `ESC [ [` form.
+- [ ] **Console: async lines mid-typing (proposal).** Asynchronous DIAG/fault lines
+  can land in the middle of a typed line and the partial line is not redrawn
+  (pre-existing, more visible now that the console echoes).
 
 ## RTL track
 
