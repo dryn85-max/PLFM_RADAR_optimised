@@ -205,7 +205,7 @@ problem is visible in the console):
   `bad` counts checksum and malformed-line errors, `dropped` overlong or
   abandoned lines).
 - `imu`: `no BMI160 on I2C (SDA 8, SCL 9, 0x68/0x69; not connected?), i2c errors
-  N`; or `ok|error, pitch X.X deg, roll Y.Y deg, i2c errors N, reinits N`
+  N, probe timeouts N, bus resets N, last probe NACK|TIMEOUT|none yet`; or `ok|error, pitch X.X deg, roll Y.Y deg, i2c errors N, reinits N`
   (or `no attitude yet`). One-off lines: `BMI160 at 0x68 configured (+-4 g,
   +-500 deg/s, 100 Hz)`, `... consecutive I2C failures ..., re-initialising`,
   `0x.. answers, but CHIP_ID is ... not a BMI160`, `ERR_REG 0x.. after
@@ -275,9 +275,15 @@ raw acceleration (mg) and angular rate (0.1 deg/s) per axis, the current
 pitch and roll (0.01 deg), the number of averaged samples and a status byte
 (bit0 = data valid). Tilt is **absolute**, relative to the horizon (complementary
 filter on the gravity direction, gyro weight 0.98; no magnetometer, so no
-azimuth). There is no "zero tilt" button. A missing sensor is retried every 1 s;
+azimuth). There is no "zero tilt" button. A missing sensor is probed every 1 s for the
+first ~10 s (after boot or after a sensor loss), then every 10 s;
 5 failed reads in a row trigger a re-initialisation; errors and re-inits are
-counted and logged.
+counted and logged. The IDF `i2c.master` log tag is silenced (it printed two
+errors per probe); the 10 s `imu` line reports the last probe instead:
+`NACK` = no device answering (check wiring and power); `TIMEOUT` = bus held
+low or no pull-ups (check SDA/SCL wiring, pull-ups and that the module is
+powered: an unpowered module clamps the lines). The line also shows probe
+timeouts and bus resets.
 
 **Axis and sign conventions** (exactly as in `components/core/tilt.h`). Body
 frame = the radar frame: **+X = radar boresight (forward), +Y = left, +Z = up**,

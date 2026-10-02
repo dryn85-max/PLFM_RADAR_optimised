@@ -30,9 +30,11 @@
 #define IMU_SAMPLE_PERIOD_MS 10 /* ~100 Hz polling, matches ODR 100 Hz */
 #define IMU_RECORD_SAMPLES 10   /* 10 samples = one 100 ms record (10 Hz) */
 #define IMU_FAIL_LIMIT 5        /* consecutive failed reads before the sensor is re-initialised */
-#define IMU_BACKOFF_MS 1000     /* wait before a re-probe/re-init (also while absent) */
+#define IMU_BACKOFF_MS 1000     /* fast wait before a re-probe/re-init */
+#define IMU_BACKOFF_SLOW_MS 10000 /* slow cadence once the fast rounds are used up */
+#define IMU_FAST_ROUNDS 10      /* rounds at IMU_BACKOFF_MS (about 10 s), then IMU_BACKOFF_SLOW_MS */
 #define IMU_LOG_US 10000000
-#define IMU_WARN_EVERY 30       /* rounds (x IMU_BACKOFF_MS) between repeated warnings */
+#define IMU_WARN_EVERY 30       /* rounds between repeated warnings */
 #define IMU_DT_MIN_S 0.005f     /* measured sample interval is clamped to this window */
 #define IMU_DT_MAX_S 0.030f
 /* Core 1 with the LD2410C (prio 5) and GPS (prio 4) tasks, but below both: the
@@ -121,6 +123,12 @@
 
 static const char *TAG = "imu";
 
+/* Result of the last address probe (IMU task only). */
+typedef enum { PROBE_NONE = 0, PROBE_NACK, PROBE_TIMEOUT } probe_res_t;
+static probe_res_t s_probe_res;
+static uint32_t s_probe_timeouts; /* probes that ended in ESP_ERR_TIMEOUT */
+static uint32_t s_bus_resets;
+
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev; /* IMU task only */
 
@@ -128,13 +136,6 @@ static SemaphoreHandle_t s_mtx; /* guards s_snap and s_link */
 static imu_snapshot_t s_snap;
 static imu_link_t s_link;
 static bool s_ever_seen;
-
-static void set_link(imu_link_t l)
-{
-    xSemaphoreTake(s_mtx, portMAX_DELAY);
-    s_link = l;
-    xSemaphoreGive(s_mtx);
-}
 
 static void count_error(void)
 {
@@ -167,8 +168,17 @@ static void close_device(void)
 static uint8_t find_sensor(void)
 {
     const uint8_t addrs[2] = {BMI160_ADDR_SDO_LOW, BMI160_ADDR_SDO_HIGH};
+    bool timed_out = false;
+    bool nack = false;
     for (int i = 0; i < 2; i++) {
-        if (i2c_master_probe(s_bus, addrs[i], IMU_I2C_TIMEOUT_MS) != ESP_OK) {
+        esp_err_t perr = i2c_master_probe(s_bus, addrs[i], IMU_I2C_TIMEOUT_MS);
+        if (perr != ESP_OK) {
+            if (perr == ESP_ERR_TIMEOUT) {
+                timed_out = true;
+                s_probe_timeouts++;
+            } else {
+                nack = true; /* ESP_ERR_NOT_FOUND: nobody acknowledged the address */
+            }
             continue;
         }
         const i2c_device_config_t cfg = {
@@ -190,6 +200,11 @@ static uint8_t find_sensor(void)
                      addrs[i], (unsigned)id, BMI160_CHIP_ID_VALUE);
         }
         close_device();
+    }
+    if (timed_out) {
+        s_probe_res = PROBE_TIMEOUT;
+    } else if (nack) {
+        s_probe_res = PROBE_NACK;
     }
     return 0;
 }
@@ -320,8 +335,12 @@ static void log_status(const tilt_t *t)
         xSemaphoreGive(s_mtx);
     }
     if (l == IMU_LINK_ABSENT) {
+        const char *hint = s_probe_res == PROBE_TIMEOUT
+            ? "TIMEOUT (bus held low or no pull-ups: check SDA/SCL wiring, pull-ups, module power)"
+            : (s_probe_res == PROBE_NACK ? "NACK (no device answering: check wiring/power)" : "none yet");
         ESP_LOGI(TAG, "no BMI160 on I2C (SDA %d, SCL %d, 0x68/0x69; not connected?), i2c errors %"
-                 PRIu32, IMU_PIN_SDA, IMU_PIN_SCL, s.i2c_errors);
+                 PRIu32 ", probe timeouts %" PRIu32 ", bus resets %" PRIu32 ", last probe %s",
+                 IMU_PIN_SDA, IMU_PIN_SCL, s.i2c_errors, s_probe_timeouts, s_bus_resets, hint);
     } else if (t != NULL && tilt_valid(t)) {
         ESP_LOGI(TAG, "%s, pitch %.1f deg, roll %.1f deg, i2c errors %" PRIu32 ", reinits %" PRIu32,
                  link_name(l), (double)tilt_pitch_deg(t), (double)tilt_roll_deg(t), s.i2c_errors,
@@ -395,6 +414,7 @@ static void imu_task(void *arg)
     for (;;) {
         if (miss >= IMU_FAIL_LIMIT) { /* bus may be wedged (SDA held low): reset before re-probing */
             esp_err_t rerr = i2c_master_bus_reset(s_bus);
+            s_bus_resets++;
             if (rerr != ESP_OK && (miss - IMU_FAIL_LIMIT) % IMU_WARN_EVERY == 0) {
                 ESP_LOGW(TAG, "i2c_master_bus_reset failed: %s", esp_err_to_name(rerr));
             }
@@ -426,7 +446,7 @@ static void imu_task(void *arg)
         s_link = s_ever_seen ? IMU_LINK_ERROR : IMU_LINK_ABSENT;
         xSemaphoreGive(s_mtx);
 
-        vTaskDelay(MS_TICKS(IMU_BACKOFF_MS));
+        vTaskDelay(MS_TICKS(miss <= IMU_FAST_ROUNDS ? IMU_BACKOFF_MS : IMU_BACKOFF_SLOW_MS));
         int64_t now = esp_timer_get_time();
         if (now - last_log >= IMU_LOG_US) {
             last_log = now;
@@ -445,6 +465,13 @@ esp_err_t imu_start(void)
     s_link = IMU_LINK_ABSENT;
     s_ever_seen = false;
     s_dev = NULL;
+    s_probe_res = PROBE_NONE;
+    s_probe_timeouts = 0;
+    s_bus_resets = 0;
+    /* The IDF driver logs every failed probe at E level (twice per round while the
+     * sensor is absent). Silence it once; imu reports the cause itself through the
+     * ESP_ERR_TIMEOUT / ESP_ERR_NOT_FOUND return codes (see log_status). */
+    esp_log_level_set("i2c.master", ESP_LOG_NONE);
 
     const i2c_master_bus_config_t bus_cfg = {
         .i2c_port = IMU_I2C_PORT,
