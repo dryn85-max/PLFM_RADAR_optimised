@@ -90,9 +90,19 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   `imu` records; a raw 100 Hz option (larger records or a new type, more ring
   buffer traffic) was left out. The rate is one constant in the firmware.
 - [ ] **GPS PPS wiring for precise time.** Without PPS the GPS time stamp is
-  taken at reception of the RMC sentence (about +-50 to 300 ms, VERIFY). Wire
+  taken at reception of the RMC sentence (measured 2026-10-02: 128 ms late,
+  p1..p99 119..136 ms, against SNTP). Wire
   the module's PPS output to a free GPIO, stamp the edge in an interrupt and
   correct the `time_sync` record.
+- [ ] **GPS UTC wrong by whole seconds after the first fix.** Bench 2026-10-02:
+  the NEO-6M reported UTC 3 s ahead for 5.6 min after its first fix (likely the
+  default leap-second count before the satellites' UTC parameters are decoded;
+  VERIFY). The host conversion gives GPS priority, so those records get a UTC
+  about 3 s late. Options for the owner: reject a GPS `time_sync` that differs
+  from SNTP by more than 1 s (only with Wi-Fi STA); ignore GPS time for the
+  first 12.5 min after a fix; ask the receiver via UBX (`NAV-TIMEUTC` validity
+  flags), which ends the "factory configuration, no UBX" rule. Also decide
+  whether to subtract the measured 128 ms RMC delay.
 - [ ] **BMI160 and NEO-6M datasheets into `hardware/datasheets/`**, then verify
   the BMI160 register values, delays and sensitivities in `esp32/main/imu_task.c`
   (marked VERIFY there and in the README) and the NEO-6M default NMEA output,
