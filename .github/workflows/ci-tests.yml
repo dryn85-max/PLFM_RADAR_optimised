@@ -8,7 +8,7 @@ on:
 
 jobs:
   # ===========================================================================
-  # Python: lint (ruff), syntax check (py_compile), unit tests (pytest)
+  # Python: path gate, lint (ruff), syntax check (py_compile), unit tests (pytest)
   # CI structure proposed by hcm444 — uses uv for dependency management
   # ===========================================================================
   python-tests:
@@ -26,6 +26,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --group dev
+
+      - name: Path gate (no references to the old layout)
+        run: bash tools/check_paths.sh
 
       - name: Ruff lint (whole repo)
         run: uv run ruff check .
@@ -46,16 +49,15 @@ jobs:
       - name: Unit tests
         run: >
           uv run pytest
-          9_Firmware/9_3_GUI/test_GUI_V65_Tk.py
-          9_Firmware/9_3_GUI/test_v7.py
+          host/test_v7.py
+          host/test_radar_protocol.py
           -v --tb=short
 
   # ===========================================================================
-  # MCU Firmware Unit Tests (20 tests)
-  # Bug regression (15) + Gap-3 safety tests (5)
+  # Legacy F7 MCU unit tests (24 tests), kept in CI per the G0B1 spec
   # ===========================================================================
   mcu-tests:
-    name: MCU Firmware Tests
+    name: Legacy F7 MCU tests
     runs-on: ubuntu-latest
 
     steps:
@@ -66,11 +68,11 @@ jobs:
 
       - name: Build and run MCU tests
         run: make test
-        working-directory: 9_Firmware/9_1_Microcontroller/tests
+        working-directory: legacy/9_Firmware/9_1_Microcontroller/tests
 
   # ===========================================================================
   # FPGA RTL Regression (38 testbenches + lint + vendor-neutrality/resource gates)
-  # Golden vectors under 9_Firmware/9_2_FPGA/tb/golden are committed; the
+  # Golden vectors under fpga/tb/golden are committed; the
   # generators (numpy) are re-run here to make sure they still reproduce them.
   # ===========================================================================
   fpga-regression:
@@ -93,7 +95,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y iverilog
 
       - name: Regenerate golden vectors and check they are unchanged
-        working-directory: 9_Firmware/9_2_FPGA
+        working-directory: fpga
         run: |
           uv run python tb/golden/gen_twiddle_rom.py 256
           uv run python tb/golden/gen_ref_spectrum.py
@@ -106,7 +108,7 @@ jobs:
 
       - name: Run full FPGA regression
         run: bash run_regression.sh
-        working-directory: 9_Firmware/9_2_FPGA
+        working-directory: fpga
 
       # The receiver golden compare checks against the committed
       # tb/golden/golden_doppler.mem, and golden generate writes to a scratch
@@ -114,12 +116,12 @@ jobs:
       # (tb/cosim/*.csv are rewritten by the regression and ignored here.)
       - name: Check the regression did not rewrite committed golden files
         run: git diff --exit-code -- tb/golden
-        working-directory: 9_Firmware/9_2_FPGA
+        working-directory: fpga
 
   # ===========================================================================
   # Cross-Layer Contract Tests (Python ↔ Verilog ↔ C)
   # Validates opcode maps, bit widths, packet layouts, and round-trip
-  # correctness across FPGA RTL, Python GUI, and STM32 firmware.
+  # correctness across FPGA RTL, Python GUI, and STM32G0B1 firmware (firmware/).
   # ===========================================================================
   cross-layer-tests:
     name: Cross-Layer Contract Tests
@@ -143,11 +145,11 @@ jobs:
       - name: Run cross-layer contract tests
         run: >
           uv run pytest
-          9_Firmware/tests/cross_layer/test_cross_layer_contract.py
+          tests/cross_layer/test_cross_layer_contract.py
           -v --tb=short
 
   # ===========================================================================
-  # STM32G0B1 firmware (9_1_Microcontroller/g0b1): host tests + ARM cross-build
+  # STM32G0B1 firmware (firmware/): host tests + ARM cross-build
   # ===========================================================================
   mcu-g0b1:
     name: MCU G0B1 Firmware
@@ -161,16 +163,16 @@ jobs:
 
       - name: Host tests (ADAR_COUNT=1 and 4)
         run: make test
-        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+        working-directory: firmware
 
       - name: Build default (ADAR_COUNT=1, DIAG=1)
         run: make
-        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+        working-directory: firmware
 
       - name: Build DIAG=0
         run: make DIAG=0 clean all
-        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+        working-directory: firmware
 
       - name: Build ADAR_COUNT=4
         run: make ADAR_COUNT=4 clean all
-        working-directory: 9_Firmware/9_1_Microcontroller/g0b1
+        working-directory: firmware

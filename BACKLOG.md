@@ -5,11 +5,11 @@ Follow-up work that is out of scope for the current plans.
 ## G0B1 firmware track
 
 - [ ] **Real PLL register exports.** Replace the placeholder tables in
-  `9_Firmware/9_1_Microcontroller/g0b1/Core/drivers/pll_tables/` with exports from
+  `firmware/Core/drivers/pll_tables/` with exports from
   TICS Pro (LMX2594) / ADI ACE (ADF4372), remove `PLL_TABLE_PLACEHOLDER`. Until
   then lock fails and the unit reports `FAULT_PLL_LOCK`.
-  Generate the headers with `9_Firmware/9_1_Microcontroller/g0b1/tools/regtable_to_h.py`
-  (usage in the g0b1 README; it emits `PLL_TABLE_PLACEHOLDER 0`); do not hand-type
+  Generate the headers with `firmware/tools/regtable_to_h.py`
+  (usage in `firmware/README.md`; it emits `PLL_TABLE_PLACEHOLDER 0`); do not hand-type
   the 113 LMX2594 words.
 - [ ] **Verify pins, AF numbers and I2C TIMINGR** (`0x10B17DB5`) against the
   STM32G0B1 datasheet and UM2324; fill in the "Nucleo connector" column of the
@@ -48,7 +48,7 @@ Follow-up work that is out of scope for the current plans.
 
 ## RTL track
 
-Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-l).
+Context: `fpga/README.md` (known limitations a-l).
 
 - [ ] **One range-bin set per chirp for the Doppler/MTI path (pre-existing
   upstream behaviour; owner decided to keep it as is for now).**
@@ -88,9 +88,9 @@ Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-l).
   `doppler_processor`, `radar_mode_controller`, `range_bin_decimator`) were not
   re-run; only the stale twiddle-file entry in `fv_doppler_processor.sby` was
   fixed. Run them and add a CI job (OSS CAD Suite) if they pass.
-- [ ] **Stale Xilinx flows.** Delete or port `constraints/`, `scripts/50t`,
-  `scripts/200t`, `scripts/te0712`, `scripts/te0713` and
-  `radar_system_top_te07*_dev.v` (they reference removed tops/ports); deleting
+- [ ] **Stale Xilinx flows.** Delete or port (now under `legacy/9_Firmware/9_2_FPGA/`)
+  `constraints/`, `scripts/50t`, `scripts/200t`, `scripts/te0712`,
+  `scripts/te0713` and `radar_system_top_te07*_dev.v` (they reference removed tops/ports); deleting
   hardware flow files needs the owner's go-ahead.
 - [ ] **Stale comments in untouched RTL.** `cfar_ca.v` header quotes upstream's
   Vivado-measured resource numbers (8 x 21 multiplier, 1 BRAM; see README
@@ -131,3 +131,7 @@ Context: `9_Firmware/9_2_FPGA/README.md` (known limitations a-l).
   equation were written without `sby` available; run them (bmc and cover) and
   fix the wrapper if clk2fflogic timing makes the monitor off by one. The
   simulation stress test in `tb/tb_cdc_modules.v` is the evidence so far.
+- [ ] **Adapt the host GUI (`host/`) to the 4-channel prototype and the G0B1
+  `STATUS` line.** The V7 GUI is the unchanged upstream one: it assumes the
+  upstream channel/beam configuration and does not parse the G0B1 `STATUS`
+  line (see also "GUI parser for `STATUS` lines" in the G0B1 track).

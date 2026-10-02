@@ -48,4 +48,4 @@ select = [
 # Tests: allow unused args (fixtures), prints (debugging), commented code (examples)
 "test_*.py" = ["ARG", "T20", "ERA"]
 # Re-export modules: unused imports are intentional
-"v7/hardware.py" = ["F401"]
+"host/v7/hardware.py" = ["F401"]
