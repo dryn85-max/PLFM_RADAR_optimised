@@ -56,9 +56,13 @@ Follow-up work that is out of scope for the current plans.
     not record where the panic happened: store the faulting PC/LR (HardFault
     stacked frame) or the `Error_Handler` caller next to the latch and print it on
     the latched boot, so the next occurrence can be diagnosed.
-  - [ ] **Command line has no echo and no Backspace handling:** a corrected typo
-    reaches the parser as garbage (`status` then answered `ERR latched`). Handle
-    BS/DEL in `cmd_feed` and consider local echo.
+- [ ] **Console: Linux-console F1-F5 and lone Esc (proposal).** `ESC [ [ A..E`
+  (Linux-console F1-F5) and a lone Esc leak or eat one character because the CSI
+  parser ends on any 0x40-0x7E byte. Harmless in `screen`; decide whether to
+  handle the `ESC [ [` form.
+- [ ] **Console: async lines mid-typing (proposal).** Asynchronous DIAG/fault lines
+  can land in the middle of a typed line and the partial line is not redrawn
+  (pre-existing, more visible now that the console echoes).
 
 ## RTL track
 
@@ -149,3 +153,30 @@ Context: `fpga/README.md` (known limitations a-l).
   `STATUS` line.** The V7 GUI is the unchanged upstream one: it assumes the
   upstream channel/beam configuration and does not parse the G0B1 `STATUS`
   line (see also "GUI parser for `STATUS` lines" in the G0B1 track).
+
+## Architecture options (to evaluate, not decided)
+
+- [ ] **Evaluate a low-IF FMCW variant (owner request, 2026-10-02).** Idea: the PLL
+  generates the frequency ramp itself (ramp generator in the PLL, e.g. ADF4159;
+  whether the LMX2594 already in the BOM can do it is VERIFY against its
+  datasheet), an analog mixer de-chirps the echo, and the beat signal (kHz to
+  hundreds of kHz, VERIFY for the target range) is sampled by the STM32's own
+  12-bit ADC. No 100 MSPS ADC, no chirp DAC, and most of the FPGA chain
+  (DDC, matched filter) is not needed. Questions to answer before any decision:
+  - *What it gives:* lower BOM cost and power, simpler bring-up, no FPGA
+    board / FT2232H path. Range resolution is set by the sweep bandwidth in
+    both concepts, so it is not lost.
+  - *Conflict with the current concept:* FMCW transmits and receives at the same
+    time, while the ADTR1107 front-end is a half-duplex T/R module (TX/RX switch
+    on a shared antenna). FMCW would need separate TX and RX antennas/paths
+    and enough TX-to-RX isolation, which changes the RF/array design.
+  - *Range and power:* the pulsed concept uses PA peak power and pulse
+    compression for the ~1.5 km window; continuous-wave FMCW is limited by
+    average power, TX leakage and phase noise. Achievable range needs a link
+    budget.
+  - *Processing:* range FFT (and Doppler/beam processing) would run on the
+    MCU; the G0B1 (Cortex-M0+, no FPU) may be too weak, which could mean a
+    different MCU.
+  - *Replace or complement:* decide whether it replaces the AERIS-10 Lite
+    pulsed concept or becomes a separate short-range variant / bench
+    prototype. To be decided in a brainstorming session.

@@ -5,10 +5,11 @@
  *   tx | rx          force the ADAR1000s to SPI TX / RX mode (bench)
  *   auto             back to TR-pin mode (FPGA owns TX/RX switching)
  *   status           one STATUS line
+ *   echo [on|off]    console echo (default on); alone: ECHO on|off
  *   stop             emergency stop, latched
  *
  * Replies: OK | OK stopped | ERR range | ERR args | ERR spi | ERR unknown |
- *          ERR too_long | ERR latched (everything except `status` while a fault
+ *          ERR too_long | ERR latched (everything except `status`/`echo` while a fault
  *          is latched). Lines end with CR and/or LF, max 63 characters,
  *          case-sensitive, tokens split on spaces, integers are strict
  *          (optional sign, digits only; "12x" is ERR args).
@@ -26,7 +27,8 @@ void cmd_init(agc_t *agc);
  * into out and returns its length; 0 and an empty reply for a blank line. */
 size_t cmd_exec(const char *line, char *out, size_t outlen);
 /* Feed one received character; on CR/LF a non-empty line is executed and the
- * reply is written to the UART followed by CRLF. */
+ * reply is written to the UART followed by CRLF. Echo (when on) and line
+ * editing (BS/DEL, control chars and escape sequences dropped) happen here. */
 void cmd_feed(int c);
 
 #endif
