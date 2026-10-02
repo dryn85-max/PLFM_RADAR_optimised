@@ -33,6 +33,21 @@ h2{font-size:.95rem;margin:0 0 8px}
 .lab{display:flex;gap:4px;font-size:.7rem;color:var(--mut)}.lab span{flex:1;text-align:center}
 .nv{font-size:.7rem;color:var(--mut);text-align:center}
 #noeng{color:var(--mut);font-size:.9rem}
+.sp{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}.sp h2{margin:0}
+.st{font-weight:600;font-size:.85rem;min-width:11ch;text-align:right}
+.st.ok{color:var(--ok)}.st.warn{color:var(--warn)}.st.bad{color:var(--bad)}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
+.kv>div{min-width:0}
+.kv .v{font-size:1.1rem;min-height:1.5em;white-space:nowrap}
+.kv .w{grid-column:1/-1}
+.tilt{display:flex;align-items:center;gap:16px}
+.tilt svg{flex:none;width:132px;height:132px}
+.tilt .kv{flex:1;grid-template-columns:1fr}
+.tilt .v{font-size:1.5rem;min-width:8ch;font-weight:600}
+.sk{fill:var(--card);stroke:var(--bd);stroke-width:2}.sg{fill:var(--bar2);opacity:.55}.hz{stroke:var(--fg);stroke-width:2}
+.rt{fill:none;stroke:var(--fg);stroke-width:3;stroke-linecap:round}
+.ring{fill:none;stroke:var(--bd);stroke-width:4}.ring.lv{stroke:var(--ok)}
+.na{color:var(--mut)}
 </style>
 </head>
 <body>
@@ -58,6 +73,38 @@ h2{font-size:.95rem;margin:0 0 8px}
   <div id="gates" hidden>
     <div class="k">Moving, gates 0&ndash;8</div><div class="bars m" id="gm"></div><div class="lab" id="lm"></div>
     <div class="k" style="margin-top:10px">Still, gates 0&ndash;8</div><div class="bars s" id="gs"></div><div class="lab" id="ls"></div>
+  </div>
+</div>
+<div class="card">
+  <div class="sp"><h2>GPS</h2><span class="st warn" id="gst">not connected</span></div>
+  <div class="kv">
+    <div><div class="k">Fix</div><div class="v" id="gfx">-</div></div>
+    <div><div class="k">Satellites / HDOP</div><div class="v" id="gsh">-</div></div>
+    <div><div class="k">Latitude</div><div class="v" id="gla">-</div></div>
+    <div><div class="k">Longitude</div><div class="v" id="glo">-</div></div>
+    <div><div class="k">Altitude</div><div class="v" id="gal">-</div></div>
+    <div><div class="k">Speed</div><div class="v" id="gsc">-</div></div>
+    <div><div class="k">Course</div><div class="v" id="gco">-</div></div>
+    <div class="w"><div class="k">UTC</div><div class="v" id="gut">-</div></div>
+    <div class="w"><div class="k">Time source</div><div class="v" id="gts">-</div></div>
+  </div>
+</div>
+<div class="card">
+  <div class="sp"><h2>Tilt</h2><span class="st warn" id="ist">not connected</span></div>
+  <div class="tilt">
+    <svg viewBox="-60 -60 120 120" role="img" aria-label="level indicator">
+      <defs><clipPath id="cp"><circle r="54"/></clipPath></defs>
+      <circle class="sk" r="54"/>
+      <g clip-path="url(#cp)"><g id="hz" transform="rotate(0)"><g id="hp" transform="translate(0 0)">
+        <rect class="sg" x="-200" y="0" width="400" height="200"/><line class="hz" x1="-200" y1="0" x2="200" y2="0"/>
+      </g></g></g>
+      <circle class="ring" id="rg" r="54"/>
+      <path class="rt" d="M-30 0H-10M10 0H30M0 -4V4"/>
+    </svg>
+    <div class="kv">
+      <div><div class="k">Pitch (nose up +)</div><div class="v" id="ipi">-</div></div>
+      <div><div class="k">Roll (right down +)</div><div class="v" id="iro">-</div></div>
+    </div>
   </div>
 </div>
 </main>
@@ -122,11 +169,56 @@ h2{font-size:.95rem;margin:0 0 8px}
     $("fps").textContent = f === null ? "-" : f.toFixed(1);
   }
 
+  var NC = "not connected";
+  function deg(x, d) { var v = num(x); return v === null ? "-" : v.toFixed(d) + "\u00b0"; }
+  function setSt(id, text, cls) { var e = $(id); e.textContent = text; e.className = "st " + cls; }
+  function renderGps(g, tsrc) {
+    var TS = { gps: "GPS", sntp: "SNTP", none: "none" };
+    $("gts").textContent = TS[tsrc] || "-";
+    var ids = ["gfx", "gsh", "gla", "glo", "gal", "gsc", "gco", "gut"];
+    var st = g && typeof g === "object" ? g.status : "absent";
+    if (st !== "ok") {
+      setSt("gst", st === "silent" ? "no data" : NC, st === "silent" ? "bad" : "warn");
+      ids.forEach(function (k) { $(k).textContent = "-"; });
+      return;
+    }
+    var fix = g.fix === true;
+    setSt("gst", fix ? "fix" : "no fix", fix ? "ok" : "warn");
+    var q = num(g.fix_quality), n = num(g.sats), h = num(g.hdop);
+    $("gfx").textContent = fix ? "yes (q" + (q === null ? "?" : q) + ")" : "no fix";
+    $("gsh").textContent = (n === null ? "-" : n) + " / " + (h === null ? "-" : h.toFixed(2));
+    var la = num(g.lat), lo = num(g.lon), al = num(g.alt_m), sp = num(g.speed_kmh), co = num(g.course_deg);
+    $("gla").textContent = la === null ? "-" : la.toFixed(7) + "\u00b0";
+    $("glo").textContent = lo === null ? "-" : lo.toFixed(7) + "\u00b0";
+    $("gal").textContent = al === null ? "-" : al.toFixed(1) + " m";
+    $("gsc").textContent = sp === null ? "-" : sp.toFixed(1) + " km/h";
+    $("gco").textContent = co === null ? "-" : co.toFixed(0) + "\u00b0";
+    $("gut").textContent = typeof g.utc === "string" ? g.utc.replace("T", " ").replace("Z", " UTC") : "-";
+  }
+  function renderImu(m) {
+    var st = m && typeof m === "object" ? m.status : "absent";
+    var p = st === "ok" && m.valid === true ? num(m.pitch_deg) : null;
+    var r = st === "ok" && m.valid === true ? num(m.roll_deg) : null;
+    if (st === "ok") setSt("ist", p === null || r === null ? "no data" : "ok", p === null || r === null ? "warn" : "ok");
+    else if (st === "error") setSt("ist", "error", "bad");
+    else setSt("ist", NC, "warn");
+    $("ipi").textContent = deg(p, 2);
+    $("iro").textContent = deg(r, 2);
+    var pc = p === null ? 0 : Math.max(-45, Math.min(45, p));
+    /* horizon moves down when the nose is up and turns against the roll */
+    $("hz").setAttribute("transform", "rotate(" + (r === null ? 0 : -r).toFixed(2) + ")");
+    $("hp").setAttribute("transform", "translate(0 " + (pc * 1.2).toFixed(2) + ")");
+    $("rg").setAttribute("class", "ring" + (p !== null && r !== null && Math.abs(p) < 1 && Math.abs(r) < 1 ? " lv" : ""));
+  }
+  renderGps(null, "none"); renderImu(null);
+
   function render(m) {
     if (!m || typeof m !== "object") return;
     setLink(m.link);
     $("seq").textContent = val(m.seq);
     updFps(m.seq, m.link);
+    renderGps(m.gps, m.time_source);
+    renderImu(m.imu);
     var d = m.data;
     if (!d || typeof d !== "object") { clearData(); return; }
     var st = num(d.target_state);
