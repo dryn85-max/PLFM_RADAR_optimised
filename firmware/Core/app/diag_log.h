@@ -14,46 +14,46 @@
 
 #ifdef DIAG_VERBOSE
 #define DIAG(subsys, fmt, ...) \
-    printf("[%7lu ms] %s: " fmt " (%s:%d)\n", \
+    printf("[%7lu ms] %s: " fmt " (%s:%d)\r\n", \
            (unsigned long)millis(), subsys, ##__VA_ARGS__, __FILE__, __LINE__)
 #else
 #define DIAG(subsys, fmt, ...) \
-    printf("[%7lu ms] %s: " fmt "\n", \
+    printf("[%7lu ms] %s: " fmt "\r\n", \
            (unsigned long)millis(), subsys, ##__VA_ARGS__)
 #endif
 
 #define DIAG_WARN(subsys, fmt, ...) \
-    printf("[%7lu ms] %s WARN: " fmt "\n", \
+    printf("[%7lu ms] %s WARN: " fmt "\r\n", \
            (unsigned long)millis(), subsys, ##__VA_ARGS__)
 
 #define DIAG_ERR(subsys, fmt, ...) \
-    printf("[%7lu ms] %s **ERR**: " fmt "\n", \
+    printf("[%7lu ms] %s **ERR**: " fmt "\r\n", \
            (unsigned long)millis(), subsys, ##__VA_ARGS__)
 
 #define DIAG_REG(subsys, name, val) \
-    printf("[%7lu ms] %s: %s = 0x%02X\n", \
+    printf("[%7lu ms] %s: %s = 0x%02X\r\n", \
            (unsigned long)millis(), subsys, name, (unsigned int)(val))
 
 #define DIAG_REG32(subsys, name, val) \
-    printf("[%7lu ms] %s: %s = 0x%08lX\n", \
+    printf("[%7lu ms] %s: %s = 0x%08lX\r\n", \
            (unsigned long)millis(), subsys, name, (unsigned long)(val))
 
 /* pin is a gpio_t (upstream took port+pin; the HAL abstraction hides those). */
 #define DIAG_GPIO(subsys, name, pin) \
-    printf("[%7lu ms] %s: GPIO %s = %s\n", \
+    printf("[%7lu ms] %s: GPIO %s = %s\r\n", \
            (unsigned long)millis(), subsys, name, \
            gpio_read(pin) ? "HIGH" : "LOW")
 
 #define DIAG_BOOL(subsys, name, val) \
-    printf("[%7lu ms] %s: %s = %s\n", \
+    printf("[%7lu ms] %s: %s = %s\r\n", \
            (unsigned long)millis(), subsys, name, (val) ? "YES" : "NO")
 
 #define DIAG_SECTION(title) \
-    printf("[%7lu ms] ======== %s ========\n", \
+    printf("[%7lu ms] ======== %s ========\r\n", \
            (unsigned long)millis(), title)
 
 #define DIAG_ELAPSED(subsys, label, start_tick) \
-    printf("[%7lu ms] %s: %s took %lu ms\n", \
+    printf("[%7lu ms] %s: %s took %lu ms\r\n", \
            (unsigned long)millis(), subsys, label, \
            (unsigned long)(millis() - (uint32_t)(start_tick)))
 

@@ -44,6 +44,8 @@ B). Fork baseline: upstream `b46dd71`.
 | **Language of README and `docs/` is English;** `docs/bom-optimization.md` stays Russian as a historical document. | It is a historical analysis of the upstream design. | `de18760` |
 | **Protocol unit tests restored as `host/test_radar_protocol.py`** (the non-Tk classes of the legacy Tk GUI test file), run in the CI Python job; the legacy file stays untouched and non-importable. | The restructure had dropped the only unit tests of `radar_protocol.py`; the Tk GUI itself is not used by Lite. | `09a29d8` |
 | **GitHub Pages is not enabled** (the upstream HTML site is archived in `legacy/docs-site/`). | Owner decision in the restructure final-review round; no Pages site for Lite. | reason not recorded beyond that |
+| **Firmware boot banner renamed to `AERIS-10 Lite G0B1 boot`.** | Owner request after the first bench run: the banner still carried the pre-restructure name. | this change |
+| **`DIAG` log lines end with `\r\n`** (were `\n` only). | Owner request after the first bench run: `screen` showed the log as a staircase; banner and command replies already used `\r\n`. | this change |
 
 ## Process decisions (earlier)
 

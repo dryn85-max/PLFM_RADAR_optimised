@@ -45,6 +45,20 @@ Follow-up work that is out of scope for the current plans.
   solder bridges: PB8/PB9 (I2C1) must NOT be tied to A4/A5 (PC1/PC0 = DIG1/DIG0) -
   verify they are open; PA2/PA3 stay routed to the ST-LINK VCP**; connector
   column of the README wiring table checked against UM2324.
+- [ ] **First bench run (2026-10-02, bare NUCLEO-G0B1RE, nothing on the pins).**
+  Flash via `make flash` (st-flash 1.8.0, chip id 0x467) OK; clean boot prints the
+  banner, the placeholder-PLL notice, `PLL **ERR**: lock failed (-116)` and
+  `FLT WARN: fault 1 (RF off)`; `status`, `stop` (latch 11, survives RESET, cleared
+  by power-cycling the MCU via the IDD jumper) and `ERR latched` for every other
+  command behave as specified. Open findings from that run:
+  - [ ] **One-off `FAULT_PANIC` (12)** latched on the very first run after the first
+    flash; not reproduced on later flashes, resets or power cycles. The latch does
+    not record where the panic happened: store the faulting PC/LR (HardFault
+    stacked frame) or the `Error_Handler` caller next to the latch and print it on
+    the latched boot, so the next occurrence can be diagnosed.
+  - [ ] **Command line has no echo and no Backspace handling:** a corrected typo
+    reaches the parser as garbage (`status` then answered `ERR latched`). Handle
+    BS/DEL in `cmd_feed` and consider local echo.
 
 ## RTL track
 
