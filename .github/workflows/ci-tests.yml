@@ -51,6 +51,7 @@ jobs:
           uv run pytest
           host/test_v7.py
           host/test_radar_protocol.py
+          host/test_ld2410_rec.py
           -v --tb=short
 
   # ===========================================================================
@@ -121,7 +122,7 @@ jobs:
   # ===========================================================================
   # Cross-Layer Contract Tests (Python ↔ Verilog ↔ C)
   # Validates opcode maps, bit widths, packet layouts, and round-trip
-  # correctness across FPGA RTL, Python GUI, and STM32G0B1 firmware (firmware/).
+  # correctness across FPGA RTL, Python GUI, and STM32G0B1 firmware (stm32/).
   # ===========================================================================
   cross-layer-tests:
     name: Cross-Layer Contract Tests
@@ -149,7 +150,7 @@ jobs:
           -v --tb=short
 
   # ===========================================================================
-  # STM32G0B1 firmware (firmware/): host tests + ARM cross-build
+  # STM32G0B1 firmware (stm32/): host tests + ARM cross-build
   # ===========================================================================
   mcu-g0b1:
     name: MCU G0B1 Firmware
@@ -163,16 +164,35 @@ jobs:
 
       - name: Host tests (ADAR_COUNT=1 and 4)
         run: make test
-        working-directory: firmware
+        working-directory: stm32
 
       - name: Build default (ADAR_COUNT=1, DIAG=1)
         run: make
-        working-directory: firmware
+        working-directory: stm32
 
       - name: Build DIAG=0
         run: make DIAG=0 clean all
-        working-directory: firmware
+        working-directory: stm32
 
       - name: Build ADAR_COUNT=4
         run: make ADAR_COUNT=4 clean all
-        working-directory: firmware
+        working-directory: stm32
+
+  # ===========================================================================
+  # ESP32-S3 MVP (esp32/): host tests + ESP-IDF build
+  # ===========================================================================
+  esp32-mvp:
+    name: ESP32 MVP
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tests (core C modules)
+        run: make -C esp32/tests test
+
+      - name: ESP-IDF build (v5.5.5, esp32s3)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/project" -w /project/esp32 \
+            espressif/idf:v5.5.5 \
+            bash -c "idf.py set-target esp32s3 && idf.py build"

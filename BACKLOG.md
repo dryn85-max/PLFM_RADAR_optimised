@@ -5,11 +5,11 @@ Follow-up work that is out of scope for the current plans.
 ## G0B1 firmware track
 
 - [ ] **Real PLL register exports.** Replace the placeholder tables in
-  `firmware/Core/drivers/pll_tables/` with exports from
+  `stm32/Core/drivers/pll_tables/` with exports from
   TICS Pro (LMX2594) / ADI ACE (ADF4372), remove `PLL_TABLE_PLACEHOLDER`. Until
   then lock fails and the unit reports `FAULT_PLL_LOCK`.
-  Generate the headers with `firmware/tools/regtable_to_h.py`
-  (usage in `firmware/README.md`; it emits `PLL_TABLE_PLACEHOLDER 0`); do not hand-type
+  Generate the headers with `stm32/tools/regtable_to_h.py`
+  (usage in `stm32/README.md`; it emits `PLL_TABLE_PLACEHOLDER 0`); do not hand-type
   the 113 LMX2594 words.
 - [ ] **Verify pins, AF numbers and I2C TIMINGR** (`0x10B17DB5`) against the
   STM32G0B1 datasheet and UM2324; fill in the "Nucleo connector" column of the
@@ -63,6 +63,50 @@ Follow-up work that is out of scope for the current plans.
 - [ ] **Console: async lines mid-typing (proposal).** Asynchronous DIAG/fault lines
   can land in the middle of a typed line and the partial line is not redrawn
   (pre-existing, more visible now that the console echoes).
+
+## ESP32 MVP track
+
+Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
+`docs/superpowers/specs/2026-10-02-esp32-ld2410-mvp.md`).
+
+- [ ] **LD2410C settings page** on the live page: maximum gates, per-gate
+  sensitivity, hold time (the first version only enables engineering mode).
+- [ ] **GPS NEO-6M and IMU BMI160 on the ESP32.** Pins are to be assigned (the
+  MVP uses GPIO17/18 for the LD2410C, GPIO19/20 for native USB, GPIO0 for BOOT).
+- [ ] **Decide A (everything on the ESP32-S3) vs B (hybrid STM32 + ESP32-S3)
+  when the RF chain is bought.** Pin-count analysis summary: the ESP32-S3
+  N32R8V has about 27-31 usable GPIO (octal flash/PSRAM take GPIO26-37, strapping
+  and USB pins are further limited); the minimum need is about 19-25 pins with
+  hardware PG->EN chaining of the base power rails; the PA and LNA enables must
+  stay on direct MCU pins with pull-downs so they are off while the MCU boots or
+  resets. Numbers to be re-checked against the ESP32-S3 datasheet (**VERIFY**).
+- [ ] **PA over-temperature sensor choice for the STM32.** Options: A) TMP3x on
+  the internal ADC (needs a pin reshuffle); B) I2C LM75 / TMP102; C) AHT only
+  for air temperature; D) keep the ADS7830. NTC probes from the ZFC39 kit are an
+  option for the probe itself. Needs an owner decision.
+- [ ] **Hi-Link LD2410C protocol manual into `hardware/datasheets/`**, then
+  verify the parser, the frame decoder, the command codec and the test vectors
+  (`esp32/tests/vectors/`, currently synthetic) against it and a real capture
+  (engineering frame layout incl. the extra module-specific bytes, ACK
+  sequence, frame rate, maximum payload length).
+- [ ] **Commit `esp32/dependencies.lock`.** The `espressif/mdns` version is now
+  pinned exactly (`==1.14.0`, as resolved by CI) but the lock file is still
+  git-ignored and not committed; commit it for fully reproducible builds.
+- [ ] **TCP keepalive for the recording server** (only 1 s keep-alive batches and
+  5 s socket timeouts today); a half-open connection from a vanished client is
+  noticed by the send timeout only.
+- [ ] **Optional authentication on the live page** (none in the MVP; anyone on
+  the AP or the home network can open it and the recording port).
+- [ ] **A stalled WebSocket client blocks the httpd task** (final review,
+  2026-10-02): `httpd_ws_send_frame_async` runs synchronously in the httpd task,
+  so one stalled browser delays page loads and the other clients for up to the
+  5 s send timeout per frame. Options: shorter send timeout, or a per-client
+  send task. Proposal, owner decision.
+- [ ] **STA retries disturb the fallback AP** (final review, 2026-10-02): in
+  AP+STA fallback every STA retry scans channels and the AP follows the STA
+  channel, which can disrupt a phone fixing wrong credentials on the AP. Option:
+  pause STA retries while a station is connected to the AP. Proposal, owner
+  decision.
 
 ## RTL track
 

@@ -6,7 +6,7 @@ layouts) directly from the source files of each layer:
   - Python GUI:  radar_protocol.py
   - FPGA RTL:    radar_system_top.v, usb_data_interface_ft2232h.v,
                  usb_data_interface.v
-  - STM32G0B1 MCU (firmware/): Core/hal/pins_table.c, Core/app/fpga_if.c,
+  - STM32G0B1 MCU (stm32/): Core/hal/pins_table.c, Core/app/fpga_if.c,
                  Core/app/agc.c, Core/hal/hal_gpio.c, Core/drivers/adar1000.c
 
 These parsers do NOT define the expected values — they discover what each
@@ -27,7 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GUI_DIR = REPO_ROOT / "host"
 FPGA_DIR = REPO_ROOT / "fpga"
-MCU_DIR = REPO_ROOT / "firmware"            # STM32G0B1 (active MCU)
+MCU_DIR = REPO_ROOT / "stm32"               # STM32G0B1 (active MCU)
 MCU_CORE_DIR = MCU_DIR / "Core"
 
 
@@ -695,7 +695,7 @@ def parse_g0b1_function_body(text: str, name: str) -> str | None:
 # ===================================================================
 
 def parse_g0b1_pin_table(filepath: Path | None = None) -> dict[str, GpioPin]:
-    """Parse firmware/Core/hal/pins_table.c.
+    """Parse stm32/Core/hal/pins_table.c.
 
     Returns {"PIN_FPGA_DIG0": GpioPin(...), ...}; pin_id is e.g. "PC0",
     direction "output"/"input" from the is_output column.

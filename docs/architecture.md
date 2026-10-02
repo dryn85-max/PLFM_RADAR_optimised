@@ -19,7 +19,7 @@ Nothing has been run on hardware; see [bring-up.md](bring-up.md).
                                                                     +-------------v-v--+
  LO PLL eval board (ADF4372 / LMX2594) <-- SPI1 8 MHz + CE/LD ----- |  NUCLEO-G0B1RE   |
  ADAR1000 (4 ch) + 4x ADTR1107          <-- SPI2 16 MHz + 4 CS ---- |  STM32G0B1       |
- ADS7830 (temperature)                  <-- I2C1 100 kHz ---------- |  firmware/       |
+ ADS7830 (temperature)                  <-- I2C1 100 kHz ---------- |  stm32/          |
  power rail enables (7x EN_*)           <-- GPIO ------------------ |                  |
  ST-LINK VCP (USART2, 115200 8N1)       <-> text commands / STATUS  +------------------+
 ```
@@ -29,7 +29,7 @@ Roles:
 - **FPGA** (`fpga/`): captures the ADC, down-converts, pulse-compresses, Doppler
   processes, runs CFAR, generates the TX chirp through the DAC and streams
   results to the host.
-- **MCU** (`firmware/`): sequences power rails, programs the LO PLL and the
+- **MCU** (`stm32/`): sequences power rails, programs the LO PLL and the
   ADAR1000, steers the beam, runs the outer AGC loop, monitors temperature,
   enforces the fault model and offers a text command interface on the ST-LINK
   virtual COM port.
@@ -63,7 +63,7 @@ about 43 800 clk (0.44 ms) per long chirp.
 ### FPGA <-> MCU: DIG0-7
 
 DIG0..DIG7 are MCU pins PC0..PC7, so one read of the GPIO input register
-returns the whole bus (`firmware/Core/hal/pins.h`, `pins_table.c`). Direction is
+returns the whole bus (`stm32/Core/hal/pins.h`, `pins_table.c`). Direction is
 from the MCU's point of view. Idle level is low for all of them.
 
 | Line | MCU pin | Direction | Signal | FPGA side (`radar_system_top.v`) |
@@ -92,13 +92,13 @@ FPGA balls); those do not apply to Lite. The contract tests
 | GPIO | PA0, PA1, PA4, PA6, PA7, PA8, PC8 | active-high enables | EN_FPGA, EN_LO, EN_ADAR, EN_ADTR_VDD_SW, EN_ADTR_VSS_SW, EN_LNA, EN_PA |
 
 Full wiring table with the Nucleo connector column (many entries still
-**VERIFY vs UM2324**): [firmware/README.md](../firmware/README.md#wiring-corehalpinsh-corehalhal_gpioc).
+**VERIFY vs UM2324**): [stm32/README.md](../stm32/README.md#wiring-corehalpinsh-corehalhal_gpioc).
 Whether the ADAR1000 SPI also passes through the FPGA (the RTL still has
 `stm32_*_3v3` / `*_1v8` pass-through ports) on the Lite board: **VERIFY**.
 
 The MCU command interface (`beam`, `gain`, `tx`, `rx`, `auto`, `status`, `stop`)
 and the `STATUS` line format are documented in
-[firmware/README.md](../firmware/README.md#serial-command-interface).
+[stm32/README.md](../stm32/README.md#serial-command-interface).
 
 ### Host USB link
 
@@ -147,7 +147,7 @@ been run, there is no Quartus project yet):
 
 MCU (STM32G0B1RET6 has 512 KB flash / 144 KB RAM; the build budget is 128 KB
 flash / 32 KB RAM including a 4 KB stack and 1 KB heap reserve), from
-[firmware/README.md](../firmware/README.md#memory-report):
+[stm32/README.md](../stm32/README.md#memory-report):
 
 | Configuration | Flash (of 131072) | RAM (of 32768) |
 |---|---|---|
@@ -155,10 +155,65 @@ flash / 32 KB RAM including a 4 KB stack and 1 KB heap reserve), from
 | `DIAG=0` | 17288 | 5908 |
 | `ADAR_COUNT=4` | 24808 | 6372 |
 
+## MVP (ESP32-S3 + HLK-LD2410C)
+
+A bench MVP independent of everything above: **the STM32 firmware and the FPGA
+are not part of it** (the RF chain, FPGA board and ADC are not bought yet). It
+lives in `esp32/` ([esp32/README.md](../esp32/README.md)); the STM32 firmware
+stays in the repo unchanged.
+
+```
+ HLK-LD2410C (24 GHz FMCW presence radar)
+      | UART1 256000 8N1: TX -> GPIO18 (ESP32 RX), RX <- GPIO17 (ESP32 TX)
+      v
+ +-------------------- ESP32-S3-DevKitC-1 (N32R8V) --------------------+
+ | ld2410 task (core 1)                                                |
+ |   UART -> ld2410_parser (frames) -> ld2410_frame (decode)           |
+ |        +--> ring buffer, 4 MiB PSRAM (seq u32 + esp time + raw)     |
+ |        +--> latest snapshot (mutex)                                 |
+ | HTTP :80  /  /wifi (AP only)  /ws  <- 10 Hz timer: latest snapshot  |
+ | TCP :5410 recording server <- ring buffer batches (core 0)          |
+ | Wi-Fi: STA from NVS, fallback AP AERIS-MVP-XXXX; mDNS aeris-mvp     |
+ | BOOT (GPIO0) held >= 5 s: erase STA credentials                     |
+ | console / flashing: native USB (USB-Serial-JTAG)                    |
+ +---------------------------------------------------------------------+
+      | Wi-Fi                                  | Wi-Fi
+      v                                        v
+ browser: live page (WebSocket)        PC: host/ld2410_rec.py -> .ldrec -> CSV
+```
+
+Data flow:
+
+1. The UART reader feeds an incremental parser that resynchronises after
+   garbage and keeps the raw bytes of every complete data frame unchanged.
+2. Each data frame gets a 32-bit sequence number and the ESP32 time
+   (`esp_timer`, us since boot) and is stored in the ring buffer (PSRAM, 4 MiB;
+   32 KiB of internal RAM if the PSRAM allocation fails). The decoded fields
+   also replace the **latest snapshot**.
+3. **Live view:** a 10 Hz timer builds the snapshot JSON and sends it to each
+   WebSocket client; a client whose previous send is still pending is skipped,
+   so a slow client sees only the newest snapshot (latest-only, no queue).
+4. **Recording:** the TCP server on port 5410 reads a 12-byte request with
+   `from_seq` and sends batches about once per second (immediately while more
+   records are pending) from the ring buffer. A `GAP` flag says the requested
+   start was evicted. Every batch carries a `boot_id` (random per boot) because
+   the sequence restarts at 0 after a reboot. One client at a time. The PC
+   recorder writes raw frames plus PC time to a `.ldrec` file and exports CSV.
+
+Wi-Fi modes: STA when credentials are stored and the connection succeeds within
+15 s (AP off); otherwise AP+STA (AP `AERIS-MVP-XXXX`, WPA2, random 12-character
+password kept in NVS and printed to the console at every boot, STA keeps
+retrying); with no credentials AP only. The `/wifi` setup page is served only to
+clients on the AP.
+
+Not verified on hardware yet; see the VERIFY list in
+[esp32/README.md](../esp32/README.md). Open follow-ups (settings page, GPS/IMU,
+all-on-ESP32 vs hybrid STM32 + ESP32) are in [BACKLOG.md](../BACKLOG.md).
+
 ## Known limitations
 
 Full lists: [fpga/README.md](../fpga/README.md#known-limitations) (limitations
-a-l), [firmware/README.md](../firmware/README.md#not-covered-here) and
+a-l), [stm32/README.md](../stm32/README.md#not-covered-here) and
 [BACKLOG.md](../BACKLOG.md). Main points:
 
 - Nothing has been tested on hardware; the PLL register tables are placeholders

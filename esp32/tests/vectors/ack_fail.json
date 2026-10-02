@@ -1,0 +1,9 @@
+{
+  "frame_kind": "cmd",
+  "raw_hex": "fdfcfbfa04006201010004030201",
+  "ack": {
+    "cmd": 98,
+    "status": 1,
+    "ok": 0
+  }
+}

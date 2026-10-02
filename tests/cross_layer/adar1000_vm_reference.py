@@ -22,7 +22,7 @@ licensing-relevant source.
 PLFM_RADAR firmware indexing convention
 ---------------------------------------
 `adarSetRxPhase` / `adarSetTxPhase` in
-`firmware/Core/drivers/adar1000.c`
+`stm32/Core/drivers/adar1000.c`
 write `VM_I[phase % 128]` and `VM_Q[phase % 128]` to the chip. Each index
 N corresponds to commanded beam phase `N * 360/128 = N * 2.8125 deg`. The
 ADI table is also on a uniform 2.8125 deg grid (verified by

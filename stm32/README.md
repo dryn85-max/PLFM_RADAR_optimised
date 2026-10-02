@@ -22,7 +22,7 @@ and [docs/bring-up.md](../docs/bring-up.md).
 
 ## Build, flash, test
 
-Run everything from `firmware/`.
+Run everything from `stm32/`.
 
 | Command | What it does |
 |---|---|

@@ -89,8 +89,9 @@ GPT-5.5 is not used.
 | Path | Contents |
 |---|---|
 | `fpga/` | Vendor-neutral Verilog-2001 RTL, testbenches (`tb/`), golden vectors, `run_regression.sh` |
-| `firmware/` | STM32G0B1 (NUCLEO-G0B1RE) C firmware, host unit tests (`make test`) |
-| `host/` | V7 PyQt6 GUI, `radar_protocol.py`, smoke test, `test_v7.py`, `test_radar_protocol.py` |
+| `stm32/` | STM32G0B1 (NUCLEO-G0B1RE) C firmware, host unit tests (`make test`) |
+| `esp32/` | ESP32-S3 + HLK-LD2410C MVP (ESP-IDF v5.5.5, C): `components/core/` hardware-independent modules, `main/` application, `tests/` host tests ([README](esp32/README.md)) |
+| `host/` | V7 PyQt6 GUI, `radar_protocol.py`, smoke test, `test_v7.py`, `test_radar_protocol.py`, ESP32 recorder `ld2410_rec.py` and `test_ld2410_rec.py` |
 | `tests/cross_layer/` | RTL / firmware / host contract tests |
 | `tools/` | `check_paths.sh` (path gate), `uart_capture.py` |
 | `hardware/datasheets/` | Datasheets of the parts the project uses |
@@ -113,9 +114,15 @@ All paths and commands below are relative to the repository root.
 - Path gate (no references to the pre-restructure layout): `bash tools/check_paths.sh`.
 - MCU, legacy F7 tree (reference only, do not modify):
   `cd legacy/9_Firmware/9_1_Microcontroller/tests && make clean && make`.
-- MCU, STM32G0B1 port: `cd firmware && make test && make`
+- MCU, STM32G0B1 port: `cd stm32 && make test && make`
   (arm-none-eabi-gcc; `make DIAG=0`, `make ADAR_COUNT=4` must also build).
   See its README.
+- ESP32 MVP host tests (plain C11, no ESP-IDF needed): `make -C esp32/tests test`.
+  The ESP-IDF build (`cd esp32 && idf.py set-target esp32s3 && idf.py build`,
+  ESP-IDF v5.5.5) runs only in CI (`espressif/idf:v5.5.5`); it is usually not
+  available locally. Recorder tests: `uv run pytest host/test_ld2410_rec.py -v`.
+  The recording protocol layouts are shared by `esp32/components/core/rec_proto.[ch]`,
+  `host/ld2410_rec.py` and `esp32/tests/vectors/`: change all three together.
 - Cross-layer contracts:
   `uv run pytest tests/cross_layer/test_cross_layer_contract.py -v`.
 - Write the failing test first. Testbenches must be adversarial: boundary

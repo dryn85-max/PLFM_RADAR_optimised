@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AERIS-10 Lite</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1c1f24;--mut:#667;--bar:#2f6fed;--bar2:#d9822b;--bd:#d8dbe0;--ok:#1f8f4e;--bad:#c0392b;--warn:#b7791f}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1e2126;--fg:#e8eaed;--mut:#98a0ab;--bar:#5b8def;--bar2:#e39a4a;--bd:#33373e;--ok:#4cc27e;--bad:#e8685a;--warn:#e0a63c}}
+*{box-sizing:border-box}
+body{margin:0;padding:12px;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-variant-numeric:tabular-nums}
+main{max-width:640px;margin:0 auto}
+h1{font-size:1.1rem;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:10px}
+.row{display:grid;grid-template-columns:repeat(4,auto);gap:8px 12px;justify-content:space-between;font-size:.9rem;color:var(--mut)}
+@media(max-width:520px){.row{grid-template-columns:1fr 1fr;gap:8px;font-size:.8rem}.row>span{white-space:normal}}
+.row>span{white-space:nowrap}
+.pill{font-weight:600}
+.fx{display:inline-block;vertical-align:bottom}
+#link{min-width:7ch}
+#ws{min-width:10ch}
+#seq{min-width:7ch;text-align:left}
+#fps{min-width:4ch;text-align:right}
+.ok{color:var(--ok)}.lost{color:var(--bad)}.no_data{color:var(--warn)}
+#state{font-size:2.6rem;font-weight:700;text-align:center;padding:14px 0;letter-spacing:.02em}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.k{font-size:.8rem;color:var(--mut)}.v{font-size:1.3rem;font-weight:600}
+h2{font-size:.95rem;margin:0 0 8px}
+.bars{display:flex;align-items:flex-end;gap:4px;height:110px}
+.bw{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%}
+.b{width:100%;background:var(--bar);border-radius:3px 3px 0 0;min-height:1px}
+.s .b{background:var(--bar2)}
+.lab{display:flex;gap:4px;font-size:.7rem;color:var(--mut)}.lab span{flex:1;text-align:center}
+.nv{font-size:.7rem;color:var(--mut);text-align:center}
+#noeng{color:var(--mut);font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+<h1>AERIS-10 Lite &middot; LD2410C</h1>
+<div class="card row">
+  <span>Sensor link: <span id="link" class="pill fx no_data">no_data</span></span>
+  <span>WebSocket: <span id="ws" class="pill fx lost">connecting</span></span>
+  <span>Frame: <span id="seq" class="fx">-</span></span>
+  <span><span id="fps" class="fx">-</span> frames/s</span>
+</div>
+<div class="card"><div id="state">-</div></div>
+<div class="card grid">
+  <div><div class="k">Moving distance</div><div class="v" id="md">-</div></div>
+  <div><div class="k">Moving energy</div><div class="v" id="me">-</div></div>
+  <div><div class="k">Still distance</div><div class="v" id="sd">-</div></div>
+  <div><div class="k">Still energy</div><div class="v" id="se">-</div></div>
+  <div><div class="k">Detection distance</div><div class="v" id="dd">-</div></div>
+</div>
+<div class="card">
+  <h2>Gate energy (0&ndash;100)</h2>
+  <div id="noeng">engineering mode unavailable</div>
+  <div id="gates" hidden>
+    <div class="k">Moving, gates 0&ndash;8</div><div class="bars m" id="gm"></div><div class="lab" id="lm"></div>
+    <div class="k" style="margin-top:10px">Still, gates 0&ndash;8</div><div class="bars s" id="gs"></div><div class="lab" id="ls"></div>
+  </div>
+</div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var STATES = ["none", "moving", "still", "both"];
+  var NG = 9, bm = [], bs = [], nm = [], ns = [];
+
+  function mkBars(host, labHost, bars, nums) {
+    for (var i = 0; i < NG; i++) {
+      var w = document.createElement("div"); w.className = "bw";
+      var n = document.createElement("div"); n.className = "nv"; n.textContent = "-";
+      var b = document.createElement("div"); b.className = "b"; b.style.height = "1px";
+      w.appendChild(n); w.appendChild(b); host.appendChild(w);
+      bars.push(b); nums.push(n);
+      var l = document.createElement("span"); l.textContent = i; labHost.appendChild(l);
+    }
+  }
+  mkBars($("gm"), $("lm"), bm, nm);
+  mkBars($("gs"), $("ls"), bs, ns);
+
+  function num(x) { return typeof x === "number" && isFinite(x) ? x : null; }
+  function metres(cm) { var v = num(cm); return v === null ? "-" : (v / 100).toFixed(2) + " m"; }
+  function val(x) { var v = num(x); return v === null ? "-" : String(v); }
+  function setBars(arr, bars, nums) {
+    for (var i = 0; i < NG; i++) {
+      var v = Array.isArray(arr) ? num(arr[i]) : null;
+      if (v === null) { bars[i].style.height = "1px"; nums[i].textContent = "-"; continue; }
+      v = Math.max(0, Math.min(100, v));
+      bars[i].style.height = v + "%";
+      nums[i].textContent = v;
+    }
+  }
+  function setLink(l) {
+    var e = $("link");
+    l = (l === "ok" || l === "lost" || l === "no_data") ? l : "no_data";
+    e.textContent = l; e.className = "pill fx " + l;
+  }
+  function clearData() {
+    $("state").textContent = "-";
+    ["md", "me", "sd", "se", "dd"].forEach(function (k) { $(k).textContent = "-"; });
+    $("gates").hidden = true; $("noeng").hidden = false;
+  }
+
+  /* Windowed frames/s: Wi-Fi delivers messages in bursts, so an
+     instantaneous seq/dt estimate explodes; use the last ~2 s instead. */
+  var hist = [];
+  function fpsCalc(now, seq) {
+    var n = hist.length;
+    if (n && (((seq - hist[n - 1][1]) >>> 0) > 1000 || seq === hist[n - 1][1] && now < hist[n - 1][0])) { hist = []; n = 0; }
+    hist.push([now, seq]); n++;
+    while (n > 2 && now - hist[1][0] >= 2000) { hist.shift(); n--; }
+    var dt = now - hist[0][0];
+    if (dt < 1000) return null;
+    return ((seq - hist[0][1]) >>> 0) * 1000 / dt;
+  }
+  function updFps(seq, link) {
+    if (num(seq) === null || link !== "ok") { hist = []; $("fps").textContent = link === "ok" ? "-" : "0.0"; return; }
+    var f = fpsCalc(performance.now(), seq);
+    $("fps").textContent = f === null ? "-" : f.toFixed(1);
+  }
+
+  function render(m) {
+    if (!m || typeof m !== "object") return;
+    setLink(m.link);
+    $("seq").textContent = val(m.seq);
+    updFps(m.seq, m.link);
+    var d = m.data;
+    if (!d || typeof d !== "object") { clearData(); return; }
+    var st = num(d.target_state);
+    $("state").textContent = st !== null && st >= 0 && st < 4 ? STATES[st] : "-";
+    $("md").textContent = metres(d.moving_dist_cm);
+    $("me").textContent = val(d.moving_energy);
+    $("sd").textContent = metres(d.still_dist_cm);
+    $("se").textContent = val(d.still_energy);
+    $("dd").textContent = metres(d.detect_dist_cm);
+    var eng = d.engineering === 1 && Array.isArray(d.moving_gate_energy) && Array.isArray(d.still_gate_energy);
+    $("gates").hidden = !eng; $("noeng").hidden = eng;
+    if (eng) { setBars(d.moving_gate_energy, bm, nm); setBars(d.still_gate_energy, bs, ns); }
+  }
+
+  var sock = null, delay = 500, timer = null;
+  function wsState(t, ok) { var e = $("ws"); e.textContent = t; e.className = "pill fx " + (ok ? "ok" : "lost"); }
+  function connect() {
+    timer = null;
+    wsState("connecting", false);
+    try { sock = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws"); }
+    catch (e) { retry(); return; }
+    sock.onopen = function () { delay = 500; hist = []; wsState("connected", true); };
+    sock.onmessage = function (ev) {
+      var m = null;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      render(m);
+    };
+    sock.onclose = function () { sock = null; wsState("disconnected", false); hist = []; retry(); };
+    sock.onerror = function () { try { sock.close(); } catch (e) {} };
+  }
+  function retry() {
+    if (timer !== null) return;
+    timer = setTimeout(connect, delay);
+    delay = Math.min(delay * 2, 8000);
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

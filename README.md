@@ -72,13 +72,13 @@ git checkout -- fpga/tb/cosim          # the script rewrites tracked CSVs; resto
 Module guide, signal chain, rates/widths, resource budget and hand-off list:
 [fpga/README.md](fpga/README.md).
 
-### Firmware (`firmware/`)
+### Firmware (`stm32/`)
 
 Needs `arm-none-eabi-gcc` (13.2.1 used), `gcc`, `make`; `st-flash` or
 `STM32_Programmer_CLI` for flashing.
 
 ```
-cd firmware
+cd stm32
 make test                              # host unit tests (ADAR_COUNT=1 and 4)
 make                                   # build ELF/BIN/HEX and run the size check
 make DIAG=0 clean all                  # build without diagnostic logging
@@ -87,7 +87,24 @@ make flash                             # ST-LINK (make flash PROGRAMMER=cube for
 ```
 
 Pin map, serial command interface, fault model and memory report:
-[firmware/README.md](firmware/README.md).
+[stm32/README.md](stm32/README.md).
+
+### ESP32 MVP (`esp32/`)
+
+A bench MVP from an ESP32-S3-DevKitC-1 and an HLK-LD2410C 24 GHz presence
+radar; it needs no STM32 and no FPGA. Host tests need only `gcc` and `make`;
+building the firmware needs ESP-IDF v5.5.5 (CI builds it in a container).
+
+```
+make -C esp32/tests test                                              # host tests
+(cd esp32 && idf.py set-target esp32s3 && idf.py build flash monitor)  # native USB port
+# join the Wi-Fi AERIS-MVP-XXXX (password is printed on the console), open http://192.168.4.1
+uv run python host/ld2410_rec.py record aeris-mvp.local -o run.ldrec
+uv run python host/ld2410_rec.py export-csv run.ldrec -o run.csv
+```
+
+Wiring (read the power warning first), protocol layouts and the VERIFY list:
+[esp32/README.md](esp32/README.md).
 
 ### Host (`host/`)
 
@@ -120,8 +137,9 @@ uv run ruff check .
 | Path | Contents |
 |---|---|
 | `fpga/` | Vendor-neutral Verilog RTL, testbenches, golden vectors, regression script ([README](fpga/README.md)) |
-| `firmware/` | STM32G0B1 (NUCLEO-G0B1RE) bare-metal C firmware, host unit tests ([README](firmware/README.md)) |
-| `host/` | V7 PyQt6 GUI, USB protocol layer, smoke test ([README](host/README.md)) |
+| `stm32/` | STM32G0B1 (NUCLEO-G0B1RE) bare-metal C firmware, host unit tests ([README](stm32/README.md)) |
+| `esp32/` | ESP32-S3 + HLK-LD2410C MVP: live web page and recording server, ESP-IDF C, host tests ([README](esp32/README.md)) |
+| `host/` | V7 PyQt6 GUI, USB protocol layer, smoke test, ESP32 recorder `ld2410_rec.py` ([README](host/README.md)) |
 | `tests/cross_layer/` | Cross-layer contract tests (RTL / firmware / host) |
 | `tools/` | Helper scripts (`uart_capture.py`) and the path gate (`check_paths.sh`) |
 | `hardware/datasheets/` | Datasheets of the parts the project uses (ADAR1000, ADTR1107, ADS7830, TMP35/36/37, FT2232H) |
@@ -139,7 +157,7 @@ uv run ruff check .
 - [docs/bom-optimization.md](docs/bom-optimization.md) - historical analysis of the upstream design (Russian)
 - [docs/superpowers/](docs/superpowers/) - specs and plans of the work done so far
 - [BACKLOG.md](BACKLOG.md) - open items
-- Module READMEs: [fpga](fpga/README.md), [firmware](firmware/README.md), [host](host/README.md), [legacy](legacy/README.md)
+- Module READMEs: [fpga](fpga/README.md), [firmware](stm32/README.md), [esp32](esp32/README.md), [host](host/README.md), [legacy](legacy/README.md)
 
 ## Upstream and attribution
 
