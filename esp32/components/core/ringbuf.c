@@ -39,8 +39,8 @@ static void copy_out(const rb_t *rb, size_t off, uint8_t *dst, size_t n)
 static size_t rec_len_at(const rb_t *rb, size_t off)
 {
     uint8_t h[2];
-    copy_out(rb, (off + 12) % rb->cap, h, 1);
-    copy_out(rb, (off + 13) % rb->cap, h + 1, 1);
+    copy_out(rb, (off + 13) % rb->cap, h, 1);
+    copy_out(rb, (off + 14) % rb->cap, h + 1, 1);
     return (size_t)get_le(h, 2);
 }
 
@@ -72,8 +72,8 @@ static void evict_oldest(rb_t *rb)
     rb->count--;
 }
 
-int rb_push(rb_t *rb, uint64_t esp_time_us, const uint8_t *raw, size_t len,
-            uint32_t *seq_out)
+int rb_push(rb_t *rb, uint64_t esp_time_us, uint8_t type, const uint8_t *raw,
+            size_t len, uint32_t *seq_out)
 {
     if (!rb || !rb->mem || (len > 0 && !raw))
         return -EINVAL;
@@ -85,7 +85,8 @@ int rb_push(rb_t *rb, uint64_t esp_time_us, const uint8_t *raw, size_t len,
     uint8_t hdr[RB_REC_HDR];
     put_le(hdr, rb->next_seq, 4);
     put_le(hdr + 4, esp_time_us, 8);
-    put_le(hdr + 12, len, 2);
+    hdr[12] = type;
+    put_le(hdr + 13, len, 2);
     size_t off = (rb->head + rb->used) % rb->cap;
     copy_in(rb, off, hdr, RB_REC_HDR);
     if (len)
@@ -153,21 +154,23 @@ static int cursor_state(const rb_t *rb, const rb_cursor_t *cur)
 }
 
 int rb_cursor_peek(const rb_t *rb, const rb_cursor_t *cur, uint32_t *seq,
-                   uint64_t *esp_time_us, uint8_t *out, size_t cap, size_t *len)
+                   uint64_t *esp_time_us, uint8_t *type, uint8_t *out, size_t cap,
+                   size_t *len)
 {
-    if (!rb || !cur || !seq || !esp_time_us || !len || (cap > 0 && !out))
+    if (!rb || !cur || !seq || !esp_time_us || !type || !len || (cap > 0 && !out))
         return -EINVAL;
     int st = cursor_state(rb, cur);
     if (st)
         return st;
     uint8_t hdr[RB_REC_HDR];
     copy_out(rb, cur->off, hdr, RB_REC_HDR);
-    size_t n = (size_t)get_le(hdr + 12, 2);
+    size_t n = (size_t)get_le(hdr + 13, 2);
     *len = n;
     if (n > cap)
         return -EMSGSIZE;
     *seq = (uint32_t)get_le(hdr, 4);
     *esp_time_us = get_le(hdr + 4, 8);
+    *type = hdr[12];
     if (n)
         copy_out(rb, (cur->off + RB_REC_HDR) % rb->cap, out, n);
     return 0;

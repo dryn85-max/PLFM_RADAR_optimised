@@ -13,6 +13,7 @@
 
 #include "ld2410_cmd.h"
 #include "ld2410_parser.h"
+#include "rec_payload.h"
 #include "rec_proto.h"
 
 #define LD_UART UART_NUM_1
@@ -24,8 +25,12 @@
 #define LD_ACK_TIMEOUT_MS 500
 #define LD_LOST_US 1000000
 #define LD_RATE_LOG_US 10000000
-#define LD_ENG_RETRY_US 5000000 /* between engineering-mode enable attempts */
-#define LD_ENG_RETRIES 5        /* retries after the boot attempt */
+/* Engineering mode is expected but normal-mode frames (data_type 0x02) keep
+ * arriving for this long: the module never got the command, or reset itself
+ * (power glitch) and restarted in normal mode. Re-run the enable sequence, at
+ * most once per LD_ENG_RETRY_US, for as long as it takes. */
+#define LD_ENG_NORMAL_US 3000000
+#define LD_ENG_RETRY_US 10000000
 
 static const char *TAG = "ld2410";
 
@@ -42,7 +47,8 @@ typedef struct {
     bool ack_seen;
     uint16_t ack_status;
     uint32_t frames_window; /* data frames since last rate log */
-    bool eng_frames_seen;   /* an engineering data frame was decoded */
+    uint32_t frame_no;      /* data frames decoded since boot (wraps) */
+    int64_t normal_since;   /* esp_timer us of the first normal frame of the current run, 0 = none */
 } ld_ctx_t;
 
 static void on_data(const ld_frame_t *f, ld_ctx_t *ctx)
@@ -54,14 +60,19 @@ static void on_data(const ld_frame_t *f, ld_ctx_t *ctx)
     }
     /* Stamped when the parser completes the frame, not once per UART read. */
     uint64_t now = (uint64_t)esp_timer_get_time();
+    ctx->frame_no++;
+    /* The frames show the real mode: a module that reset itself is back in normal mode. */
+    s_engineering = d.engineering != 0;
     if (d.engineering) {
-        ctx->eng_frames_seen = true;
+        ctx->normal_since = 0;
+    } else if (ctx->normal_since == 0) {
+        ctx->normal_since = (int64_t)now;
     }
     uint32_t seq = 0;
     int rc;
 
     xSemaphoreTake(s_ring_mtx, portMAX_DELAY);
-    rc = rb_push(&s_ring, now, f->raw, f->raw_len, &seq);
+    rc = rb_push(&s_ring, now, REC_TYPE_LD2410_FRAME, f->raw, f->raw_len, &seq);
     xSemaphoreGive(s_ring_mtx);
     if (rc != 0) {
         ESP_LOGW(TAG, "ring push failed (%d)", rc);
@@ -72,6 +83,7 @@ static void on_data(const ld_frame_t *f, ld_ctx_t *ctx)
     s_snap.valid = true;
     s_snap.data = d;
     s_snap.seq = seq;
+    s_snap.frame_no = ctx->frame_no;
     s_snap.time_us = now;
     xSemaphoreGive(s_snap_mtx);
     ctx->frames_window++;
@@ -180,19 +192,23 @@ static void ld2410_task(void *arg)
 
     int64_t window_start = esp_timer_get_time();
     int64_t last_eng_try = window_start;
-    int eng_retries = 0;
+    unsigned eng_attempts = 0;
     for (;;) {
         pump(&ctx, pdMS_TO_TICKS(100));
         int64_t now = esp_timer_get_time();
-        /* Engineering mode was not acknowledged at boot: retry now and then.
-         * Data frames keep being parsed inside send_cmd()'s pump loop. */
-        if (!s_engineering && !ctx.eng_frames_seen && eng_retries < LD_ENG_RETRIES &&
+        /* Normal-mode frames for more than LD_ENG_NORMAL_US: (re-)enable engineering
+         * mode, rate limited, unlimited over time. Data frames keep being parsed
+         * inside send_cmd()'s pump loop, so reception is not disturbed. */
+        if (ctx.normal_since != 0 && now - ctx.normal_since >= LD_ENG_NORMAL_US &&
             now - last_eng_try >= LD_ENG_RETRY_US) {
-            eng_retries++;
-            ESP_LOGI(TAG, "retrying engineering mode (%d/%d)", eng_retries, LD_ENG_RETRIES);
+            eng_attempts++;
+            ESP_LOGW(TAG, "normal-mode frames for %lld ms, re-enabling engineering mode (attempt %u)",
+                     (long long)((now - ctx.normal_since) / 1000), eng_attempts);
             enable_engineering(&ctx);
             last_eng_try = esp_timer_get_time();
             now = last_eng_try;
+            /* Judge the result by the frames that follow, not by the ACK alone. */
+            ctx.normal_since = 0;
         }
         if (now - window_start >= LD_RATE_LOG_US) {
             float secs = (float)(now - window_start) / 1e6f;
@@ -284,6 +300,18 @@ void ld2410_ring_unlock(void)
 const rb_t *ld2410_ring(void)
 {
     return &s_ring;
+}
+
+int ld2410_ring_push(uint64_t esp_time_us, uint8_t type, const uint8_t *payload,
+                     size_t len, uint32_t *seq_out)
+{
+    if (s_ring_mtx == NULL) {
+        return -ENODEV;
+    }
+    ld2410_ring_lock();
+    int rc = rb_push(&s_ring, esp_time_us, type, payload, len, seq_out);
+    ld2410_ring_unlock();
+    return rc;
 }
 
 int ld2410_ring_batch(rec_stream_t *st, uint32_t from_seq, uint32_t boot_id,

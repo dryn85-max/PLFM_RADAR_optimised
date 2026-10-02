@@ -1,0 +1,16 @@
+{
+  "record_type": 1,
+  "payload_hex": "0000000000000000000000000000000000000000000000000f27000000000000",
+  "gps_fix": {
+    "utc_unix_ms": 0,
+    "lat_e7": 0,
+    "lon_e7": 0,
+    "alt_cm": 0,
+    "speed_cmps": 0,
+    "course_cdeg": 0,
+    "hdop_x100": 9999,
+    "sats": 0,
+    "fix_quality": 0,
+    "flags": 0
+  }
+}

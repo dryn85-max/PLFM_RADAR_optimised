@@ -1,0 +1,16 @@
+{
+  "record_type": 1,
+  "payload_hex": "ffffffffffffff7f00175bca002eb69400000080ffff9f8cffffffffff000000",
+  "gps_fix": {
+    "utc_unix_ms": 9223372036854775807,
+    "lat_e7": -900000000,
+    "lon_e7": -1800000000,
+    "alt_cm": -2147483648,
+    "speed_cmps": 65535,
+    "course_cdeg": 35999,
+    "hdop_x100": 65535,
+    "sats": 255,
+    "fix_quality": 255,
+    "flags": 255
+  }
+}

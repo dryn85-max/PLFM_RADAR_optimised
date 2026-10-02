@@ -4,7 +4,9 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "gps_task.h"
 #include "http_srv.h"
+#include "imu_task.h"
 #include "ld2410_task.h"
 #include "live.h"
 #include "rec_srv.h"
@@ -43,6 +45,18 @@ void app_main(void)
     err = ld2410_start(ring, ring_bytes);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ld2410_start failed: %s", esp_err_to_name(err));
+    }
+
+    /* GPS after the LD2410C task (it needs the ring); a missing module is harmless. */
+    err = gps_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "gps_start failed: %s", esp_err_to_name(err));
+    }
+
+    /* IMU after the GPS (it also needs the ring); a missing sensor is harmless. */
+    err = imu_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "imu_start failed: %s", esp_err_to_name(err));
     }
 
     /* Wi-Fi after the sensor task so the LD2410C is not delayed by the 15 s STA attempt. */

@@ -155,7 +155,7 @@ flash / 32 KB RAM including a 4 KB stack and 1 KB heap reserve), from
 | `DIAG=0` | 17288 | 5908 |
 | `ADAR_COUNT=4` | 24808 | 6372 |
 
-## MVP (ESP32-S3 + HLK-LD2410C)
+## MVP (ESP32-S3 + HLK-LD2410C, GPS, IMU)
 
 A bench MVP independent of everything above: **the STM32 firmware and the FPGA
 are not part of it** (the RF chain, FPGA board and ADC are not bought yet). It
@@ -166,11 +166,19 @@ stays in the repo unchanged.
  HLK-LD2410C (24 GHz FMCW presence radar)
       | UART1 256000 8N1: TX -> GPIO18 (ESP32 RX), RX <- GPIO17 (ESP32 TX)
       v
+ GY-NEO6MV2 GPS: UART2 9600 8N1, TX -> GPIO5, RX <- GPIO4 (optional)
+ GY-BMI160 IMU:  I2C 400 kHz, SDA GPIO8, SCL GPIO9, addr 0x68/0x69 (optional)
+      v
  +-------------------- ESP32-S3-DevKitC-1 (N32R8V) --------------------+
- | ld2410 task (core 1)                                                |
+ | ld2410 task (core 1, prio 5)                                        |
  |   UART -> ld2410_parser (frames) -> ld2410_frame (decode)           |
- |        +--> ring buffer, 4 MiB PSRAM (seq u32 + esp time + raw)     |
+ |        +--> ring buffer, 4 MiB PSRAM (typed records, one seq)       |
  |        +--> latest snapshot (mutex)                                 |
+ | gps task (core 1, prio 4): UART2 -> nmea (RMC/GGA)                  |
+ |        +--> gps_fix per epoch, time_sync (GPS) per valid RMC        |
+ | imu task (core 1, prio 3): I2C -> BMI160 100 Hz -> tilt filter      |
+ |        +--> imu record every 100 ms (10 Hz)                         |
+ | SNTP (pool.ntp.org, on STA IP) -> time_sync (SNTP)                  |
  | HTTP :80  /  /wifi (AP only)  /ws  <- 10 Hz timer: latest snapshot  |
  | TCP :5410 recording server <- ring buffer batches (core 0)          |
  | Wi-Fi: STA from NVS, fallback AP AERIS-MVP-XXXX; mDNS aeris-mvp     |
@@ -190,15 +198,38 @@ Data flow:
    (`esp_timer`, us since boot) and is stored in the ring buffer (PSRAM, 4 MiB;
    32 KiB of internal RAM if the PSRAM allocation fails). The decoded fields
    also replace the **latest snapshot**.
+2a. **Typed recording stream (protocol v3).** The ring buffer holds typed
+   records `{seq u32, esp_time_us u64, type u8, len u16, payload}` with one
+   shared sequence: type 0 raw LD2410C frame, 1 `gps_fix` (32 B, one per NMEA
+   epoch, also without a fix), 2 `imu` (18 B, 10 Hz: mean raw acceleration and
+   rate, pitch, roll), 3 `time_sync` (9 B: UTC microseconds and source). The
+   GPS, IMU and SNTP code push into the same ring from their own tasks; the
+   transport is type-agnostic, so GAP, keep-alive, `boot_id` and resume work
+   unchanged for every type. A missing or silent GPS or IMU never touches the
+   LD2410C path.
+2b. **Time.** UTC is carried by `time_sync` records: GPS on each RMC with status
+   `A` and valid time and date (no PPS, so about +-50 to 300 ms, VERIFY), SNTP
+   on each synchronisation over the STA link. Both are recorded; the live page
+   shows GPS while its latest sync is under 5 s old, else SNTP. The PC converts
+   `esp_time_us` to UTC with a GPS `time_sync` of the same boot within +-2 s, else
+   the nearest preceding `time_sync` of any source.
+2c. **Tilt.** Pitch and roll are absolute (complementary filter on the gravity
+   direction; body frame +X boresight, +Y left, +Z up; sensor-to-body mapping is
+   a firmware constant). There is no azimuth: no magnetometer.
 3. **Live view:** a 10 Hz timer builds the snapshot JSON and sends it to each
    WebSocket client; a client whose previous send is still pending is skipped,
-   so a slow client sees only the newest snapshot (latest-only, no queue).
+   so a slow client sees only the newest snapshot (latest-only, no queue). The
+   snapshot also carries the GPS state, the tilt and the current time source
+   (GPS and Tilt cards on the page).
 4. **Recording:** the TCP server on port 5410 reads a 12-byte request with
    `from_seq` and sends batches about once per second (immediately while more
    records are pending) from the ring buffer. A `GAP` flag says the requested
    start was evicted. Every batch carries a `boot_id` (random per boot) because
    the sequence restarts at 0 after a reboot. One client at a time. The PC
-   recorder writes raw frames plus PC time to a `.ldrec` file and exports CSV.
+   recorder writes every record plus PC time to a `.ldrec` v3 file (v2 files
+   remain readable) and exports CSV: radar frames with frame UTC, time source,
+   the latest GPS fix and the latest pitch/roll, plus optional per-sensor CSVs
+   (`--gps`, `--imu`). Unknown record types are kept raw (file type 6).
 
 Wi-Fi modes: STA when credentials are stored and the connection succeeds within
 15 s (AP off); otherwise AP+STA (AP `AERIS-MVP-XXXX`, WPA2, random 12-character
@@ -207,8 +238,10 @@ retrying); with no credentials AP only. The `/wifi` setup page is served only to
 clients on the AP.
 
 Not verified on hardware yet; see the VERIFY list in
-[esp32/README.md](../esp32/README.md). Open follow-ups (settings page, GPS/IMU,
-all-on-ESP32 vs hybrid STM32 + ESP32) are in [BACKLOG.md](../BACKLOG.md).
+[esp32/README.md](../esp32/README.md) (the GPS and IMU parts have never run on
+the boards; the BMI160 register values are unverified). Open follow-ups
+(settings page, rotating radar and PPI display, magnetometer, PPS, all-on-ESP32
+vs hybrid STM32 + ESP32) are in [BACKLOG.md](../BACKLOG.md).
 
 ## Known limitations
 

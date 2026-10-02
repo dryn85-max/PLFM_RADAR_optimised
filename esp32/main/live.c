@@ -8,14 +8,20 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "esp_timer.h"
+
+#include "gps_task.h"
 #include "http_srv.h"
+#include "imu_task.h"
 #include "ld2410_task.h"
 #include "snapshot_json.h"
+#include "sntp_sync.h"
 #include "ws_slots.h"
 
 #define LIVE_PERIOD_MS 100 /* 10 Hz */
-/* Longest snapshot JSON is about 330 bytes (engineering frame); keep wide margin. */
-#define LIVE_JSON_MAX 768
+/* Worst-case snapshot JSON is bounded by SNAPSHOT_JSON_MAX (asserted by a host test). */
+#define LIVE_JSON_MAX SNAPSHOT_JSON_MAX
+#define LIVE_IMU_STALE_US 1000000 /* no IMU record for this long: report "error" */
 #define LIVE_RX_MAX 128 /* client frames are ignored; bigger ones close the socket */
 #define LIVE_STATS_TICKS 100 /* one stats line every 100 ticks = 10 s */
 
@@ -138,6 +144,40 @@ static void send_work(void *arg)
     }
 }
 
+static void fill_gps(snapshot_t *s)
+{
+    switch (gps_status()) {
+    case GPS_LINK_OK: s->gps_status = SNAP_GPS_OK; break;
+    case GPS_LINK_SILENT: s->gps_status = SNAP_GPS_SILENT; break;
+    default: s->gps_status = SNAP_GPS_ABSENT; break;
+    }
+    gps_snapshot_t g;
+    if (gps_get_snapshot(&g) && g.valid) {
+        s->have_gps = 1;
+        s->gps = g.fix;
+    }
+}
+
+static void fill_imu(snapshot_t *s)
+{
+    switch (imu_status()) {
+    case IMU_LINK_OK: s->imu_status = SNAP_IMU_OK; break;
+    case IMU_LINK_ERROR: s->imu_status = SNAP_IMU_ERROR; break;
+    default: s->imu_status = SNAP_IMU_ABSENT; break;
+    }
+    imu_snapshot_t m;
+    if (imu_get_snapshot(&m) && m.valid) {
+        s->have_imu = 1;
+        s->imu = m.rec;
+        /* the task may stall without changing its status: stale data is an error */
+        if (s->imu_status == SNAP_IMU_OK &&
+            (int64_t)(esp_timer_get_time() - (int64_t)m.time_us) > LIVE_IMU_STALE_US)
+            s->imu_status = SNAP_IMU_ERROR;
+    } else if (s->imu_status == SNAP_IMU_OK) {
+        s->imu_status = SNAP_IMU_ERROR; /* "ok" without any record yet is not usable */
+    }
+}
+
 static void tick(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -152,6 +192,7 @@ static void tick(void)
         s.have_frame = 1;
         s.data = ls.data;
         s.seq = ls.seq;
+        s.frame_no = ls.frame_no;
         s.esp_time_us = ls.time_us;
     }
     switch (ld2410_link_status()) {
@@ -159,6 +200,9 @@ static void tick(void)
     case LD_LINK_LOST: s.link = SNAP_LINK_LOST; break;
     default: s.link = SNAP_LINK_NO_DATA; break;
     }
+    fill_gps(&s);
+    fill_imu(&s);
+    s.time_source = time_source_current();
     int n = snapshot_json(s_tmp, sizeof s_tmp, &s);
     if (n <= 0) return;
 

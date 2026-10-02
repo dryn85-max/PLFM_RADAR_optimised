@@ -71,8 +71,32 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
 
 - [ ] **LD2410C settings page** on the live page: maximum gates, per-gate
   sensitivity, hold time (the first version only enables engineering mode).
-- [ ] **GPS NEO-6M and IMU BMI160 on the ESP32.** Pins are to be assigned (the
-  MVP uses GPIO17/18 for the LD2410C, GPIO19/20 for native USB, GPIO0 for BOOT).
+- [ ] **Rotating radar and PPI display.** Analysis (owner idea, esp32-gps-imu
+  brainstorming): azimuth must come from the drive (stepper motor with a homing
+  switch, or an encoder), not from the IMU; the angular spacing of the picture
+  is limited by the LD2410C output rate (10 frames/s) and its wide beam, not by
+  the IMU rate. Needs its own spec (drive, slip ring or cable wrap, PPI page,
+  recording of the azimuth).
+- [ ] **Magnetometer or BNO085 for azimuth.** The GY-BMI160 has no
+  magnetometer, so there is no heading. A BNO085 (or a separate magnetometer)
+  would give it; calibration is needed near the electronics (hard/soft-iron).
+  The IMU code is already separated from the tilt filter for such an addition.
+- [ ] **Tilt zero button** on the live page (stores an offset so the radar's
+  mounting error can be cancelled). Needs authentication of the live page first
+  (today anyone on the network can open it); tilt is absolute until then.
+- [ ] **Radar motion detector** (presence/motion event on the radar data, with
+  its own recording and live indication); out of scope of the GPS/IMU cycle.
+- [ ] **IMU recording at 100 Hz option.** The recording carries 10 Hz averaged
+  `imu` records; a raw 100 Hz option (larger records or a new type, more ring
+  buffer traffic) was left out. The rate is one constant in the firmware.
+- [ ] **GPS PPS wiring for precise time.** Without PPS the GPS time stamp is
+  taken at reception of the RMC sentence (about +-50 to 300 ms, VERIFY). Wire
+  the module's PPS output to a free GPIO, stamp the edge in an interrupt and
+  correct the `time_sync` record.
+- [ ] **BMI160 and NEO-6M datasheets into `hardware/datasheets/`**, then verify
+  the BMI160 register values, delays and sensitivities in `esp32/main/imu_task.c`
+  (marked VERIFY there and in the README) and the NEO-6M default NMEA output,
+  baud rate, cold-start figures and PPS behaviour.
 - [ ] **Decide A (everything on the ESP32-S3) vs B (hybrid STM32 + ESP32-S3)
   when the RF chain is bought.** Pin-count analysis summary: the ESP32-S3
   N32R8V has about 27-31 usable GPIO (octal flash/PSRAM take GPIO26-37, strapping

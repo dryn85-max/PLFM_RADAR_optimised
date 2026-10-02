@@ -92,7 +92,8 @@ Pin map, serial command interface, fault model and memory report:
 ### ESP32 MVP (`esp32/`)
 
 A bench MVP from an ESP32-S3-DevKitC-1 and an HLK-LD2410C 24 GHz presence
-radar; it needs no STM32 and no FPGA. Host tests need only `gcc` and `make`;
+radar, with an optional GPS (GY-NEO6MV2) and IMU (GY-BMI160) for UTC time,
+position and tilt; it needs no STM32 and no FPGA. Host tests need only `gcc` and `make`;
 building the firmware needs ESP-IDF v5.5.5 (CI builds it in a container).
 
 ```
@@ -138,7 +139,7 @@ uv run ruff check .
 |---|---|
 | `fpga/` | Vendor-neutral Verilog RTL, testbenches, golden vectors, regression script ([README](fpga/README.md)) |
 | `stm32/` | STM32G0B1 (NUCLEO-G0B1RE) bare-metal C firmware, host unit tests ([README](stm32/README.md)) |
-| `esp32/` | ESP32-S3 + HLK-LD2410C MVP: live web page and recording server, ESP-IDF C, host tests ([README](esp32/README.md)) |
+| `esp32/` | ESP32-S3 + HLK-LD2410C MVP (optional GPS and IMU): live web page and recording server, ESP-IDF C, host tests ([README](esp32/README.md)) |
 | `host/` | V7 PyQt6 GUI, USB protocol layer, smoke test, ESP32 recorder `ld2410_rec.py` ([README](host/README.md)) |
 | `tests/cross_layer/` | Cross-layer contract tests (RTL / firmware / host) |
 | `tools/` | Helper scripts (`uart_capture.py`) and the path gate (`check_paths.sh`) |

@@ -1,0 +1,20 @@
+{
+  "record_type": 2,
+  "payload_hex": "0c00deffe9030500faff07002efbd7110a01",
+  "imu": {
+    "acc_mg": [
+      12,
+      -34,
+      1001
+    ],
+    "gyr_ddps": [
+      5,
+      -6,
+      7
+    ],
+    "pitch_cdeg": -1234,
+    "roll_cdeg": 4567,
+    "n_samples": 10,
+    "status": 1
+  }
+}
