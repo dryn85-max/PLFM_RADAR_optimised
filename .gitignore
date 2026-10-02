@@ -64,3 +64,9 @@ uv.lock
 
 # ESP32 host test build output
 esp32/tests/build/
+
+# ESP-IDF build outputs and per-developer config
+esp32/build/
+esp32/sdkconfig
+esp32/sdkconfig.old
+esp32/managed_components/

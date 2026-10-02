@@ -1,0 +1,17 @@
+# AERIS-10 Lite MVP: ESP32-S3-DevKitC-1 N32R8V (32 MB octal flash, 8 MB octal PSRAM).
+# No secrets in this file.
+CONFIG_IDF_TARGET="esp32s3"
+
+# 8 MB octal PSRAM (the N32R8V module). VERIFY on the real board.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+
+# 32 MB octal flash. VERIFY on the real board (module marking N32 = 32 MB octal flash).
+CONFIG_ESPTOOLPY_OCT_FLASH=y
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+
+# Console and flashing through the native USB port (USB-Serial-JTAG, GPIO19/20).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# 1 ms scheduler tick.
+CONFIG_FREERTOS_HZ=1000
