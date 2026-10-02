@@ -192,6 +192,7 @@ static void tick(void)
         s.have_frame = 1;
         s.data = ls.data;
         s.seq = ls.seq;
+        s.frame_no = ls.frame_no;
         s.esp_time_us = ls.time_us;
     }
     switch (ld2410_link_status()) {

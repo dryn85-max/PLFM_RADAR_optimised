@@ -168,14 +168,20 @@ clients). The page shows:
 
 - sensor link status (`no_data`, `ok`, `lost` after more than 1 s without a
   frame) and WebSocket status (reconnects automatically);
-- frame sequence number and frames per second;
+- LD2410C frame number and frames per second. Both come from `frame_no`, a
+  dedicated counter of decoded LD2410C data frames (u32, wraps). The snapshot
+  also carries `seq`, the shared ring sequence for recording correlation; it
+  advances for GPS, IMU and time records too, so it is not a frame count;
 - presence state (none / moving / still / both);
 - moving distance and energy, still distance and energy, detection distance;
 - bar charts of the 9 moving and 9 still gate energies (0-100), only when
   engineering mode was acknowledged, otherwise "engineering mode
-  unavailable". If the enable sequence gets no ACK at boot, it is retried every
-  5 s (at most 5 retries) while no engineering frame has been seen; data
-  reception continues meanwhile;
+  unavailable". Whenever normal-mode frames (data type `0x02`) keep arriving for
+  more than 3 s (no ACK at boot, or the module reset itself after a power
+  glitch and restarted in normal mode), the enable sequence is re-run, at most
+  once per 10 s and without a limit over time; each attempt and its result is
+  logged. Data reception continues meanwhile; engineering mode counts as
+  enabled only while engineering frames arrive;
 - a **GPS card**: badge (`fix`, `no fix`, `no data` = module silent for more than
   3 s, `not connected` = no byte ever received), fix state with the GGA fix
   quality, satellites and HDOP, latitude, longitude (7 decimals), altitude,

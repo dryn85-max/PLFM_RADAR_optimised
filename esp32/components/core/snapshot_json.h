@@ -31,7 +31,8 @@ typedef enum {
 #define SNAPSHOT_JSON_MAX 1024
 
 typedef struct {
-    uint32_t seq;
+    uint32_t seq;      /* shared ring sequence (recording correlation) */
+    uint32_t frame_no; /* LD2410C data frames decoded since boot (wraps) */
     uint64_t esp_time_us;
     snap_link_t link;
     uint8_t have_frame; /* 0: `data` not valid, JSON carries "data":null */
@@ -45,7 +46,7 @@ typedef struct {
     time_source_t time_source;
 } snapshot_t;
 
-/* Top-level keys after "data": "gps", "imu", "time_source".
+/* Top-level keys: seq, frame_no, esp_time_us, link, data, then after "data": "gps", "imu", "time_source".
  *   gps: {status:"absent"|"silent"|"ok", fix:bool, fix_quality, sats, hdop,
  *         lat, lon, alt_m, speed_kmh, course_deg, utc, time_valid, pos_valid}
  *   imu: {status:"absent"|"error"|"ok", pitch_deg, roll_deg, valid:bool}

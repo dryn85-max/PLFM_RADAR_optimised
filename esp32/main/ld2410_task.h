@@ -21,6 +21,8 @@ typedef struct {
     bool valid;         /* false until the first data frame */
     ld_data_t data;
     uint32_t seq;       /* ring sequence number of this frame */
+    uint32_t frame_no;  /* LD2410C data frames decoded since boot (wraps); unlike seq it
+                         * does not advance for GPS/IMU/time records */
     uint64_t time_us;   /* esp_timer_get_time() at reception */
 } ld_snapshot_t;
 
@@ -32,7 +34,9 @@ esp_err_t ld2410_start(void *ring_mem, size_t ring_cap);
 bool ld2410_get_snapshot(ld_snapshot_t *out);
 
 ld_link_t ld2410_link_status(void);
-/* Whether engineering mode was acknowledged (at boot or by a later retry). */
+/* Whether engineering mode is currently active: acknowledged at boot or by a
+ * later retry, and false again while normal-mode frames arrive (e.g. after the
+ * module reset itself). */
 bool ld2410_engineering_enabled(void);
 
 /* Ring access for readers. Hold the lock only while copying; never block

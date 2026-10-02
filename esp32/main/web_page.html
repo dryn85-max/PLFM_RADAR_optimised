@@ -152,7 +152,7 @@ h2{font-size:.95rem;margin:0 0 8px}
   }
 
   /* Windowed frames/s: Wi-Fi delivers messages in bursts, so an
-     instantaneous seq/dt estimate explodes; use the last ~2 s instead. */
+     instantaneous frame_no/dt estimate explodes; use the last ~2 s instead. */
   var hist = [];
   function fpsCalc(now, seq) {
     var n = hist.length;
@@ -215,8 +215,8 @@ h2{font-size:.95rem;margin:0 0 8px}
   function render(m) {
     if (!m || typeof m !== "object") return;
     setLink(m.link);
-    $("seq").textContent = val(m.seq);
-    updFps(m.seq, m.link);
+    $("seq").textContent = val(m.frame_no);
+    updFps(m.frame_no, m.link);
     renderGps(m.gps, m.time_source);
     renderImu(m.imu);
     var d = m.data;

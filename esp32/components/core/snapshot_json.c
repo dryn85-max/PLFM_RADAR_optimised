@@ -146,8 +146,8 @@ int snapshot_json(char *out, size_t cap, const snapshot_t *s)
     default: return -EINVAL;
     }
     w_t w = {out, cap, 0, 0};
-    put(&w, "{\"seq\":%lu,\"esp_time_us\":%llu,\"link\":\"%s\",\"data\":",
-        (unsigned long)s->seq, (unsigned long long)s->esp_time_us, link);
+    put(&w, "{\"seq\":%lu,\"frame_no\":%lu,\"esp_time_us\":%llu,\"link\":\"%s\",\"data\":",
+        (unsigned long)s->seq, (unsigned long)s->frame_no, (unsigned long long)s->esp_time_us, link);
     if (!s->have_frame) {
         put(&w, "null");
     } else {

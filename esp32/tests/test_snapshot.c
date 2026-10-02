@@ -8,7 +8,7 @@
 static snapshot_t eng_snap(void)
 {
     snapshot_t s; memset(&s, 0, sizeof s);
-    s.seq = 4000000000u; s.esp_time_us = 0x100000005ull; s.link = SNAP_LINK_OK; s.have_frame = 1;
+    s.seq = 4000000000u; s.frame_no = 123456u; s.esp_time_us = 0x100000005ull; s.link = SNAP_LINK_OK; s.have_frame = 1;
     s.data.data_type = 1; s.data.engineering = 1; s.data.target_state = 3;
     s.data.moving_dist_cm = 80; s.data.moving_energy = 64;
     s.data.still_dist_cm = 120; s.data.still_energy = 50; s.data.detect_dist_cm = 85;
@@ -23,7 +23,7 @@ static void test_engineering_exact(void)
     char out[SNAPSHOT_JSON_MAX];
     int n = snapshot_json(out, sizeof out, &s);
     const char *exp =
-        "{\"seq\":4000000000,\"esp_time_us\":4294967301,\"link\":\"ok\",\"data\":{"
+        "{\"seq\":4000000000,\"frame_no\":123456,\"esp_time_us\":4294967301,\"link\":\"ok\",\"data\":{"
         "\"engineering\":1,\"target_state\":3,\"moving_dist_cm\":80,\"moving_energy\":64,"
         "\"still_dist_cm\":120,\"still_energy\":50,\"detect_dist_cm\":85,"
         "\"max_moving_gate\":8,\"max_still_gate\":7,"
@@ -37,10 +37,10 @@ static void test_engineering_exact(void)
 static void test_normal_and_no_data(void)
 {
     snapshot_t s = eng_snap(); char out[SNAPSHOT_JSON_MAX];
-    s.data.engineering = 0; s.data.data_type = 2; s.link = SNAP_LINK_LOST; s.seq = 5; s.esp_time_us = 9;
+    s.data.engineering = 0; s.data.data_type = 2; s.link = SNAP_LINK_LOST; s.seq = 5; s.frame_no = 4294967295u; s.esp_time_us = 9;
     int n = snapshot_json(out, sizeof out, &s);
     const char *exp =
-        "{\"seq\":5,\"esp_time_us\":9,\"link\":\"lost\",\"data\":{"
+        "{\"seq\":5,\"frame_no\":4294967295,\"esp_time_us\":9,\"link\":\"lost\",\"data\":{"
         "\"engineering\":0,\"target_state\":3,\"moving_dist_cm\":80,\"moving_energy\":64,"
         "\"still_dist_cm\":120,\"still_energy\":50,\"detect_dist_cm\":85},"
         "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
@@ -48,7 +48,7 @@ static void test_normal_and_no_data(void)
     TT_ASSERT(strcmp(out, exp) == 0);
     memset(&s, 0, sizeof s);
     n = snapshot_json(out, sizeof out, &s);
-    exp = "{\"seq\":0,\"esp_time_us\":0,\"link\":\"no_data\",\"data\":null,"
+    exp = "{\"seq\":0,\"frame_no\":0,\"esp_time_us\":0,\"link\":\"no_data\",\"data\":null,"
         "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
     TT_ASSERT_EQ(strlen(exp), n);
     TT_ASSERT(strcmp(out, exp) == 0);
@@ -218,7 +218,7 @@ static void test_fix_never_truncates_and_worst_case(void)
     }
     /* worst case: every field at its longest text */
     snapshot_t w = fix_snap();
-    w.seq = 0xFFFFFFFFu; w.esp_time_us = ~0ull; w.link = SNAP_LINK_NO_DATA;
+    w.seq = 0xFFFFFFFFu; w.frame_no = 0xFFFFFFFFu; w.esp_time_us = ~0ull; w.link = SNAP_LINK_NO_DATA;
     memset(w.data.moving_gate_energy, 255, LD_GATES); memset(w.data.still_gate_energy, 255, LD_GATES);
     w.data.moving_dist_cm = w.data.still_dist_cm = w.data.detect_dist_cm = 65535;
     w.data.moving_energy = w.data.still_energy = 255; w.data.max_moving_gate = w.data.max_still_gate = 255;
