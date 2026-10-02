@@ -8,7 +8,7 @@ on:
 
 jobs:
   # ===========================================================================
-  # Python: lint (ruff), syntax check (py_compile), unit tests (pytest)
+  # Python: path gate, lint (ruff), syntax check (py_compile), unit tests (pytest)
   # CI structure proposed by hcm444 — uses uv for dependency management
   # ===========================================================================
   python-tests:
@@ -54,8 +54,7 @@ jobs:
           -v --tb=short
 
   # ===========================================================================
-  # Legacy F7 MCU unit tests (20 tests)
-  # Bug regression (15) + Gap-3 safety tests (5)
+  # Legacy F7 MCU unit tests (24 tests), kept in CI per the G0B1 spec
   # ===========================================================================
   mcu-tests:
     name: Legacy F7 MCU tests

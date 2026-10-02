@@ -25,7 +25,7 @@ Claude desktop), one with OpenAI Codex. Both use the
 
 Specs and plans written by superpowers live in `docs/superpowers/specs/` and
 `docs/superpowers/plans/`. Track follow-up work that is out of scope for the
-current plan in a `BACKLOG.md` at the repo root (create it when first needed).
+current plan in `BACKLOG.md` at the repo root.
 
 ### Model per stage
 
@@ -65,14 +65,15 @@ GPT-5.5 is not used.
   code. In the superpowers flow this happens during brainstorming.
 - **Never ask for or accept secrets in chat** (API keys, tokens, licence
   keys).
+- Owner decisions are recorded in [docs/decisions.md](docs/decisions.md): when
+  the owner decides something (design, scope, process), add a dated entry there.
 - Anything outward-facing or hard to reverse — merging to `main`, releases,
   force-pushes, deleting hardware design files (`hardware/`, `legacy/4_Schematics and Boards
   Layout/`, datasheets) — needs the owner's explicit go-ahead.
 
 ## Git workflow
 
-- `main` is the only long-lived branch of this fork (CONTRIBUTING.md mentions
-  `develop`, which exists upstream but not here). Topic branches are created
+- `main` is the only long-lived branch of this fork. Topic branches are created
   from `main`; work on the branch you were assigned and never push to `main`
   directly.
 - Changes reach `main` only through a PR, and only when the owner asks for
@@ -83,12 +84,28 @@ GPT-5.5 is not used.
 - Commit messages are descriptive; end them with the attribution lines the
   session provides.
 
+## Repository map
+
+| Path | Contents |
+|---|---|
+| `fpga/` | Vendor-neutral Verilog-2001 RTL, testbenches (`tb/`), golden vectors, `run_regression.sh` |
+| `firmware/` | STM32G0B1 (NUCLEO-G0B1RE) C firmware, host unit tests (`make test`) |
+| `host/` | V7 PyQt6 GUI, `radar_protocol.py`, smoke test, `test_v7.py`, `test_radar_protocol.py` |
+| `tests/cross_layer/` | RTL / firmware / host contract tests |
+| `tools/` | `check_paths.sh` (path gate), `uart_capture.py` |
+| `hardware/datasheets/` | Datasheets of the parts the project uses |
+| `docs/` | Architecture, bring-up, decisions, BOM analysis, `superpowers/` specs and plans |
+| `legacy/` | Upstream reference material, under its original relative paths. **Reference only: do not modify** (only `legacy/README.md` is maintained). The legacy F7 unit tests in `legacy/9_Firmware/9_1_Microcontroller/tests/` still run in CI |
+
+All paths and commands below are relative to the repository root.
+
 ## Development
 
 - **Package installs must use the `sfw` prefix** (supply-chain mandate from
   CONTRIBUTING.md): `sfw uv pip install <pkg>`, `sfw npm install <pkg>`,
   `sfw cargo <cmd>`. Never run bare `pip install`.
-- FPGA (Verilog-2001, Icarus): `(cd fpga && bash run_regression.sh)`.
+- FPGA (Verilog-2001, Icarus): `(cd fpga && bash run_regression.sh)`, then
+  `git checkout -- fpga/tb/cosim`.
   The RTL (`radar_system_top.v`) is the single source of truth for opcode
   values, bit widths and reset defaults. No SystemVerilog, no `$clog2`.
 - Python (GUI/scripts/tests): `uv run ruff check .`;
@@ -116,10 +133,18 @@ GPT-5.5 is not used.
 - **Line endings:** several RTL files mix CRLF and LF. Never rewrite a whole
   file's endings; before committing, `git diff --stat` and
   `git diff --ignore-cr-at-eol --stat` must report the same line counts.
-- **`run_regression.sh` rewrites tracked files.** Always restore
-  `tb/cosim/rx_final_doppler_out.csv` (and other `tb/cosim/*.csv`).
-  `tb/golden/golden_doppler.mem` is committed only when a change legitimately
-  alters the receiver output, and only after two runs give the same md5.
+- **`run_regression.sh` still rewrites tracked co-sim CSVs.** After a run,
+  `git checkout -- fpga/tb/cosim` (e.g. `fpga/tb/cosim/rx_final_doppler_out.csv`).
+  It does **not** touch `fpga/tb/golden/`: receiver golden *generate* writes to
+  a scratch file and golden *compare* checks bit-exactly against the committed
+  `fpga/tb/golden/golden_doppler.mem` (CI fails on any diff under
+  `fpga/tb/golden`). When a receiver change intentionally alters the output,
+  re-bless the golden deliberately, from `fpga/` on known-good RTL: compile
+  `tb/tb_radar_receiver_final.v` plus the `RECEIVER_RTL` list of
+  `run_regression.sh` with `iverilog -g2001 -DSIMULATION -DGOLDEN_GENERATE
+  '-DGOLDEN_OUT_PATH="tb/golden/golden_doppler.mem"'`, run it with `vvp`,
+  repeat once and check both runs give the same `md5sum`, then commit the new
+  `golden_doppler.mem` with the change that caused it.
 - **Plans are not ground truth.** Bit widths, sign conventions, latencies and
   testbench integer arithmetic in plans have been wrong more than once
   (quadrant flips, 32-bit overflow, conjugate chirp). Re-derive them, fix

@@ -95,7 +95,7 @@ Pin map, serial command interface, fault model and memory report:
 sfw uv pip install -r host/requirements_v7.txt
 python host/GUI_V7_PyQt.py             # GUI
 python host/smoke_test.py              # board bring-up script, mock mode (--live for real FT2232H)
-QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py -v
+QT_QPA_PLATFORM=offscreen uv run pytest host/test_v7.py host/test_radar_protocol.py -v
 ```
 
 See [host/README.md](host/README.md).
@@ -123,7 +123,7 @@ uv run ruff check .
 | `firmware/` | STM32G0B1 (NUCLEO-G0B1RE) bare-metal C firmware, host unit tests ([README](firmware/README.md)) |
 | `host/` | V7 PyQt6 GUI, USB protocol layer, smoke test ([README](host/README.md)) |
 | `tests/cross_layer/` | Cross-layer contract tests (RTL / firmware / host) |
-| `tools/` | Helper scripts (`uart_capture.py`) |
+| `tools/` | Helper scripts (`uart_capture.py`) and the path gate (`check_paths.sh`) |
 | `hardware/datasheets/` | Datasheets of the parts the project uses (ADAR1000, ADTR1107, ADS7830, TMP35/36/37, FT2232H) |
 | `docs/` | [architecture](docs/architecture.md), [bring-up](docs/bring-up.md), [decisions](docs/decisions.md), [BOM analysis](docs/bom-optimization.md) (historical, Russian), `superpowers/` (specs and plans) |
 | `legacy/` | Upstream material Lite does not use, under its original relative paths ([README](legacy/README.md)) |

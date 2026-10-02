@@ -120,7 +120,7 @@ words, about 2 kbit) are listed by the script but not counted. The totals are
 logical bits; block-RAM granularity (M10K/M20K/RAMB36) rounds individual
 memories up but leaves ample margin.
 
-Run `python3 tb/golden/count_multipliers.py` for the full per-line report.
+Run `python3 tb/golden/count_multipliers.py` (from `fpga/`) for the full per-line report.
 
 ## Removed modules
 
@@ -137,7 +137,8 @@ Run `python3 tb/golden/count_multipliers.py` for the full per-line report.
 
 ## Verification
 
-`bash run_regression.sh` (about one minute, 38 testbenches):
+`bash run_regression.sh` from `fpga/` (about one minute, 38 testbenches; it
+rewrites tracked `tb/cosim/*.csv`, restore them with `git checkout -- fpga/tb/cosim`):
 
 - Phase 0: `iverilog -Wall` with `-DSIMULATION`; the same compile without
   `-DSIMULATION` (synthesizable branches); case-default lint; vendor
@@ -151,8 +152,8 @@ Run `python3 tb/golden/count_multipliers.py` for the full per-line report.
 - The synthesizable matched-filter chain is compiled without `-DSIMULATION` in
   `tb_mf_chain`, `tb_mf_segmenter` and `tb_mf_multiseg`, bit-exact against
   `tb/golden/gen_mf_chain_golden.py`.
-- Receiver golden: `Receiver (golden generate)` writes only a scratch file;
-  `Receiver (golden compare)` checks the receiver output bit-exactly against the
+- Receiver golden: `Receiver (golden generate, scratch output)` writes only a
+  scratch file; `Receiver (golden compare vs committed)` checks the receiver output bit-exactly against the
   COMMITTED `tb/golden/golden_doppler.mem` (a one-LSB change fails the
   regression). Re-bless the file only for a legitimate output change, after two
   runs give the same md5.

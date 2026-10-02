@@ -108,9 +108,11 @@ cd .. && git checkout -- fpga/tb/cosim
 ```
 
 The regression (lint, vendor-neutrality and resource gates, golden tests, 38
-testbenches) rewrites tracked files: always restore `fpga/tb/cosim/*.csv`.
-`fpga/tb/golden/golden_doppler.mem` is committed only when a change legitimately
-alters the receiver output, and only after two runs give the same md5.
+testbenches) rewrites tracked co-sim CSVs: always restore `fpga/tb/cosim/*.csv`.
+It does not touch `fpga/tb/golden/`: the receiver golden is compared against the
+committed `fpga/tb/golden/golden_doppler.mem`, which changes only when a receiver
+change legitimately alters the output (re-blessing procedure in AGENTS.md,
+"Things to know"), after two runs give the same md5.
 
 ### 3. Firmware (STM32G0B1)
 

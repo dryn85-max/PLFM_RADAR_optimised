@@ -42,6 +42,8 @@ B). Fork baseline: upstream `b46dd71`.
 | **Documentation is Markdown in `docs/`;** the upstream HTML site and PDFs go to `legacy/docs-site/`. | The upstream HTML docs site describes the upstream system and does not apply (restructure spec context). | `de18760`, `3b30597` |
 | **Project name: AERIS-10 Lite;** upstream attribution and licences (MIT software, CERN-OHL-P hardware, `Licence` file) kept. | The project has diverged into a 4-channel prototype (restructure spec context). | `de18760` |
 | **Language of README and `docs/` is English;** `docs/bom-optimization.md` stays Russian as a historical document. | It is a historical analysis of the upstream design. | `de18760` |
+| **Protocol unit tests restored as `host/test_radar_protocol.py`** (the non-Tk classes of the legacy Tk GUI test file), run in the CI Python job; the legacy file stays untouched and non-importable. | The restructure had dropped the only unit tests of `radar_protocol.py`; the Tk GUI itself is not used by Lite. | `09a29d8` |
+| **GitHub Pages is not enabled** (the upstream HTML site is archived in `legacy/docs-site/`). | Owner decision in the restructure final-review round; no Pages site for Lite. | reason not recorded beyond that |
 
 ## Process decisions (earlier)
 
