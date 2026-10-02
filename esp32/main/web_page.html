@@ -8,12 +8,18 @@
 :root{--bg:#f4f5f7;--card:#fff;--fg:#1c1f24;--mut:#667;--bar:#2f6fed;--bar2:#d9822b;--bd:#d8dbe0;--ok:#1f8f4e;--bad:#c0392b;--warn:#b7791f}
 @media(prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1e2126;--fg:#e8eaed;--mut:#98a0ab;--bar:#5b8def;--bar2:#e39a4a;--bd:#33373e;--ok:#4cc27e;--bad:#e8685a;--warn:#e0a63c}}
 *{box-sizing:border-box}
-body{margin:0;padding:12px;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+body{margin:0;padding:12px;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-variant-numeric:tabular-nums}
 main{max-width:640px;margin:0 auto}
 h1{font-size:1.1rem;margin:0 0 10px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:10px}
 .row{display:flex;flex-wrap:wrap;gap:8px 16px;justify-content:space-between;font-size:.9rem;color:var(--mut)}
+.row>span{white-space:nowrap}
 .pill{font-weight:600}
+.fx{display:inline-block;vertical-align:bottom}
+#link{min-width:7ch}
+#ws{min-width:12ch}
+#seq{min-width:10ch;text-align:right}
+#fps{min-width:5ch;text-align:right}
 .ok{color:var(--ok)}.lost{color:var(--bad)}.no_data{color:var(--warn)}
 #state{font-size:2.6rem;font-weight:700;text-align:center;padding:14px 0;letter-spacing:.02em}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -32,10 +38,10 @@ h2{font-size:.95rem;margin:0 0 8px}
 <main>
 <h1>AERIS-10 Lite &middot; LD2410C</h1>
 <div class="card row">
-  <span>Sensor link: <span id="link" class="pill no_data">no_data</span></span>
-  <span>WebSocket: <span id="ws" class="pill lost">connecting</span></span>
-  <span>Frame: <span id="seq">-</span></span>
-  <span><span id="fps">-</span> frames/s</span>
+  <span>Sensor link: <span id="link" class="pill fx no_data">no_data</span></span>
+  <span>WebSocket: <span id="ws" class="pill fx lost">connecting</span></span>
+  <span>Frame: <span id="seq" class="fx">-</span></span>
+  <span><span id="fps" class="fx">-</span> frames/s</span>
 </div>
 <div class="card"><div id="state">-</div></div>
 <div class="card grid">
@@ -89,7 +95,7 @@ h2{font-size:.95rem;margin:0 0 8px}
   function setLink(l) {
     var e = $("link");
     l = (l === "ok" || l === "lost" || l === "no_data") ? l : "no_data";
-    e.textContent = l; e.className = "pill " + l;
+    e.textContent = l; e.className = "pill fx " + l;
   }
   function clearData() {
     $("state").textContent = "-";
@@ -135,7 +141,7 @@ h2{font-size:.95rem;margin:0 0 8px}
   }
 
   var sock = null, delay = 500, timer = null;
-  function wsState(t, ok) { var e = $("ws"); e.textContent = t; e.className = "pill " + (ok ? "ok" : "lost"); }
+  function wsState(t, ok) { var e = $("ws"); e.textContent = t; e.className = "pill fx " + (ok ? "ok" : "lost"); }
   function connect() {
     timer = null;
     wsState("connecting", false);
