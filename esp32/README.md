@@ -781,8 +781,10 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   about 100 s after boot, `utc not valid` (validUTC 0) for about 4.5 min after
   the fix with no GPS `time_sync` and the time source staying SNTP, then
   `utc valid` and the time source GPS. This also confirms the cause of the
-  whole-second error seen on 2026-10-02 (leap seconds not yet known). Still
-  open: the `utc no ubx` fallback with the GPIO4 wire unplugged.
+  whole-second error seen on 2026-10-02 (leap seconds not yet known). The
+  `utc no ubx` fallback was confirmed the same day: with the GPIO4 wire
+  unplugged the warning appears and GPS time is used unverified (page note
+  "(not verified: no UBX answer)", time source GPS).
 - SNTP: sync cadence (the ESP-IDF default interval is assumed; a 36 min
   recording showed one real sync and the 60 s re-emits), and its own accuracy
   on the home network.
