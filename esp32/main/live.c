@@ -219,6 +219,16 @@ static void tick(void)
     }
     fill_gps(&s);
     fill_imu(&s);
+    {
+        int en, active, dist;
+        uint32_t no;
+        ld2410_motion_state(&en, &active, &no, &dist);
+        s.motion_en = en != 0;
+        s.motion_active = active != 0;
+        s.motion_n = no;
+        s.have_motion_dist = dist >= 0;
+        s.motion_dist_cm = dist >= 0 ? (uint16_t)dist : 0;
+    }
     s.time_source = time_source_current();
     int n = snapshot_json(s_tmp, sizeof s_tmp, &s);
     if (n <= 0) return;
