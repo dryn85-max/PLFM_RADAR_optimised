@@ -11,9 +11,13 @@
  *   type 2 imu      (18 B): acc_mg i16[3], gyr_ddps i16[3] (0.1 deg/s), pitch_cdeg i16,
  *     roll_cdeg i16, n_samples u8, status u8
  *   type 3 time_sync (9 B): utc_unix_us i64, source u8
+ *   type 4 motion   (28 B): event_no u32, kind u8 (1 start, 2 end), max_energy u8,
+ *     dist_cm u16 (distance at max energy), min_dist_cm u16, max_dist_cm u16,
+ *     onset_esp_us u64, duration_ms u32, reserved u8[4] = 0
+ *     (spec docs/superpowers/specs/2026-10-03-esp32-motion.md R2)
  *
- * Decoders reject a wrong length and nonzero reserved bytes with -EBADMSG;
- * undefined flag/status/source values are passed through unchanged. */
+ * Decoders reject a wrong length and nonzero reserved bytes with -EBADMSG (motion also
+ * a kind other than 1/2); undefined flag/status/source values are passed through unchanged. */
 #ifndef REC_PAYLOAD_H
 #define REC_PAYLOAD_H
 
@@ -24,10 +28,12 @@
 #define REC_TYPE_GPS_FIX 1u
 #define REC_TYPE_IMU 2u
 #define REC_TYPE_TIME_SYNC 3u
+#define REC_TYPE_MOTION 4u
 
 #define REC_GPS_FIX_LEN 32u
 #define REC_IMU_LEN 18u
 #define REC_TIME_SYNC_LEN 9u
+#define REC_MOTION_LEN 28u
 #define REC_LD2410_MIN_LEN 10u /* header 4 + length 2 + footer 4 */
 
 #define GPS_FLAG_TIME_VALID 0x01u
@@ -39,6 +45,9 @@
 #define GPS_FLAG_UTC_VERIFIED 0x10u
 
 #define IMU_STATUS_VALID 0x01u
+
+#define MOTION_KIND_START 1u
+#define MOTION_KIND_END 2u
 
 #define TIME_SRC_GPS 1u
 #define TIME_SRC_SNTP 2u
@@ -70,15 +79,29 @@ typedef struct {
     uint8_t source;
 } rec_time_sync_t;
 
+typedef struct {
+    uint32_t event_no;
+    uint8_t kind; /* MOTION_KIND_START or MOTION_KIND_END */
+    uint8_t max_energy;
+    uint16_t dist_cm;
+    uint16_t min_dist_cm;
+    uint16_t max_dist_cm;
+    uint64_t onset_esp_us;
+    uint32_t duration_ms;
+} rec_motion_t;
+
 /* Encoders: 0, or -EINVAL (null). */
 int rec_gps_fix_encode(uint8_t out[REC_GPS_FIX_LEN], const rec_gps_fix_t *v);
 int rec_imu_encode(uint8_t out[REC_IMU_LEN], const rec_imu_t *v);
 int rec_time_sync_encode(uint8_t out[REC_TIME_SYNC_LEN], const rec_time_sync_t *v);
+int rec_motion_encode(uint8_t out[REC_MOTION_LEN], const rec_motion_t *v);
 
 /* Decoders: 0, -EINVAL (null), -EBADMSG (len != exact size, reserved != 0). */
 int rec_gps_fix_decode(const uint8_t *buf, size_t len, rec_gps_fix_t *v);
 int rec_imu_decode(const uint8_t *buf, size_t len, rec_imu_t *v);
 int rec_time_sync_decode(const uint8_t *buf, size_t len, rec_time_sync_t *v);
+/* motion: also -EBADMSG for a kind other than 1/2; the output is untouched on failure. */
+int rec_motion_decode(const uint8_t *buf, size_t len, rec_motion_t *v);
 
 /* Classify a (type, payload length) pair: 0 known type with a valid length,
  * -ENOTSUP unknown type (the caller keeps or skips the record, never fails),

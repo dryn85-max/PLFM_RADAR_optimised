@@ -1,4 +1,4 @@
-/* Host tests for rec_payload: gps_fix / imu / time_sync codecs, record checks,
+/* Host tests for rec_payload: gps_fix / imu / time_sync / motion codecs, record checks,
  * every payload vector shared with host/test_ld2410_rec.py. */
 #include <errno.h>
 #include <string.h>
@@ -108,6 +108,136 @@ static void test_sync_vectors(void)
     }
 }
 
+static const char *const MOTION_VECS[] = {"motion_start", "motion_end", "motion_extremes"};
+
+static void test_motion_vectors(void)
+{
+    for (unsigned k = 0; k < sizeof MOTION_VECS / sizeof *MOTION_VECS; k++) {
+        static uint8_t bin[64], json[2048];
+        char n[64];
+        snprintf(n, sizeof n, "%s.bin", MOTION_VECS[k]);
+        size_t len = vec_read(n, bin, sizeof bin);
+        snprintf(n, sizeof n, "%s.json", MOTION_VECS[k]);
+        vec_read(n, json, sizeof json);
+        const char *j = (const char *)json;
+        TT_ASSERT_EQ(4, json_u64(j, "record_type"));
+        TT_ASSERT_EQ(REC_MOTION_LEN, len);
+        rec_motion_t m;
+        TT_ASSERT_EQ(0, rec_motion_decode(bin, len, &m));
+        TT_ASSERT(m.event_no == json_u64(j, "event_no"));
+        TT_ASSERT_EQ(json_u64(j, "kind"), m.kind);
+        TT_ASSERT_EQ(json_u64(j, "max_energy"), m.max_energy);
+        TT_ASSERT_EQ(json_u64(j, "dist_cm"), m.dist_cm);
+        TT_ASSERT_EQ(json_u64(j, "min_dist_cm"), m.min_dist_cm);
+        TT_ASSERT_EQ(json_u64(j, "max_dist_cm"), m.max_dist_cm);
+        TT_ASSERT(m.onset_esp_us == json_u64(j, "onset_esp_us"));
+        TT_ASSERT(m.duration_ms == json_u64(j, "duration_ms"));
+        uint8_t out[REC_MOTION_LEN];
+        TT_ASSERT_EQ(0, rec_motion_encode(out, &m));
+        TT_ASSERT(memcmp(out, bin, len) == 0);
+        TT_ASSERT_EQ(0, rec_record_check(REC_TYPE_MOTION, len));
+    }
+}
+
+/* The motion records inside batch_v3_motion are byte-identical to the payload vectors. */
+static void test_motion_in_batch(void)
+{
+    static uint8_t b[512], s[64], e[64], blk[REC_MOTION_LEN];
+    size_t len = vec_read("batch_v3_motion.bin", b, sizeof b);
+    vec_read("motion_start.bin", s, sizeof s);
+    vec_read("motion_end.bin", e, sizeof e);
+    size_t off = 20; /* batch header */
+    unsigned found = 0;
+    for (unsigned i = 0; i < 4; i++) {
+        TT_ASSERT(off + 15 <= len);
+        uint8_t type = b[off + 12];
+        size_t ln = (size_t)b[off + 13] | ((size_t)b[off + 14] << 8);
+        off += 15;
+        if (type == REC_TYPE_MOTION) {
+            TT_ASSERT_EQ(REC_MOTION_LEN, ln);
+            memcpy(blk, b + off, ln);
+            TT_ASSERT(memcmp(blk, found == 0 ? s : e, ln) == 0);
+            found++;
+        }
+        off += ln;
+    }
+    TT_ASSERT_EQ(2, found);
+    TT_ASSERT_EQ(len, off);
+}
+
+static void test_motion_layout_and_bounds(void)
+{
+    TT_ASSERT_EQ(4, REC_TYPE_MOTION);
+    TT_ASSERT_EQ(28, REC_MOTION_LEN);
+    /* hand-derived bytes, independent of the vectors */
+    rec_motion_t m = {.event_no = 0x01020304u, .kind = 2, .max_energy = 0x05, .dist_cm = 0x0607,
+                      .min_dist_cm = 0x0809, .max_dist_cm = 0x0A0B,
+                      .onset_esp_us = 0x1112131415161718ull, .duration_ms = 0x21222324u};
+    static const uint8_t exp[28] = {
+        0x04, 0x03, 0x02, 0x01, 0x02, 0x05, 0x07, 0x06, 0x09, 0x08, 0x0B, 0x0A,
+        0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11, 0x24, 0x23, 0x22, 0x21, 0, 0, 0, 0};
+    uint8_t o[REC_MOTION_LEN];
+    memset(o, 0xEE, sizeof o);
+    TT_ASSERT_EQ(0, rec_motion_encode(o, &m));
+    TT_ASSERT(memcmp(o, exp, 28) == 0);
+    rec_motion_t d;
+    memset(&d, 0, sizeof d);
+    TT_ASSERT_EQ(0, rec_motion_decode(exp, 28, &d));
+    TT_ASSERT(d.event_no == 0x01020304u && d.kind == 2 && d.max_energy == 5 && d.dist_cm == 0x0607 &&
+              d.min_dist_cm == 0x0809 && d.max_dist_cm == 0x0A0B &&
+              d.onset_esp_us == 0x1112131415161718ull && d.duration_ms == 0x21222324u);
+
+    /* boundary values round-trip */
+    static const uint64_t on[] = {0, 1, 0xFFFFFFFFull, 0x100000000ull, 0xFFFFFFFFFFFFFFFFull};
+    static const uint32_t u32[] = {0, 1, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu};
+    for (unsigned i = 0; i < 5; i++) {
+        m = (rec_motion_t){.event_no = u32[i], .kind = 1, .max_energy = 255, .dist_cm = 65535,
+                           .min_dist_cm = 0, .max_dist_cm = 65535, .onset_esp_us = on[i],
+                           .duration_ms = u32[4 - i]};
+        TT_ASSERT_EQ(0, rec_motion_encode(o, &m));
+        TT_ASSERT_EQ(0, rec_motion_decode(o, sizeof o, &d));
+        TT_ASSERT(d.event_no == m.event_no && d.onset_esp_us == m.onset_esp_us &&
+                  d.duration_ms == m.duration_ms && d.dist_cm == 65535 && d.min_dist_cm == 0);
+    }
+}
+
+static void test_motion_bad_input(void)
+{
+    uint8_t buf[64];
+    rec_motion_t m;
+    memset(buf, 0, sizeof buf);
+    buf[4] = 1; /* valid kind */
+    for (size_t n = 0; n < sizeof buf; n++)
+        TT_ASSERT_EQ(n == REC_MOTION_LEN ? 0 : -EBADMSG, rec_motion_decode(buf, n, &m));
+    for (unsigned i = 24; i < 28; i++) { /* every reserved byte must be zero */
+        buf[i] = 1;
+        TT_ASSERT_EQ(-EBADMSG, rec_motion_decode(buf, REC_MOTION_LEN, &m));
+        buf[i] = 0x80;
+        TT_ASSERT_EQ(-EBADMSG, rec_motion_decode(buf, REC_MOTION_LEN, &m));
+        buf[i] = 0;
+    }
+    for (unsigned k = 0; k < 256; k++) { /* only kinds 1 and 2 */
+        buf[4] = (uint8_t)k;
+        TT_ASSERT_EQ(k == 1 || k == 2 ? 0 : -EBADMSG, rec_motion_decode(buf, REC_MOTION_LEN, &m));
+    }
+    buf[4] = 1;
+    TT_ASSERT_EQ(-EINVAL, rec_motion_decode(NULL, REC_MOTION_LEN, &m));
+    TT_ASSERT_EQ(-EINVAL, rec_motion_decode(buf, REC_MOTION_LEN, NULL));
+    TT_ASSERT_EQ(-EINVAL, rec_motion_encode(NULL, &m));
+    TT_ASSERT_EQ(-EINVAL, rec_motion_encode(buf, NULL));
+    /* a decode failure leaves the output untouched */
+    m.event_no = 77;
+    buf[4] = 3;
+    TT_ASSERT_EQ(-EBADMSG, rec_motion_decode(buf, REC_MOTION_LEN, &m));
+    TT_ASSERT_EQ(77, m.event_no);
+    /* the encoder writes only 28 bytes and zero reserved bytes, whatever the input */
+    uint8_t guard[REC_MOTION_LEN + 4];
+    memset(guard, 0xEE, sizeof guard);
+    m = (rec_motion_t){.kind = 1};
+    TT_ASSERT_EQ(0, rec_motion_encode(guard, &m));
+    TT_ASSERT(guard[24] == 0 && guard[27] == 0 && guard[28] == 0xEE && guard[31] == 0xEE);
+}
+
 static void test_explicit_layout(void)
 {
     /* hand-derived bytes, independent of the vectors */
@@ -212,10 +342,12 @@ static void test_record_check(void)
     TT_ASSERT_EQ(0, rec_record_check(REC_TYPE_GPS_FIX, 32));
     TT_ASSERT_EQ(0, rec_record_check(REC_TYPE_IMU, 18));
     TT_ASSERT_EQ(0, rec_record_check(REC_TYPE_TIME_SYNC, 9));
+    TT_ASSERT_EQ(0, rec_record_check(REC_TYPE_MOTION, 28));
     for (size_t n = 0; n < 40; n++) {
         TT_ASSERT_EQ(n == 32 ? 0 : -EBADMSG, rec_record_check(REC_TYPE_GPS_FIX, n));
         TT_ASSERT_EQ(n == 18 ? 0 : -EBADMSG, rec_record_check(REC_TYPE_IMU, n));
         TT_ASSERT_EQ(n == 9 ? 0 : -EBADMSG, rec_record_check(REC_TYPE_TIME_SYNC, n));
+        TT_ASSERT_EQ(n == 28 ? 0 : -EBADMSG, rec_record_check(REC_TYPE_MOTION, n));
     }
     TT_ASSERT_EQ(-EBADMSG, rec_record_check(REC_TYPE_LD2410_FRAME, 0));
     TT_ASSERT_EQ(-EBADMSG, rec_record_check(REC_TYPE_LD2410_FRAME, 9));
@@ -223,7 +355,7 @@ static void test_record_check(void)
     TT_ASSERT_EQ(0, rec_record_check(REC_TYPE_LD2410_FRAME, RB_MAX_RAW));
     TT_ASSERT_EQ(-EBADMSG, rec_record_check(REC_TYPE_LD2410_FRAME, RB_MAX_RAW + 1));
     /* unknown types: not an error of the stream, the caller keeps or skips them */
-    for (unsigned ty = 4; ty < 256; ty++)
+    for (unsigned ty = 5; ty < 256; ty++)
         TT_ASSERT_EQ(-ENOTSUP, rec_record_check((uint8_t)ty, 9));
 }
 
@@ -232,6 +364,10 @@ int main(void)
     TT_RUN(test_gps_vectors);
     TT_RUN(test_imu_vectors);
     TT_RUN(test_sync_vectors);
+    TT_RUN(test_motion_vectors);
+    TT_RUN(test_motion_in_batch);
+    TT_RUN(test_motion_layout_and_bounds);
+    TT_RUN(test_motion_bad_input);
     TT_RUN(test_explicit_layout);
     TT_RUN(test_saturation);
     TT_RUN(test_flags_passthrough);

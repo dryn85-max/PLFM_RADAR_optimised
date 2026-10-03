@@ -1,0 +1,14 @@
+{
+  "record_type": 4,
+  "payload_hex": "07000000025dd20096003601404b4c00000000003930000000000000",
+  "motion": {
+    "event_no": 7,
+    "kind": 2,
+    "max_energy": 93,
+    "dist_cm": 210,
+    "min_dist_cm": 150,
+    "max_dist_cm": 310,
+    "onset_esp_us": 5000000,
+    "duration_ms": 12345
+  }
+}

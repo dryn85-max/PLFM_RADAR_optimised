@@ -114,6 +114,41 @@ int rec_time_sync_decode(const uint8_t *buf, size_t len, rec_time_sync_t *v)
     return 0;
 }
 
+int rec_motion_encode(uint8_t out[REC_MOTION_LEN], const rec_motion_t *v)
+{
+    if (!out || !v)
+        return -EINVAL;
+    put_le(out + 0, v->event_no, 4);
+    out[4] = v->kind;
+    out[5] = v->max_energy;
+    put_le(out + 6, v->dist_cm, 2);
+    put_le(out + 8, v->min_dist_cm, 2);
+    put_le(out + 10, v->max_dist_cm, 2);
+    put_le(out + 12, v->onset_esp_us, 8);
+    put_le(out + 20, v->duration_ms, 4);
+    out[24] = out[25] = out[26] = out[27] = 0;
+    return 0;
+}
+
+int rec_motion_decode(const uint8_t *buf, size_t len, rec_motion_t *v)
+{
+    if (!buf || !v)
+        return -EINVAL;
+    if (len != REC_MOTION_LEN || buf[24] || buf[25] || buf[26] || buf[27])
+        return -EBADMSG;
+    if (buf[4] != MOTION_KIND_START && buf[4] != MOTION_KIND_END)
+        return -EBADMSG;
+    v->event_no = (uint32_t)get_le(buf + 0, 4);
+    v->kind = buf[4];
+    v->max_energy = buf[5];
+    v->dist_cm = (uint16_t)get_le(buf + 6, 2);
+    v->min_dist_cm = (uint16_t)get_le(buf + 8, 2);
+    v->max_dist_cm = (uint16_t)get_le(buf + 10, 2);
+    v->onset_esp_us = get_le(buf + 12, 8);
+    v->duration_ms = (uint32_t)get_le(buf + 20, 4);
+    return 0;
+}
+
 int rec_record_check(uint8_t type, size_t len)
 {
     switch (type) {
@@ -125,6 +160,8 @@ int rec_record_check(uint8_t type, size_t len)
         return len == REC_IMU_LEN ? 0 : -EBADMSG;
     case REC_TYPE_TIME_SYNC:
         return len == REC_TIME_SYNC_LEN ? 0 : -EBADMSG;
+    case REC_TYPE_MOTION:
+        return len == REC_MOTION_LEN ? 0 : -EBADMSG;
     default:
         return -ENOTSUP;
     }

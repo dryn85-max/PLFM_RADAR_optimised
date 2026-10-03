@@ -210,10 +210,63 @@ def main():
         pl = struct.pack("<qB", t["utc_unix_us"], t["source"])
         write(name, pl, {"record_type": 3, "payload_hex": pl.hex(), "time_sync": t})
 
-    # Mixed batch: seq wraps; frame (real capture 0), gps_fix, imu, time_sync, frame
-    # (real capture 1). The two real frames are hand-written files, read here.
     real0 = (HERE / "frame_engineering_real_0.bin").read_bytes()
     real1 = (HERE / "frame_engineering_real_1.bin").read_bytes()
+    # Record type 4 motion (spec docs/superpowers/specs/2026-10-03-esp32-motion.md R2).
+    motions = {
+        # START: duration 0, min/max = distance at the first detection
+        "motion_start": {
+            "event_no": 7,
+            "kind": 1,
+            "max_energy": 55,
+            "dist_cm": 230,
+            "min_dist_cm": 230,
+            "max_dist_cm": 230,
+            "onset_esp_us": 5_000_000,
+            "duration_ms": 0,
+        },
+        # END of the same event: 12.345 s long, distance range 1.50 .. 3.10 m
+        "motion_end": {
+            "event_no": 7,
+            "kind": 2,
+            "max_energy": 93,
+            "dist_cm": 210,
+            "min_dist_cm": 150,
+            "max_dist_cm": 310,
+            "onset_esp_us": 5_000_000,
+            "duration_ms": 12345,
+        },
+        # integer extremes (onset above 2^32 us, u32/u16/u8 maxima)
+        "motion_extremes": {
+            "event_no": 2**32 - 1,
+            "kind": 2,
+            "max_energy": 255,
+            "dist_cm": 65535,
+            "min_dist_cm": 65535,
+            "max_dist_cm": 65535,
+            "onset_esp_us": 2**64 - 1,
+            "duration_ms": 2**32 - 1,
+        },
+    }
+    for name, m in motions.items():
+        pl = motion_payload(m)
+        write(name, pl, {"record_type": 4, "payload_hex": pl.hex(), "motion": m})
+    # Batch with motion records among the others (own file: batch_v3_mixed stays as it is).
+    motion_batch = [
+        (10, 8_000_000, 0, real0),
+        (11, 8_000_100, 4, motion_payload(motions["motion_start"])),
+        (12, 8_100_000, 0, real1),
+        (13, 20_000_000, 4, motion_payload(motions["motion_end"])),
+    ]
+    boot = 0x0C0FFEE5
+    write(
+        "batch_v3_motion",
+        batch(0, 10, boot, motion_batch),
+        batch_meta(0, 10, boot, motion_batch),
+    )
+
+    # Mixed batch: seq wraps; frame (real capture 0), gps_fix, imu, time_sync, frame
+    # (real capture 1). The two real frames are hand-written files, read here.
     mixed = [
         (0xFFFFFFFD, 5000000, 0, real0),
         (0xFFFFFFFE, 5000100, 1, gps_payload(gps["gps_fix_nominal"])),
@@ -224,6 +277,20 @@ def main():
     boot = 0x0BADCAFE
     write(
         "batch_v3_mixed", batch(0, 0xFFFFFFFD, boot, mixed), batch_meta(0, 0xFFFFFFFD, boot, mixed)
+    )
+
+
+def motion_payload(m):
+    return struct.pack(
+        "<IBBHHHQI4x",
+        m["event_no"],
+        m["kind"],
+        m["max_energy"],
+        m["dist_cm"],
+        m["min_dist_cm"],
+        m["max_dist_cm"],
+        m["onset_esp_us"],
+        m["duration_ms"],
     )
 
 
