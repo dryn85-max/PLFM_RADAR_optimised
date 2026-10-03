@@ -83,6 +83,9 @@ void nmea_feed(nmea_t *p, const uint8_t *data, size_t len, nmea_cb_t cb, void *c
 /* Emit the pending incomplete epoch, if any. */
 void nmea_flush(nmea_t *p, nmea_cb_t cb, void *ctx);
 
+/* True while a line is in progress (including an overlong one being skipped). */
+static inline bool nmea_in_line(const nmea_t *p) { return p->state != NMEA_ST_IDLE; }
+
 /* Days since 1970-01-01 of a proleptic Gregorian date, -1 if the date is not
  * a real calendar day (month 1-12, day within the month incl. leap years). The
  * year may be any value in 1970..2099. Exposed for tests. */
