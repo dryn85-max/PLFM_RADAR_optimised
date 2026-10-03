@@ -174,6 +174,7 @@ stays in the repo unchanged.
  |   UART -> ld2410_parser (frames) -> ld2410_frame (decode)           |
  |        +--> ring buffer, 4 MiB PSRAM (typed records, one seq)       |
  |        +--> latest snapshot (mutex)                                 |
+ |        +--> motion detector (moving target) -> motion records       |
  |   request queue (depth 1): /ld2410 settings, between frame reads    |
  | gps task (core 1, prio 4): UART2 -> gps_rx -> nmea (RMC/GGA) + ubx  |
  |        UBX NAV-TIMEUTC poll 1 Hz on TX -> UTC state valid/not valid/|
@@ -208,7 +209,8 @@ Data flow:
    records `{seq u32, esp_time_us u64, type u8, len u16, payload}` with one
    shared sequence: type 0 raw LD2410C frame, 1 `gps_fix` (32 B, one per NMEA
    epoch, also without a fix), 2 `imu` (18 B, 10 Hz: mean raw acceleration and
-   rate, pitch, roll), 3 `time_sync` (9 B: UTC microseconds and source). The
+   rate, pitch, roll), 3 `time_sync` (9 B: UTC microseconds and source), 4 `motion`
+   (28 B: start or end of a motion event, see 2d). The
    GPS, IMU and SNTP code push into the same ring from their own tasks; the
    transport is type-agnostic, so GAP, keep-alive, `boot_id` and resume work
    unchanged for every type. A missing or silent GPS or IMU never touches the
@@ -226,6 +228,17 @@ Data flow:
 2c. **Tilt.** Pitch and roll are absolute (complementary filter on the gravity
    direction; body frame +X boresight, +Y left, +Z up; sensor-to-body mapping is
    a firmware constant). There is no azimuth: no magnetometer.
+2d. **Motion detector.** The LD2410C task feeds every decoded data frame to
+   `motion_det` (core, host-tested): a frame is moving when the moving target is
+   inside a configured zone with at least a minimum energy; an event starts
+   after the start delay of moving frames and ends after the end delay without
+   one (also when the link is lost: the task ticks the detector once per second
+   without data). A start and an end each push a `motion` record into the ring
+   (the onset time is in the payload, the header time is the push time), log one
+   line to `/log` and update a list of the last 10 events (mutex) that
+   `GET /motion/events` and the Motion card of the live page read; the snapshot
+   carries the state. The six settings live in NVS and are edited on `/ld2410`
+   (AP only). The recording protocol stays v3.
 3. **Live view:** a 10 Hz timer builds the snapshot JSON and sends it to each
    WebSocket client; a client whose previous send is still pending is skipped,
    so a slow client sees only the newest snapshot (latest-only, no queue). The
@@ -239,7 +252,8 @@ Data flow:
    recorder writes every record plus PC time to a `.ldrec` v3 file (v2 files
    remain readable) and exports CSV: radar frames with frame UTC, time source,
    the latest GPS fix and the latest pitch/roll, plus optional per-sensor CSVs
-   (`--gps`, `--imu`). Unknown record types are kept raw (file type 6).
+   (`--gps`, `--imu`, `--motion`). Unknown record types are kept raw (file type 6); motion
+   records are stored that way too and decoded by the exporter.
 
 5. **LD2410C settings (`/ld2410`).** The LD2410C task owns UART1. The HTTP
    handler submits a request (read, write, Bluetooth off, restart, factory

@@ -102,8 +102,14 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   home network); tilt is absolute until then. Postponed until the rotating radar (owner
   2026-10-03): the recording carries the raw accelerations, so a mounting offset
   can be removed on the host.
-- [ ] **Radar motion detector** (presence/motion event on the radar data, with
-  its own recording and live indication); out of scope of the GPS/IMU cycle.
+- [ ] **Motion notifications outside the board.** Owner decision 2026-10-03: not
+  now. Motion events stay on the board (recording, live page, `/log`). A
+  messenger or push service would need a token entered on the board (on the
+  AP-only settings page), never in chat.
+- [ ] **Offline replay of the motion detector on recorded frames (host).**
+  Re-run the detector with other settings on a `.ldrec`; the raw frames are
+  already recorded, so the zone, energy and delays can be tuned without a new
+  walk-through.
 - [ ] **IMU recording at 100 Hz option.** The recording carries 10 Hz averaged
   `imu` records; a raw 100 Hz option (larger records or a new type, more ring
   buffer traffic) was left out. The rate is one constant in the firmware.
