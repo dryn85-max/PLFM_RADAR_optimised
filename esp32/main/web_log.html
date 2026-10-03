@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AERIS-10 Lite log</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1c1f24;--mut:#667;--bar:#2f6fed;--bd:#d8dbe0;--ok:#1f8f4e;--bad:#c0392b;--warn:#b7791f}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1e2126;--fg:#e8eaed;--mut:#98a0ab;--bar:#5b8def;--bd:#33373e;--ok:#4cc27e;--bad:#e8685a;--warn:#e0a63c}}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;padding:12px;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;flex-direction:column}
+main{max-width:960px;width:100%;margin:0 auto;display:flex;flex-direction:column;flex:1;min-height:0}
+h1{font-size:1.1rem;margin:0 0 10px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+button{padding:8px 14px;font:inherit;font-weight:600;color:#fff;background:var(--bar);border:0;border-radius:8px}
+button[hidden]{display:none}
+#st{font-size:.85rem;color:var(--mut);flex:1;min-width:12ch}
+#st.bad{color:var(--bad)}#st.warn{color:var(--warn)}
+#box{flex:1;min-height:200px;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px}
+#log{margin:0;font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.k{font-size:.8rem;color:var(--mut);margin-top:8px}
+a{color:var(--bar)}
+</style>
+</head>
+<body>
+<main>
+<h1>AERIS-10 Lite &middot; log</h1>
+<div class="bar">
+  <button id="cp" type="button">Copy</button>
+  <button id="sa" type="button">Select all</button>
+  <button id="rs" type="button" hidden>Resume scroll</button>
+  <span id="st">starting&hellip;</span>
+</div>
+<div id="box"><pre id="log"></pre></div>
+<div class="k"><a href="/">Live</a> &middot; <a href="/wifi">Wi-Fi setup</a> &middot; <a href="/ld2410">LD2410C settings</a></div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var box = $("box"), pre = $("log"), st = $("st"), rs = $("rs");
+  var MAX_CHARS = 200000;      /* client-side history, trimmed from the top */
+  var next = null;             /* X-Log-Next of the last answer; null = first request */
+  var total = 0;               /* bytes received */
+  var text = "";               /* everything shown (for Copy) */
+  var lost = false, err = false, pinned = true;
+  var dec = null;
+
+  function newDecoder() { dec = (typeof TextDecoder === "function") ? new TextDecoder("utf-8") : null; }
+  newDecoder();
+
+  function status() {
+    var s = total + " bytes received";
+    var cls = "";
+    if (lost) { s += " \u00b7 older lines lost"; cls = "warn"; }
+    if (err) { s += " \u00b7 connection error, retrying"; cls = "bad"; }
+    st.textContent = s; st.className = cls;
+  }
+
+  function atBottom() { return box.scrollHeight - box.scrollTop - box.clientHeight <= 8; }
+  function setPinned(p) { pinned = p; rs.hidden = p; }
+  box.addEventListener("scroll", function () { setPinned(atBottom()); });
+  rs.onclick = function () { setPinned(true); box.scrollTop = box.scrollHeight; };
+
+  function append(s) {
+    if (!s) return;
+    text += s;
+    if (text.length > MAX_CHARS) {
+      var cut = text.length - MAX_CHARS * 0.8;
+      var nl = text.indexOf("\n", cut);
+      text = text.slice(nl >= 0 ? nl + 1 : cut);
+      pre.textContent = text;
+    } else {
+      pre.appendChild(document.createTextNode(s));
+    }
+    if (pinned) box.scrollTop = box.scrollHeight;
+  }
+
+  function copyFallback() {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;left:0;top:0;opacity:0;width:1px;height:1px";
+    document.body.appendChild(ta);
+    ta.select(); ta.setSelectionRange(0, ta.value.length);
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+  function flash(msg) {
+    st.textContent = msg; st.className = "";
+    setTimeout(status, 1500);
+  }
+  $("cp").onclick = function () {
+    function viaSelection() {
+      if (!copyFallback()) { selectAll(); flash("Copy blocked: text selected, copy it manually"); }
+      else flash("Copied");
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { flash("Copied"); }, viaSelection);
+    } else { viaSelection(); }
+  };
+  function selectAll() {
+    var sel = window.getSelection();
+    if (!sel) return;
+    var r = document.createRange();
+    r.selectNodeContents(pre);
+    sel.removeAllRanges(); sel.addRange(r);
+  }
+  $("sa").onclick = selectAll;
+
+  var timer = null;
+  function later(ms) { timer = setTimeout(poll, ms); }
+
+  function poll() {
+    var url = "/log/data" + (next === null ? "" : "?from=" + next);
+    var ctl = (typeof AbortController === "function") ? new AbortController() : null;
+    var to = ctl ? setTimeout(function () { ctl.abort(); }, 5000) : null;
+    fetch(url, { cache: "no-store", signal: ctl ? ctl.signal : undefined }).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      var n = parseInt(r.headers.get("X-Log-Next"), 10);
+      var gap = r.headers.get("X-Log-Gap") === "1";
+      return r.arrayBuffer().then(function (buf) { return { n: n, gap: gap, buf: buf }; });
+    }).then(function (d) {
+      if (to) clearTimeout(to);
+      if (!isFinite(d.n)) throw new Error("bad header");
+      if (d.gap) {
+        lost = true; newDecoder();
+        append("\n--- older lines lost ---\n");
+      }
+      var bytes = new Uint8Array(d.buf);
+      total += bytes.length;
+      var s;
+      if (dec) s = dec.decode(bytes, { stream: true });
+      else { s = ""; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); }
+      append(s);
+      next = d.n; err = false; status();
+      later(bytes.length >= 4096 ? 50 : 1000);
+    }).catch(function () {
+      if (to) clearTimeout(to);
+      err = true; status();
+      later(2000);
+    });
+  }
+  status();
+  poll();
+})();
+</script>
+</body>
+</html>

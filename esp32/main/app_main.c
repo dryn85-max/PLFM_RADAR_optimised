@@ -12,6 +12,7 @@
 #include "live.h"
 #include "rec_srv.h"
 #include "status_led_task.h"
+#include "web_log.h"
 #include "wifi_mgr.h"
 
 /* sdkconfig.defaults selects the 1.5 MB single-app partition table; an existing esp32/sdkconfig
@@ -27,10 +28,15 @@ static const char *TAG = "app";
 
 void app_main(void)
 {
+    /* First, so that boot logs of every module land in the web log. A failure only loses it. */
+    esp_err_t err = web_log_init();
     printf("\nAERIS-10 Lite MVP (ESP32-S3)\n");
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "web_log_init failed: %s", esp_err_to_name(err));
+    }
 
     /* Status LED first so Wi-Fi states are visible; a failure only leaves the LED dark. */
-    esp_err_t err = status_led_start();
+    err = status_led_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "status_led_start failed: %s", esp_err_to_name(err));
     }
@@ -94,6 +100,10 @@ void app_main(void)
         err = live_start();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "live_start failed: %s", esp_err_to_name(err));
+        }
+        err = web_log_register();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "web_log_register failed: %s", esp_err_to_name(err));
         }
     }
 }
