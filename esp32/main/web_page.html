@@ -229,7 +229,7 @@ a{color:var(--bar)}
 
   /* Motion card: shown only when the snapshot carries "motion" (older firmware: stays hidden).
      The event list is refetched when n or active changes; one fetch at a time. */
-  var mKey = null, mBusy = false, mAgain = false;
+  var mKey = null, mBusy = false, mAgain = false, mList = [], mAt = 0, mFail = 0;
   function ago(ms) {
     var s = Math.round(ms / 1000);
     if (s < 60) return s + " s ago";
@@ -242,14 +242,14 @@ a{color:var(--bar)}
     var b = document.createElement("span"); b.className = "mt"; b.textContent = right;
     e.appendChild(a); e.appendChild(b); return e;
   }
-  function renderEvents(list) {
-    var ul = $("mev");
+  function renderEvents() {
+    var list = mList, ul = $("mev");
     while (ul.firstChild) ul.removeChild(ul.firstChild);
     if (!Array.isArray(list)) list = [];
     list.forEach(function (e) {
       if (!e || typeof e !== "object") return;
       var d = num(e.dur_ms);
-      ul.appendChild(li("#" + val(e.no) + " " + (num(e.ago_ms) === null ? "-" : ago(e.ago_ms)) +
+      ul.appendChild(li("#" + val(e.no) + " " + (num(e.ago_ms) === null ? "-" : ago(e.ago_ms + (Date.now() - mAt))) +
         " \u00b7 " + (d === null ? "active" : (d / 1000).toFixed(1) + " s"),
         metres(e.dist) + " (" + metres(e.min) + "\u2013" + metres(e.max) + ") \u00b7 energy " + val(e.energy)));
     });
@@ -261,8 +261,8 @@ a{color:var(--bar)}
     var done = function () { mBusy = false; if (mAgain) fetchEvents(); };
     fetch("/motion/events", { cache: "no-store" })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (l) { renderEvents(l); done(); })
-      .catch(function () { mKey = null; done(); }); /* retry on the next snapshot */
+      .then(function (l) { mList = l; mAt = Date.now(); renderEvents(); done(); })
+      .catch(function () { mKey = null; mFail = Date.now(); done(); }); /* retry on a later snapshot, not before 2 s */
   }
   function renderMotion(mo) {
     var card = $("mcard");
@@ -272,7 +272,8 @@ a{color:var(--bar)}
     setSt("mst", !en ? "disabled" : act ? "active" : "idle", !en ? "warn" : act ? "bad" : "ok");
     $("mdi").textContent = num(mo.dist) === null ? "\u2014" : metres(mo.dist);
     var key = val(mo.n) + "/" + (act ? 1 : 0);
-    if (key !== mKey) { mKey = key; fetchEvents(); }
+    if (key !== mKey && Date.now() - mFail >= 2000) { mKey = key; fetchEvents(); }
+    else renderEvents(); /* ages advance with the clock, no extra request */
   }
 
   function render(m) {

@@ -499,7 +499,12 @@ are not used. Spec: `docs/superpowers/specs/2026-10-03-esp32-motion.md`.
   delay**. This is checked on every frame and once per second also while no
   frame arrives, so an event ends by itself when the sensor link is lost. The
   recorded duration is from the first moving frame to the last moving frame
-  (the end delay is not included).
+  (the end delay is not included). After a link loss the event ends up to about
+  1-2.5 s later than the end delay, because the no-data step runs once per
+  second; the reported duration is not affected.
+- **Configuration mode.** Frames pause while the LD2410C is in configuration
+  mode (settings requests, engineering-mode recovery). A pending event can
+  continue across such a pause shorter than about 1 s.
 - **Disabled.** With the detector off no new event starts; an event that is
   active is ended at once.
 - **Event numbers** count started events since boot (the first is 1) and
@@ -558,7 +563,8 @@ event that is already pending or active. The defaults are a starting point
   "dur_ms", "energy", "dist", "min", "max"}`: `ago_ms` is the time since the
   event began, `dur_ms` is `null` while the event is active, distances are in
   cm. While an event is active, `energy`, `dist`, `min` and `max` are the values
-  seen so far. The list is empty after a reboot (it is not stored).
+  seen during the start delay; they are replaced by the final values when the
+  event ends. The list is empty after a reboot (it is not stored).
 - **Recording:** record type 4 `motion` (below), one at the start and one at
   the end. `ld2410_rec.py export-csv --motion FILE` lists the events.
 
@@ -1008,6 +1014,10 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 - Task stack sizes (LD2410C task 6144 B, recording tasks 4096 B, HTTP server
   8192 B, main task 6144 B, BOOT monitor 4096 B, status LED task 3072 B, GPS task 4096 B, IMU task
   5120 B) under real load.
+- Stack high-water mark of the LD2410C task (6144 B) with the motion detector
+  and the `/log` hook in the deepest call chain (config request -> pump ->
+  on_data -> motion_step -> ESP_LOGI): measure on the bench with
+  `uxTaskGetStackHighWaterMark`.
 - The AP password stays stable across reboots and a credential reset.
 - GPS wiring and pins (GPIO4/5 UART2, GPIO8/9 I2C) on the real boards, and that
   these GPIOs are free of strapping/PSRAM functions on the DevKitC-1 v1.1.
