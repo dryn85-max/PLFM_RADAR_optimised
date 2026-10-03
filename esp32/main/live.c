@@ -156,6 +156,12 @@ static void fill_gps(snapshot_t *s)
         s->have_gps = 1;
         s->gps = g.fix;
     }
+    switch (gps_utc_state()) {
+    case GPS_UTC_VALID: s->gps_utc_state = SNAP_UTC_VALID; break;
+    case GPS_UTC_NOT_VALID: s->gps_utc_state = SNAP_UTC_NOT_VALID; break;
+    case GPS_UTC_NO_UBX: s->gps_utc_state = SNAP_UTC_NO_UBX; break;
+    default: s->gps_utc_state = SNAP_UTC_UNKNOWN; break;
+    }
 }
 
 static void fill_imu(snapshot_t *s)

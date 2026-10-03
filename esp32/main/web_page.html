@@ -85,7 +85,7 @@ h2{font-size:.95rem;margin:0 0 8px}
     <div><div class="k">Altitude</div><div class="v" id="gal">-</div></div>
     <div><div class="k">Speed</div><div class="v" id="gsc">-</div></div>
     <div><div class="k">Course</div><div class="v" id="gco">-</div></div>
-    <div class="w"><div class="k">UTC</div><div class="v" id="gut">-</div></div>
+    <div class="w"><div class="k">UTC</div><div class="v" id="gut">-</div><div class="k" id="gun">&nbsp;</div></div>
     <div class="w"><div class="k">Time source</div><div class="v" id="gts">-</div></div>
   </div>
 </div>
@@ -176,6 +176,7 @@ h2{font-size:.95rem;margin:0 0 8px}
     var TS = { gps: "GPS", sntp: "SNTP", none: "none" };
     $("gts").textContent = TS[tsrc] || "-";
     var ids = ["gfx", "gsh", "gla", "glo", "gal", "gsc", "gco", "gut"];
+    $("gun").textContent = "\u00a0";
     var st = g && typeof g === "object" ? g.status : "absent";
     if (st !== "ok") {
       setSt("gst", st === "silent" ? "no data" : NC, st === "silent" ? "bad" : "warn");
@@ -194,6 +195,8 @@ h2{font-size:.95rem;margin:0 0 8px}
     $("gsc").textContent = sp === null ? "-" : sp.toFixed(1) + " km/h";
     $("gco").textContent = co === null ? "-" : co.toFixed(0) + "\u00b0";
     $("gut").textContent = typeof g.utc === "string" ? g.utc.replace("T", " ").replace("Z", " UTC") : "-";
+    $("gun").textContent = g.utc_state === "not_valid" ? "(leap seconds not yet known)"
+      : g.utc_state === "no_ubx" ? "(not verified: no UBX answer)" : "\u00a0";
   }
   function renderImu(m) {
     var st = m && typeof m === "object" ? m.status : "absent";
