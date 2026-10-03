@@ -97,6 +97,10 @@ B). Fork baseline: upstream `b46dd71`.
 | **No answer to the UBX poll for more than 5 s: keep the earlier behaviour** (GPS `time_sync` written, time unverified) and warn in the 10 s log line (`utc no ubx`) and on the live page. | A missing TX wire or disabled UBX input must not silence GPS time altogether. | this change |
 | **The recording marks verified fixes: `gps_fix.flags` bit 4 = UTC verified by UBX.** The GPS CSV keeps the raw `flags` column; `info` counts the verified fixes. | Backward compatible (older recorders ignore the bit); no protocol version bump. | this change |
 | **The GPIO4 (ESP32 TX) -> GY-NEO6MV2 RX wire is connected on the bench** (owner, 2026-10-03). | The poll needs it; the README wiring table now marks it required for verification. | this change |
+| **The ESP32 console log is readable on a phone at `/log` (option A: web page polling `/log/data?from=N`).** No TCP log port (option B rejected for now), and the log is not added to the `.ldrec` recording. | The owner tests the stand on the balcony, far from the USB console; a page needs no extra tool on the phone. Spec `docs/superpowers/specs/2026-10-03-esp32-web-log.md`. | this change |
+| **The web log is built in the same PR as the GPS UTC validity work (#10).** | Both are checked together on the bench: the `gps:` lines are what the owner wants to see on the phone. | this change |
+| **`/log` is served on the home network (STA) and on the AP (on demand or fallback), like the live page.** | Daily work is on the home Wi-Fi; the AP covers the case without it. | this change |
+| **The AP password never reaches the web log: it stays on the USB console only.** The hook also drops any line containing `AP password` (defence in depth; today that line is printed with `printf`, which the hook does not see). | The page has no authentication and is open to every client of the network. | this change |
 
 ## Process decisions (earlier)
 

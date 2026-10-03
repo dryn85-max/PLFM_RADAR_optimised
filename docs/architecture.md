@@ -276,6 +276,10 @@ colour from a pure function (`status_led`), by priority: button zone colour,
 confirmation flashes (3 x), AP only (blue steady), AP on demand (blue slow
 blink), off.
 
+The console log is readable on a phone at `/log` (an `esp_log` hook feeds a 16 KB RAM
+ring; `ESP_LOGx` only, not persistent; see the "Web console log" section of
+[esp32/README.md](../esp32/README.md)).
+
 Not verified on hardware yet; see the VERIFY list in
 [esp32/README.md](../esp32/README.md) (the GPS and IMU parts have never run on
 the boards; the BMI160 register values are unverified). Open follow-ups

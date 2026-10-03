@@ -350,6 +350,41 @@ problem is visible in the console):
 - `sntp`: one line `SNTP time YYYY-MM-DDTHH:MM:SSZ` per synchronisation and every
   60 s (STA connected with internet access only).
 
+The footer links to the web console log (`/log`, next section).
+
+## Web console log (`/log`)
+
+`GET /log` shows the firmware's console log on a phone, so the stand can be
+watched away from the USB cable (for example on a power bank on the balcony).
+
+- **Open it.** On the home Wi-Fi: **http://aeris-mvp.local/log** (or the
+  device IP). Without home Wi-Fi, or while it is down: start the AP on demand
+  (BOOT 2-5 s, see "AP on demand"), join `AERIS-MVP-XXXX` and open
+  **http://192.168.4.1/log**. The page is served on both STA and AP, like the
+  live page. It is also linked from the footer of the live page, `/wifi` and
+  `/ld2410`.
+- **Page.** Dark monospace view that follows the newest line and stops
+  following while you scroll up. Buttons **Copy** (clipboard API, falls back to
+  `execCommand`; if the browser blocks both, the text is selected so it can be
+  copied by hand) and **Select all**. A status line shows the byte count, a
+  connection error, and "older lines lost" after a gap.
+- **What is captured.** Only `ESP_LOGx` output. A hook on `esp_log_set_vprintf`
+  still sends every line to the USB console unchanged and also appends it to a
+  16 KB ring in internal RAM, with ANSI colour sequences removed. Output written
+  with `printf` is **not** captured: the boot banner and the
+  `AP password: ...` line appear on the USB console only. As defence in depth, a
+  line containing `AP password` would also be dropped by the hook.
+- **Limits.** The ring keeps the newest 16 KB (older lines are overwritten).
+  Lines longer than 256 bytes are cut and end with `...`. The log is not
+  persistent: a reboot clears it. No authentication, no log level control.
+- **Polling.** The page requests `GET /log/data?from=N` once per second (at once
+  again while a response is full, and after 2 s on an error). The reply is
+  `text/plain`, at most 4096 bytes, with headers `X-Log-Next: <offset>` (the
+  `from` for the next request) and `X-Log-Gap: 0|1` (1 = the requested bytes
+  were already overwritten, so some lines were lost). Without `from` the reply
+  starts at the oldest byte held. The browser keeps the last 200000 characters
+  and trims older text from the top.
+
 ## GPS (GY-NEO6MV2)
 
 UART2, 9600 8N1, module TX -> GPIO5, module RX -> GPIO4 (wiring above). The
@@ -675,7 +710,7 @@ make -C esp32/tests test
 
 Plain C11 modules in `esp32/components/core/` (parser, frame decoder, command
 codec and ACK decoders, LD2410C settings form parser, BOOT button zone tracker,
-status LED colour logic, UBX framer and NAV-TIMEUTC decoder (`ubx`), NMEA/UBX byte router (`gps_rx`), ring buffer, recording protocol, snapshot JSON, Wi-Fi
+status LED colour logic, web console log ring (`log_ring`: offsets, gaps, ANSI strip, secret-line filter), UBX framer and NAV-TIMEUTC decoder (`ubx`), NMEA/UBX byte router (`gps_rx`), ring buffer, recording protocol, snapshot JSON, Wi-Fi
 form and password helpers, WebSocket slot table), built with `-Wall -Wextra -Werror` and
 AddressSanitizer/UBSan. The Python side:
 `uv run pytest host/test_ld2410_rec.py -v`.
@@ -755,3 +790,9 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   possible gyro offset drift (no bias calibration).
 - Snapshot JSON size and live-page behaviour with GPS and IMU at 10 Hz on the
   real hardware.
+- `/log` page and its Copy button on iOS Safari over plain http (the clipboard
+  API needs a secure context, so the `execCommand` fallback or Select all is
+  expected to be used); auto-scroll and polling on the phone.
+- Stack use of the log hook (256 B line buffer plus the `va_list` copy) in
+  small-stack tasks (GPS 4096 B, status LED 3072 B, recording tasks 4096 B)
+  under real load.
