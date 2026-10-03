@@ -54,14 +54,21 @@ typedef struct {
     uint8_t have_imu;      /* 0: `imu` not valid (no record yet) */
     rec_imu_t imu;
     time_source_t time_source;
+    uint8_t motion_en;      /* detector enabled */
+    uint8_t motion_active;  /* an event is ACTIVE */
+    uint32_t motion_n;      /* number of the last event, 0 = none yet */
+    uint8_t have_motion_dist; /* 0: "dist":null (zero-init) */
+    uint16_t motion_dist_cm;  /* current moving distance, valid when have_motion_dist */
 } snapshot_t;
 
-/* Top-level keys: seq, frame_no, esp_time_us, link, data, then after "data": "gps", "imu", "time_source".
+/* Top-level keys: seq, frame_no, esp_time_us, link, data, then after "data": "gps", "imu",
+ * "motion", "time_source" (last).
  *   gps: {status:"absent"|"silent"|"ok", fix:bool, fix_quality, sats, hdop,
  *         lat, lon, alt_m, speed_kmh, course_deg, utc, time_valid, pos_valid,
  *         utc_state:"valid"|"not_valid"|"no_ubx"|null}  (last key; null = unknown, also
  *         for any out-of-range enum value; independent of status/have_gps)
  *   imu: {status:"absent"|"error"|"ok", pitch_deg, roll_deg, valid:bool}
+ *   motion: {en:0|1, active:0|1, n:<last event number, 0 = none>, dist:<moving distance cm|null>}
  *   time_source: "gps"|"sntp"|"none"
  * Values that are not valid are null (everything but status/flags when the
  * status is not "ok"). lat/lon (7 decimals) and the other decimals are

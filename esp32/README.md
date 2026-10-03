@@ -443,7 +443,9 @@ frame within 1 s is closed and the page reconnects by itself. The page shows:
   (nose up +) and roll (right side down +) in degrees with two decimals, and a
   level indicator (artificial horizon; the ring turns to the "level" colour when
   both angles are within 1 degree). The IMU counts as `error` when its last
-  record is older than 1 s.
+  record is older than 1 s;
+- a **Motion card** (see "Motion detector"): badge (`idle`, `active`, `disabled`),
+  the current moving distance and the last 10 events.
 
 Values that are not valid show `-`; the snapshot JSON carries `null` for them
 (top-level keys `gps`, `imu`, `time_source`; `gps.utc_state` is `valid`,
@@ -477,6 +479,94 @@ problem is visible in the console):
   60 s (STA connected with internet access only).
 
 The footer links to the web console log (`/log`, next section).
+
+## Motion detector
+
+The LD2410C task runs a detector on the module's **moving target** and turns
+it into events: a start and an end. It uses only the moving-target fields of
+each decoded data frame (about 10 Hz); still targets and the per-gate energies
+are not used. Spec: `docs/superpowers/specs/2026-10-03-esp32-motion.md`.
+
+- **What counts as motion.** A frame is "moving" when the moving bit of the
+  target state is set, the moving distance is inside the zone (both ends
+  inclusive) and the moving energy is at least the threshold. A frame that is
+  not moving, and a link loss (no frame), count as "not moving".
+- **Start.** The first moving frame starts a pending event. It becomes an event
+  (start) when moving frames have persisted for the **start delay** with no
+  non-moving frame in between. A non-moving frame while pending drops back to
+  idle and the event is not counted.
+- **End.** The event ends when the last moving frame is older than the **end
+  delay**. This is checked on every frame and once per second also while no
+  frame arrives, so an event ends by itself when the sensor link is lost. The
+  recorded duration is from the first moving frame to the last moving frame
+  (the end delay is not included). After a link loss the event ends up to about
+  1-2.5 s later than the end delay, because the no-data step runs once per
+  second; the reported duration is not affected.
+- **Configuration mode.** Frames pause while the LD2410C is in configuration
+  mode (settings requests, engineering-mode recovery). A pending event can
+  continue across such a pause shorter than about 1 s.
+- **Disabled.** With the detector off no new event starts; an event that is
+  active is ended at once.
+- **Event numbers** count started events since boot (the first is 1) and
+  restart at 1 after a reboot; the recording tells boots apart by `boot_id`.
+
+### Settings
+
+Six settings, stored in the ESP32 (NVS namespace `motion`), so they **survive a
+reboot**. A missing, unreadable or out-of-range stored value gives the defaults
+(and a warning in `/log` when it was unreadable or invalid).
+
+| Setting (form field) | Default | Limits |
+|---|---|---|
+| Detector (`en`) | enabled | enabled / disabled (1 / 0) |
+| Zone start (`dmin`) | 100 cm | 0 to 900 cm, below the zone end |
+| Zone end (`dmax`) | 500 cm | 0 to 900 cm, above the zone start |
+| Minimum moving energy (`emin`) | 30 | 0 to 100 |
+| Start delay (`tstart`) | 1000 ms | 100 to 10000 ms |
+| End delay (`tend`) | 3000 ms | 500 to 60000 ms |
+
+They are set in the **Motion detector** section of `/ld2410` (AP only, like
+the rest of that page: join the AP, see "AP on demand"), a separate form with
+its own Save button (`POST /ld2410/motion`, same Origin check as the other
+forms). The section is shown even when reading the LD2410C module failed. The
+form is parsed and range-checked in `components/core/motion_det.[ch]`
+(`motion_cfg_parse_form`: all six fields required, plain decimal digits, no
+duplicates, at most 5 characters, body at most 256 bytes); the result page says
+`Saved` or the error. The new values apply from the next frame, also to an
+event that is already pending or active. The defaults are a starting point
+(VERIFY, see the list at the end).
+
+### Where events show up
+
+- **`/log`:** one line per start and per end, and one line per settings change:
+
+  ```
+  motion start #3 at 2.30 m, energy 55
+  motion end #3, 12.3 s, 2.10 m (1.50..3.10 m), energy 93
+  motion config: en 1 -> 1, zone 100..500 cm -> 100..400 cm, energy >= 30 -> 30, start 1000 -> 1000 ms, end 3000 -> 3000 ms
+  ```
+
+  The start line shows the distance and energy at the strongest frame seen
+  during the start delay. The end line shows the duration (one decimal), the
+  distance at the strongest frame of the whole event, its minimum and maximum
+  distance, and the maximum energy.
+- **Live page, Motion card:** the badge is `disabled`, `idle` or `active`; below
+  it the current moving distance (`-` when the latest frame has no moving
+  target or no frame came for about 1 s) and the list of the last 10 events,
+  newest first: number, time since the event began, duration (`active` while
+  it runs), distance with its min-max range and the maximum energy. The page
+  gets `en`, `active`, `n` (number of the latest started event) and `dist`
+  from the 10 Hz snapshot (`"motion":{...}`) and refetches the list when `n` or
+  `active` changes.
+- **`GET /motion/events`** (STA and AP, like the live page): a JSON array of
+  the last 10 events, newest first. Each element is `{"no", "ago_ms",
+  "dur_ms", "energy", "dist", "min", "max"}`: `ago_ms` is the time since the
+  event began, `dur_ms` is `null` while the event is active, distances are in
+  cm. While an event is active, `energy`, `dist`, `min` and `max` are the values
+  seen during the start delay; they are replaced by the final values when the
+  event ends. The list is empty after a reboot (it is not stored).
+- **Recording:** record type 4 `motion` (below), one at the start and one at
+  the end. `ld2410_rec.py export-csv --motion FILE` lists the events.
 
 ## Web console log (`/log`)
 
@@ -693,6 +783,7 @@ the datasheet before trusting the sensor data.
 uv run python host/ld2410_rec.py record aeris-mvp.local -o run.ldrec   # --port 5410 is the default
 uv run python host/ld2410_rec.py export-csv run.ldrec -o run.csv       # without -o: CSV to stdout
 uv run python host/ld2410_rec.py export-csv run.ldrec -o run.csv --gps gps.csv --imu imu.csv
+uv run python host/ld2410_rec.py export-csv run.ldrec -o run.csv --motion motion.csv
 uv run python host/ld2410_rec.py info run.ldrec
 ```
 
@@ -707,7 +798,7 @@ uv run python host/ld2410_rec.py info run.ldrec
   `esp_time_us` for the spacing of frames inside a batch). Frames evicted from
   the ring before the first request of a recording are not reported as a gap
   (there is no baseline sequence to compare with).
-- `export-csv [--gps FILE] [--imu FILE]` decodes the raw frames. Columns: `seq,
+- `export-csv [--gps FILE] [--imu FILE] [--motion FILE]` decodes the raw frames. Columns: `seq,
   esp_time_us, pc_time_ns, data_type, target_state, moving_dist_cm, moving_energy,
   still_dist_cm, still_energy, detect_dist_cm, max_moving_gate, max_still_gate,
   move_g0..8, still_g0..8, record, gap_to_seq, error, old_boot_id, new_boot_id,
@@ -728,10 +819,24 @@ uv run python host/ld2410_rec.py info run.ldrec
   `--gps` CSV, `esp_utc` (the record's `esp_time_us` mapped through the corrected
   `time_sync`) and `fix_utc` (the raw RMC time) now differ by about 128 ms on the
   same row; that is expected (the RMC sentence arrives that late).
+- `--motion FILE` writes the motion events, one row per event, to its own CSV
+  (`MOTION_CSV_COLUMNS` in `host/ld2410_rec.py`): `event_no, start_utc, end_utc,
+  duration_s, max_energy, dist_m, min_dist_m, max_dist_m, boot, open`. A row is
+  written for every `end` record (`open` = 0); `start_utc` is the event's onset
+  and `end_utc` is the onset plus the duration, both mapped to UTC like
+  `frame_utc` through the `time_sync` records of the same boot (empty without
+  one); `dist_m` is the distance at the maximum energy. A `start` record with
+  no matching `end` (same boot and event number), for example because the
+  recording stopped or the board rebooted while the event was active, gets a row
+  at the end of the file with `open` = 1, empty `end_utc` and `duration_s` and
+  the values seen at the start. A damaged motion payload is skipped with a
+  warning.
 - `info` prints the frame count, sequence range, PC and ESP durations, reboots,
   gaps, the number of gps/imu/time_sync records, the GPS fix ratio (fixes with a
   valid position and fix quality > 0, over all gps records), `gps utc verified: N`
-  (fixes with flags bit 4 set) and the time-sync sources.
+  (fixes with flags bit 4 set) and the time-sync sources, and a line `motion events:
+  N starts, N ends, N open` (open = starts without an end; damaged payloads are
+  counted in brackets).
 
 One recording client at a time: a new connection replaces the old one. TCP
 keepalive (5 s idle, 2 s interval, 3 probes) drops a vanished client after about
@@ -776,14 +881,20 @@ count` of the last batch of the current boot. Sequence numbers wrap at 2^32.
 | 1 `gps_fix` (32 B) | `utc_unix_ms i64` (0 if time/date invalid), `lat_e7 i32`, `lon_e7 i32`, `alt_cm i32`, `speed_cmps u16` (saturating), `course_cdeg u16`, `hdop_x100 u16`, `sats u8`, `fix_quality u8` (GGA value), `flags u8` (bit0 time valid, bit1 date valid, bit2 position valid, bit3 altitude valid, bit4 UTC verified by UBX NAV-TIMEUTC validUTC; older recorders ignore it), `reserved u8[3] = 0` |
 | 2 `imu` (18 B) | `acc_mg i16[3]`, `gyr_ddps i16[3]` (0.1 deg/s), `pitch_cdeg i16`, `roll_cdeg i16`, `n_samples u8`, `status u8` (bit0 data valid) |
 | 3 `time_sync` (9 B) | `utc_unix_us i64`, `source u8` (1 GPS, 2 SNTP); the record's `esp_time_us` is the matching ESP32 time |
+| 4 `motion` (28 B) | `event_no u32`, `kind u8` (1 start, 2 end), `max_energy u8`, `dist_cm u16` (distance at the maximum energy), `min_dist_cm u16`, `max_dist_cm u16`, `onset_esp_us u64` (ESP32 time of the first moving frame), `duration_ms u32` (0 in a start record), `reserved u8[4] = 0` |
 
 Unknown record types: the ESP32 ring, batch builder and server are type-agnostic and
 forward any type byte unchanged (`rec_record_check()` classifies a type and length:
 known and valid, wrong length, or unknown). The PC recorder never fails on an
-unknown type: it stores the record as file type 6 (below) and `info` counts it. A
+unknown type: it stores the record as file type 6 (below) and `info` counts it
+(motion records are stored the same way but are not counted as unknown). A
 known type with a wrong payload length is stored as is and shows up as a decode error
 (`error` column) instead of stopping the recording. Decoders reject nonzero reserved
-bytes of `gps_fix`; undefined flag, status and source values pass through.
+bytes of `gps_fix`; undefined flag, status and source values pass through. A
+`motion` decoder also rejects a kind other than 1 or 2. The protocol version stays 3:
+a host that does not know type 4 (an older `ld2410_rec.py`) keeps the record as an
+unknown record, and the recording is otherwise unaffected. The header time of a
+`motion` record is the time it was pushed; the event's own onset is in the payload.
 
 **File `.ldrec` (version 3)**: header 20 B = `"LDREC1\0\0"` (8), `version u16 = 3`,
 `reserved u16 = 0`, `created_unix_ns u64`; then records, each starting with a
@@ -796,6 +907,11 @@ bytes of `gps_fix`; undefined flag, status and source values pass through.
 | 2 reboot | `old_boot_id u32, new_boot_id u32, pc_time_ns u64` |
 | 3 gps_fix, 4 imu, 5 time_sync | `seq u32, esp_time_us u64, pc_time_ns u64, len u16, payload[len]` (payload as in the table above) |
 | 6 unknown | `seq u32, esp_time_us u64, pc_time_ns u64, wire_type u8, len u16, payload[len]` (a wire type this recorder does not know) |
+
+`motion` (wire type 4) has no file record type of its own: the recorder writes it as file type 6
+with `wire_type` 4, so the file format and version do not change, and the CSV export and
+`info` decode it from there. The same applies to recordings made before motion existed
+(they simply contain none).
 
 Gap and reboot records and the sequence bookkeeping work over all record types
 together. The recorder still reads version 2 files (types 0 to 2, same layouts,
@@ -844,7 +960,7 @@ make -C esp32/tests test
 
 Plain C11 modules in `esp32/components/core/` (parser, frame decoder, command
 codec and ACK decoders, LD2410C settings form parser, BOOT button zone tracker,
-status LED colour logic, web console log ring (`log_ring`: offsets, gaps, ANSI strip, secret-line filter), UBX framer and NAV-TIMEUTC decoder (`ubx`), NMEA/UBX byte router (`gps_rx`), ring buffer, recording protocol, snapshot JSON, Wi-Fi
+status LED colour logic, web console log ring (`log_ring`: offsets, gaps, ANSI strip, secret-line filter), UBX framer and NAV-TIMEUTC decoder (`ubx`), NMEA/UBX byte router (`gps_rx`), ring buffer, recording protocol, snapshot JSON, motion detector and its form parser (`motion_det`), Wi-Fi
 form and password helpers, WebSocket slot table), built with `-Wall -Wextra -Werror` and
 AddressSanitizer/UBSan. The Python side:
 `uv run pytest host/test_ld2410_rec.py -v`.
@@ -898,6 +1014,10 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 - Task stack sizes (LD2410C task 6144 B, recording tasks 4096 B, HTTP server
   8192 B, main task 6144 B, BOOT monitor 4096 B, status LED task 3072 B, GPS task 4096 B, IMU task
   5120 B) under real load.
+- Stack high-water mark of the LD2410C task (6144 B) with the motion detector
+  and the `/log` hook in the deepest call chain (config request -> pump ->
+  on_data -> motion_step -> ESP_LOGI): measure on the bench with
+  `uxTaskGetStackHighWaterMark`.
 - The AP password stays stable across reboots and a credential reset.
 - GPS wiring and pins (GPIO4/5 UART2, GPIO8/9 I2C) on the real boards, and that
   these GPIOs are free of strapping/PSRAM functions on the DevKitC-1 v1.1.
@@ -951,3 +1071,12 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   ask for its password again; the password itself is unchanged. Still open:
   the automatic rollback after a deliberately broken image (120 s) and the
   upload from iOS Safari (XHR upload of a ~1 MB file over the AP).
+- Motion detector (not run on the bench yet): the defaults (zone 100..500 cm,
+  energy >= 30, start delay 1 s, end delay 3 s) are a starting point and are to
+  be tuned on the bench. To check: walking through the zone gives exactly one
+  `motion start` and one `motion end` in `/log` and on the live page; standing
+  still, or moving outside the zone, gives none; the settings survive a reboot;
+  a recording contains the `motion` records and `export-csv --motion` lists them
+  with plausible UTC times. Also open: the real LD2410C moving energy and
+  distance of a person at the owner's window (they decide whether the energy
+  threshold of 30 is too high or too low).

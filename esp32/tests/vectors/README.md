@@ -35,13 +35,17 @@ JSON keys mirror the C struct field names (`ld_data_t`, `ld_ack_t`,
 | `time_sync_gps` | time_sync payload (9 B), source 1, 2026-10-02T12:34:56Z | `record_type:3, payload_hex, time_sync{utc_unix_us, source}` |
 | `time_sync_sntp` | source 2, microsecond part 123456 | same keys |
 | `time_sync_edge` | utc INT64_MIN, source 255 (undefined values pass through) | same keys |
+| `motion_start` | motion payload (28 B), START of event 7: kind 1, energy 55, 2.30 m, duration 0, onset 5 000 000 us | `record_type:4, payload_hex, motion{event_no, kind, max_energy, dist_cm, min_dist_cm, max_dist_cm, onset_esp_us, duration_ms}` |
+| `motion_end` | END of event 7: kind 2, energy 93, 2.10 m (range 1.50..3.10 m), duration 12 345 ms, same onset | same keys |
+| `motion_extremes` | event_no 2^32-1, energy 255, all distances 65535, onset 2^64-1 us, duration 2^32-1 ms | same keys |
+| `batch_v3_motion` | batch (boot_id 0x0C0FFEE5, first_seq 10, no flags) with 4 records: type 0 = `frame_engineering_real_0`, type 4 = `motion_start`, type 0 = `frame_engineering_real_1`, type 4 = `motion_end` | same keys as `batch_v3_mixed` |
 
 Record layout in a batch (protocol v3): `seq u32, esp_time_us u64, type u8, len u16, payload[len]`
-(15 B header), little-endian; batch header 20 bytes `"LDRB", version u8 = 3, flags u8, reserved u16, first_seq u32, count u16, reserved u16, boot_id u32` (boot_id is random per ESP32 boot, never 0). Record types: 0 LD2410C frame (the `raw_hex` is the whole raw frame, as in the frame vectors), 1 gps_fix, 2 imu, 3 time_sync. `raw_hex` of a record is its payload.
+(15 B header), little-endian; batch header 20 bytes `"LDRB", version u8 = 3, flags u8, reserved u16, first_seq u32, count u16, reserved u16, boot_id u32` (boot_id is random per ESP32 boot, never 0). Record types: 0 LD2410C frame (the `raw_hex` is the whole raw frame, as in the frame vectors), 1 gps_fix, 2 imu, 3 time_sync, 4 motion. `raw_hex` of a record is its payload.
 
 The frame vectors (`frame_*`, `ack_*`) are payload vectors of type 0 records; the other
-payload vectors (`gps_fix_*`, `imu_*`, `time_sync_*`) are the bytes of types 1, 2, 3 and
-are asserted equal to the payloads inside `batch_v3_mixed`. Saturation (`speed_cmps`) is
+payload vectors (`gps_fix_*`, `imu_*`, `time_sync_*`, `motion_*`) are the bytes of types 1, 2, 3, 4 and
+are asserted equal to the payloads inside `batch_v3_mixed` / `batch_v3_motion`. Saturation (`speed_cmps`) is
 an encoder rule and is tested in the unit tests, not by a vector.
 
 ## Real captures

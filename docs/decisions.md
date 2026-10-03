@@ -113,6 +113,10 @@ B). Fork baseline: upstream `b46dd71`.
 | **Robustness 3a: while STA retries are paused, one STA attempt is still made every 10 min.** | Final review M1: a device that stays associated to the AP (e.g. a laptop that auto-joins the fallback AP) would otherwise keep the board off the home network after the router returns; the AP client may lose its link for a second or two at most once per 10 min. | this change |
 | **Robustness 4: TCP keepalive on the recording port 5410: idle 5 s, interval 2 s, 3 probes.** | A half-open connection from a vanished client is noticed in about 11 s, not only by the send timeout. | this change |
 | **Robustness 5: the GPS `time_sync` record is corrected by the measured 128 ms RMC reception delay** (added to the UTC value of the record; `gps_fix` and the live page keep the raw RMC time). | Without PPS the stamp is taken when the RMC line completes, 128 ms after the UTC instant (bench 2026-10-02); the constant brings GPS time to about +-10 ms. | this change |
+| **Motion 1: motion = the LD2410C moving target, filtered by a distance zone and an energy threshold; an event starts after the motion persists `start_ms` and ends after `end_ms` without it.** Not chosen: an own per-gate detector with a learned background, presence including still targets. | Simple and predictable; the zone cuts static clutter (railing, walls). Spec `docs/superpowers/specs/2026-10-03-esp32-motion.md`. | this change |
+| **Motion 2: events go to the recording (new record type 4 `motion`, start and end), the live page (indicator, last 10 events) and `/log`; the host exports them as a CSV.** Protocol stays v3. | An older host keeps an unknown type raw, so no version bump is needed. | this change |
+| **Motion 3: zone and thresholds are set on the AP-only `/ld2410` page and stored in NVS.** Agent defaults: 100..500 cm, energy >= 30, start 1 s, end 3 s (to be tuned on the bench). | Tuning on the balcony without reflashing. | this change |
+| **Motion 4: no notifications outside the board for now** (BACKLOG). | Keeps the cycle small; a messenger would need a token entered on the board. | this change |
 
 ## Process decisions (earlier)
 

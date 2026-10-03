@@ -13,9 +13,12 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "nvs.h"
+
 #include "ld2410_cmd.h"
 #include "ld_settings.h"
 #include "ld2410_parser.h"
+#include "motion_det.h"
 #include "rec_payload.h"
 #include "rec_proto.h"
 
@@ -34,6 +37,13 @@
  * most once per LD_ENG_RETRY_US, for as long as it takes. */
 #define LD_ENG_NORMAL_US 3000000
 #define LD_ENG_RETRY_US 10000000
+/* Detector tick while no data frame arrives (link lost): an ACTIVE event must still end. */
+#define LD_MOTION_TICK_US 1000000
+
+#define MOTION_NVS_NS "motion"
+#define MOTION_NVS_KEY "cfg"
+#define MOTION_NVS_VER 1
+#define MOTION_NVS_LEN 15 /* ver, en, dmin(2), dmax(2), emin, tstart(4), tend(4), little endian */
 
 static const char *TAG = "ld2410";
 
@@ -54,7 +64,115 @@ typedef struct {
     uint32_t frames_window; /* data frames since last rate log */
     uint32_t frame_no;      /* data frames decoded since boot (wraps) */
     int64_t normal_since;   /* esp_timer us of the first normal frame of the current run, 0 = none */
+    int64_t last_motion_step_us; /* esp_timer us of the last motion_det_step call */
 } ld_ctx_t;
+
+/* ---- Motion detector ----
+ * s_det lives in the LD2410C task only (motion_det_step is not thread-safe). Other tasks
+ * talk to it through s_mot_mtx, a leaf lock: while it is held nothing else is locked and
+ * nothing blocks (no ring, snapshot, NVS or log call), so it cannot take part in a lock-order
+ * cycle with s_ring_mtx / s_snap_mtx. It guards s_mcfg (the configuration, written by
+ * ld2410_motion_set_cfg), the event list and the page state. */
+static motion_det_t s_det;
+static SemaphoreHandle_t s_mot_mtx;
+static motion_cfg_t s_mcfg;
+static motion_item_t s_mev[LD_MOTION_EVENTS]; /* newest first */
+static int s_mev_n;
+static struct {
+    int active;
+    uint32_t last_no;
+    int dist_cm; /* current moving distance, -1 = none */
+} s_mstate = {0, 0, -1};
+
+static void motion_log_start(const motion_ev_t *e)
+{
+    ESP_LOGI(TAG, "motion start #%u at %u.%02u m, energy %u", (unsigned)e->event_no,
+             (unsigned)(e->dist_cm / 100), (unsigned)(e->dist_cm % 100), (unsigned)e->max_energy);
+}
+
+static void motion_log_end(const motion_ev_t *e)
+{
+    ESP_LOGI(TAG, "motion end #%u, %u.%u s, %u.%02u m (%u.%02u..%u.%02u m), energy %u",
+             (unsigned)e->event_no, (unsigned)(e->duration_ms / 1000),
+             (unsigned)((e->duration_ms % 1000) / 100), (unsigned)(e->dist_cm / 100),
+             (unsigned)(e->dist_cm % 100), (unsigned)(e->min_dist_cm / 100),
+             (unsigned)(e->min_dist_cm % 100), (unsigned)(e->max_dist_cm / 100),
+             (unsigned)(e->max_dist_cm % 100), (unsigned)e->max_energy);
+}
+
+/* One detector step (LD2410C task). d == NULL: no frame (link lost). */
+static void motion_step(ld_ctx_t *ctx, const ld_data_t *d, uint64_t now)
+{
+    motion_cfg_t cfg;
+    motion_ev_t ev;
+    memset(&ev, 0, sizeof(ev));
+    xSemaphoreTake(s_mot_mtx, portMAX_DELAY);
+    cfg = s_mcfg;
+    xSemaphoreGive(s_mot_mtx);
+
+    ctx->last_motion_step_us = (int64_t)now;
+    motion_ev_kind_t k = motion_det_step(&s_det, &cfg, d, now, &ev);
+
+    if (k != MOTION_EV_NONE) {
+        rec_motion_t r;
+        uint8_t buf[REC_MOTION_LEN];
+        memset(&r, 0, sizeof(r));
+        r.event_no = ev.event_no;
+        r.kind = k == MOTION_EV_START ? MOTION_KIND_START : MOTION_KIND_END;
+        r.max_energy = ev.max_energy;
+        r.dist_cm = ev.dist_cm;
+        r.min_dist_cm = ev.min_dist_cm;
+        r.max_dist_cm = ev.max_dist_cm;
+        r.onset_esp_us = ev.onset_us;
+        r.duration_ms = ev.duration_ms;
+        if (rec_motion_encode(buf, &r) == 0) {
+            int rc;
+            xSemaphoreTake(s_ring_mtx, portMAX_DELAY);
+            rc = rb_push(&s_ring, now, REC_TYPE_MOTION, buf, sizeof(buf), NULL);
+            xSemaphoreGive(s_ring_mtx);
+            if (rc != 0) {
+                ESP_LOGW(TAG, "motion record push failed (%d)", rc);
+            }
+        }
+        if (k == MOTION_EV_START) {
+            motion_log_start(&ev);
+        } else {
+            motion_log_end(&ev);
+        }
+    }
+
+    xSemaphoreTake(s_mot_mtx, portMAX_DELAY);
+    if (k == MOTION_EV_START) {
+        if (s_mev_n < LD_MOTION_EVENTS) {
+            s_mev_n++;
+        }
+        memmove(&s_mev[1], &s_mev[0], (size_t)(s_mev_n - 1) * sizeof(s_mev[0]));
+        s_mev[0].no = ev.event_no;
+        s_mev[0].onset_us = ev.onset_us;
+        s_mev[0].active = 1;
+        s_mev[0].dur_ms = 0;
+        s_mev[0].energy = ev.max_energy;
+        s_mev[0].dist_cm = ev.dist_cm;
+        s_mev[0].min_cm = ev.min_dist_cm;
+        s_mev[0].max_cm = ev.max_dist_cm;
+    } else if (k == MOTION_EV_END) {
+        for (int i = 0; i < s_mev_n; i++) {
+            if (s_mev[i].no == ev.event_no) {
+                s_mev[i].active = 0;
+                s_mev[i].dur_ms = ev.duration_ms;
+                s_mev[i].energy = ev.max_energy;
+                s_mev[i].dist_cm = ev.dist_cm;
+                s_mev[i].min_cm = ev.min_dist_cm;
+                s_mev[i].max_cm = ev.max_dist_cm;
+                break;
+            }
+        }
+    }
+    s_mstate.active = motion_det_active(&s_det);
+    s_mstate.last_no = s_det.event_no;
+    s_mstate.dist_cm = (d != NULL && (d->target_state & 1u)) ? (int)d->moving_dist_cm : -1;
+    xSemaphoreGive(s_mot_mtx);
+}
 
 static void on_data(const ld_frame_t *f, ld_ctx_t *ctx)
 {
@@ -81,17 +199,19 @@ static void on_data(const ld_frame_t *f, ld_ctx_t *ctx)
     xSemaphoreGive(s_ring_mtx);
     if (rc != 0) {
         ESP_LOGW(TAG, "ring push failed (%d)", rc);
-        return;
+    } else {
+        xSemaphoreTake(s_snap_mtx, portMAX_DELAY);
+        s_snap.valid = true;
+        s_snap.data = d;
+        s_snap.seq = seq;
+        s_snap.frame_no = ctx->frame_no;
+        s_snap.time_us = now;
+        xSemaphoreGive(s_snap_mtx);
+        ctx->frames_window++;
     }
-
-    xSemaphoreTake(s_snap_mtx, portMAX_DELAY);
-    s_snap.valid = true;
-    s_snap.data = d;
-    s_snap.seq = seq;
-    s_snap.frame_no = ctx->frame_no;
-    s_snap.time_us = now;
-    xSemaphoreGive(s_snap_mtx);
-    ctx->frames_window++;
+    /* After the frame's own record, so the ring order is frame, then its motion event.
+     * No lock is held here; motion_step takes s_mot_mtx and s_ring_mtx one at a time. */
+    motion_step(ctx, &d, now);
 }
 
 static void on_frame(const ld_frame_t *f, void *vctx)
@@ -188,6 +308,152 @@ static void enable_engineering(ld_ctx_t *ctx)
     } else {
         ESP_LOGW(TAG, "engineering mode not enabled, continuing in normal mode");
     }
+}
+
+/* ---- Motion configuration in NVS ----
+ * One blob (MOTION_NVS_KEY) of MOTION_NVS_LEN bytes in a fixed little-endian layout with a
+ * version byte: a single nvs_set_blob is one atomic NVS entry, so a power loss never leaves a
+ * mix of old and new fields (separate keys could), and the layout does not depend on struct
+ * padding. A blob that is absent, has the wrong length/version or fails motion_cfg_check
+ * falls back to the defaults. Writes happen only in ld2410_motion_set_cfg (HTTP context). */
+static void motion_cfg_pack(const motion_cfg_t *c, uint8_t b[MOTION_NVS_LEN])
+{
+    b[0] = MOTION_NVS_VER;
+    b[1] = c->en;
+    b[2] = (uint8_t)c->dmin_cm;
+    b[3] = (uint8_t)(c->dmin_cm >> 8);
+    b[4] = (uint8_t)c->dmax_cm;
+    b[5] = (uint8_t)(c->dmax_cm >> 8);
+    b[6] = c->emin;
+    for (int i = 0; i < 4; i++) {
+        b[7 + i] = (uint8_t)(c->tstart_ms >> (8 * i));
+        b[11 + i] = (uint8_t)(c->tend_ms >> (8 * i));
+    }
+}
+
+static int motion_cfg_unpack(const uint8_t b[MOTION_NVS_LEN], motion_cfg_t *c)
+{
+    if (b[0] != MOTION_NVS_VER) {
+        return -1;
+    }
+    c->en = b[1];
+    c->dmin_cm = (uint16_t)(b[2] | (b[3] << 8));
+    c->dmax_cm = (uint16_t)(b[4] | (b[5] << 8));
+    c->emin = b[6];
+    c->tstart_ms = c->tend_ms = 0;
+    for (int i = 0; i < 4; i++) {
+        c->tstart_ms |= (uint32_t)b[7 + i] << (8 * i);
+        c->tend_ms |= (uint32_t)b[11 + i] << (8 * i);
+    }
+    return motion_cfg_check(c);
+}
+
+static void motion_cfg_load(motion_cfg_t *out)
+{
+    uint8_t b[MOTION_NVS_LEN];
+    size_t len = sizeof(b);
+    nvs_handle_t h;
+    motion_cfg_t c;
+    esp_err_t err = nvs_open(MOTION_NVS_NS, NVS_READONLY, &h);
+    if (err == ESP_OK) {
+        err = nvs_get_blob(h, MOTION_NVS_KEY, b, &len);
+        nvs_close(h);
+    }
+    if (err == ESP_ERR_NVS_NOT_FOUND) { /* namespace or key absent: first boot, not an error */
+        motion_cfg_defaults(out);
+        return;
+    }
+    if (err != ESP_OK || len != sizeof(b) || motion_cfg_unpack(b, &c) != 0) {
+        ESP_LOGW(TAG, "motion config in NVS unreadable or invalid (%s, %u bytes), using defaults",
+                 esp_err_to_name(err), (unsigned)len);
+        motion_cfg_defaults(out);
+        return;
+    }
+    *out = c;
+}
+
+void ld2410_motion_get_cfg(motion_cfg_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    if (s_mot_mtx == NULL) {
+        motion_cfg_defaults(out);
+        return;
+    }
+    xSemaphoreTake(s_mot_mtx, portMAX_DELAY);
+    *out = s_mcfg;
+    xSemaphoreGive(s_mot_mtx);
+}
+
+esp_err_t ld2410_motion_set_cfg(const motion_cfg_t *cfg)
+{
+    if (cfg == NULL || motion_cfg_check(cfg) != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_mot_mtx == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* NVS first (may block for flash), without any of our locks: if it fails the running
+     * configuration stays as it was. */
+    uint8_t b[MOTION_NVS_LEN];
+    nvs_handle_t h;
+    motion_cfg_pack(cfg, b);
+    esp_err_t err = nvs_open(MOTION_NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_blob(h, MOTION_NVS_KEY, b, sizeof(b));
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    motion_cfg_t old;
+    xSemaphoreTake(s_mot_mtx, portMAX_DELAY);
+    old = s_mcfg;
+    s_mcfg = *cfg;
+    xSemaphoreGive(s_mot_mtx);
+    ESP_LOGI(TAG,
+             "motion config: en %u -> %u, zone %u..%u cm -> %u..%u cm, energy >= %u -> %u, "
+             "start %u -> %u ms, end %u -> %u ms",
+             (unsigned)old.en, (unsigned)cfg->en, (unsigned)old.dmin_cm, (unsigned)old.dmax_cm,
+             (unsigned)cfg->dmin_cm, (unsigned)cfg->dmax_cm, (unsigned)old.emin,
+             (unsigned)cfg->emin, (unsigned)old.tstart_ms, (unsigned)cfg->tstart_ms,
+             (unsigned)old.tend_ms, (unsigned)cfg->tend_ms);
+    return ESP_OK;
+}
+
+int ld2410_motion_events(motion_item_t *out, int max)
+{
+    if (out == NULL || max <= 0 || s_mot_mtx == NULL) {
+        return 0;
+    }
+    xSemaphoreTake(s_mot_mtx, portMAX_DELAY);
+    int n = s_mev_n < max ? s_mev_n : max;
+    memcpy(out, s_mev, (size_t)n * sizeof(out[0]));
+    xSemaphoreGive(s_mot_mtx);
+    return n;
+}
+
+void ld2410_motion_state(int *en, int *active, uint32_t *last_no, int *dist_cm_or_neg)
+{
+    int e = 0, a = 0, d = -1;
+    uint32_t no = 0;
+    if (s_mot_mtx != NULL) {
+        xSemaphoreTake(s_mot_mtx, portMAX_DELAY);
+        e = s_mcfg.en;
+        a = s_mstate.active;
+        no = s_mstate.last_no;
+        d = s_mstate.dist_cm;
+        xSemaphoreGive(s_mot_mtx);
+    }
+    if (en) *en = e;
+    if (active) *active = a;
+    if (last_no) *last_no = no;
+    if (dist_cm_or_neg) *dist_cm_or_neg = d;
 }
 
 /* ---- Configuration requests ----
@@ -485,8 +751,10 @@ static void ld2410_task(void *arg)
     ld_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ld_parser_init(&s_parser);
+    motion_det_init(&s_det);
 
     enable_engineering(&ctx);
+    ctx.last_motion_step_us = esp_timer_get_time(); /* the first silent tick is 1 s from here */
 
     int64_t window_start = esp_timer_get_time();
     int64_t last_eng_try = window_start;
@@ -510,6 +778,12 @@ static void ld2410_task(void *arg)
                 last_eng_try = esp_timer_get_time() - LD_ENG_RETRY_US;
             }
             now = esp_timer_get_time();
+        }
+        /* No data frame for LD_MOTION_TICK_US: tell the detector (counts as a non-moving frame),
+         * so an ACTIVE event ends when the link is lost. Frames call motion_step() themselves
+         * (also inside send_cmd's pump), so this only fires in silence. */
+        if (now - ctx.last_motion_step_us >= LD_MOTION_TICK_US) {
+            motion_step(&ctx, NULL, (uint64_t)now);
         }
         /* Normal-mode frames for more than LD_ENG_NORMAL_US: (re-)enable engineering
          * mode, rate limited, unlimited over time. Data frames keep being parsed
@@ -546,12 +820,14 @@ esp_err_t ld2410_start(void *ring_mem, size_t ring_cap)
     s_req_mtx = xSemaphoreCreateMutex();
     s_st_mtx = xSemaphoreCreateMutex();
     s_done = xSemaphoreCreateBinary();
+    s_mot_mtx = xSemaphoreCreateMutex();
     s_req_q = xQueueCreate(1, sizeof(uint8_t));
     if (s_ring_mtx == NULL || s_snap_mtx == NULL || s_req_mtx == NULL || s_st_mtx == NULL ||
-        s_done == NULL || s_req_q == NULL) {
+        s_done == NULL || s_mot_mtx == NULL || s_req_q == NULL) {
         s_req_q = NULL; /* ld2410_request() then reports ESP_ERR_INVALID_STATE */
         return ESP_ERR_NO_MEM;
     }
+    motion_cfg_load(&s_mcfg); /* before the task exists: no lock needed */
     rb_init(&s_ring, ring_mem, ring_cap, 0);
     memset(&s_snap, 0, sizeof(s_snap));
 

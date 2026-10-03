@@ -280,6 +280,8 @@ static esp_err_t wifi_post(httpd_req_t *req)
     "th,td{text-align:left;padding:4px 2px;border-top:1px solid var(--bd)}"                   \
     "th{color:var(--mut);font-weight:600;border-top:0}"                                       \
     "td input{width:4.5em;margin:0;padding:6px}"                                              \
+    "select{display:block;width:100%;margin-top:4px;padding:10px;font:inherit;"                \
+    "color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px}"      \
     ".mt{color:var(--mut)}"                                                                   \
     "button.sm{width:auto;margin:0 6px 6px 0;padding:10px 14px;color:var(--fg);"              \
     "background:var(--bg);border:1px solid var(--bd)}"                                        \
@@ -386,6 +388,18 @@ static esp_err_t ld_result(httpd_req_t *req, const char *status, const char *cls
     return ld_result_close(req);
 }
 
+/* Result page of the motion form: like ld_result, with a link back to /ld2410. */
+static esp_err_t ld_result_motion(httpd_req_t *req, const char *status, const char *cls,
+                                  const char *msg)
+{
+    if (ld_result_open(req, status, cls, msg) != ESP_OK) return ESP_FAIL;
+    if (httpd_resp_send_chunk(req, "<div class=\"k\"><a href=\"/ld2410\">Back to LD2410C settings</a></div>",
+                              HTTPD_RESP_USE_STRLEN) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    return ld_result_close(req);
+}
+
 /* Distance range of gate g: 0.75 m per gate, in whole centimetres (no floating point). */
 static void ld_range(unsigned g, unsigned *a_m, unsigned *a_cm, unsigned *b_m, unsigned *b_cm)
 {
@@ -394,6 +408,39 @@ static void ld_range(unsigned g, unsigned *a_m, unsigned *a_cm, unsigned *b_m, u
     *a_cm = a % 100u;
     *b_m = b / 100u;
     *b_cm = b % 100u;
+}
+
+/* "Motion detector" card with its own form. It does not depend on the LD2410C module (the
+ * configuration lives in the ESP32), so it is also shown when reading the module failed.
+ * Values are numbers only. */
+static esp_err_t ld_motion_section(httpd_req_t *req)
+{
+    motion_cfg_t m;
+    ld2410_motion_get_cfg(&m);
+    LSEND("<form class=\"card\" method=\"post\" action=\"/ld2410/motion\"><h2>Motion detector</h2>");
+    LSENDF("<label>Detector<select name=\"en\"><option value=\"1\"%s>enabled</option>"
+           "<option value=\"0\"%s>disabled</option></select></label>",
+           m.en ? " selected" : "", m.en ? "" : " selected");
+    LSENDF("<label>Zone start, cm (0-900, below the end)<input type=\"number\" name=\"dmin\" "
+           "min=\"0\" max=\"900\" value=\"%u\" required></label>",
+           (unsigned)m.dmin_cm);
+    LSENDF("<label>Zone end, cm (0-900, above the start)<input type=\"number\" name=\"dmax\" "
+           "min=\"0\" max=\"900\" value=\"%u\" required></label>",
+           (unsigned)m.dmax_cm);
+    LSENDF("<label>Minimum moving energy (0-100)<input type=\"number\" name=\"emin\" min=\"0\" "
+           "max=\"100\" value=\"%u\" required></label>",
+           (unsigned)m.emin);
+    LSENDF("<label>Start delay, ms (100-10000)<input type=\"number\" name=\"tstart\" min=\"100\" "
+           "max=\"10000\" value=\"%lu\" required></label>",
+           (unsigned long)m.tstart_ms);
+    LSENDF("<label>End delay, ms (500-60000)<input type=\"number\" name=\"tend\" min=\"500\" "
+           "max=\"60000\" value=\"%lu\" required></label>",
+           (unsigned long)m.tend_ms);
+    LSEND("<button type=\"submit\">Save</button>"
+          "<p class=\"k\">Stored in the ESP32 and applied at once. A moving target inside the "
+          "zone with at least this energy for the start delay begins an event; it ends after the "
+          "end delay without one.</p></form>");
+    return ESP_OK;
 }
 
 static esp_err_t ld2410_get(httpd_req_t *req)
@@ -409,7 +456,12 @@ static esp_err_t ld2410_get(httpd_req_t *req)
         const char *txt = (err == ESP_OK && rq.result == LD_RES_OK)
                               ? "No parameters received"
                               : ld_err_text(err, &rq, msg, sizeof msg);
-        return ld_result(req, HTTPD_200, "bad", txt);
+        /* The module could not be read: show the error, then still the motion settings. */
+        if (ld_result_open(req, HTTPD_200, "bad", txt) != ESP_OK) return ESP_FAIL;
+        LSEND(LD_LINKS "</div>");
+        if (ld_motion_section(req) != ESP_OK) return ESP_FAIL;
+        LSEND("</main></body></html>");
+        return httpd_resp_send_chunk(req, NULL, 0);
     }
     const ld_settings_t *s = &rq.before;
 
@@ -468,6 +520,7 @@ static esp_err_t ld2410_get(httpd_req_t *req)
     LSEND("<button type=\"submit\">Save</button>"
           "<p class=\"k\">Changes are stored in the LD2410C itself. Data frames pause briefly while "
           "saving.</p></form>");
+    if (ld_motion_section(req) != ESP_OK) return ESP_FAIL;
     LSEND("<div class=\"card\"><h2>Module actions</h2>"
           "<form class=\"in\" method=\"post\" action=\"/ld2410\">"
           "<input type=\"hidden\" name=\"action\" value=\"bt_off\">"
@@ -577,6 +630,56 @@ static esp_err_t ld2410_post(httpd_req_t *req)
     return ld_result_close(req);
 }
 
+static const char *mcf_text(int rc)
+{
+    switch (rc) {
+    case MCF_E_MISSING: return "A form field is missing";
+    case MCF_E_DUPLICATE: return "A form field was sent twice";
+    case MCF_E_BAD_VALUE: return "A value is not a plain number";
+    case MCF_E_TOO_LONG: return "A value is too long";
+    case MCF_E_RANGE: return "A value is out of range";
+    case MCF_E_ORDER: return "Zone start must be below the zone end";
+    default: return "Invalid form";
+    }
+}
+
+/* POST /ld2410/motion: the six motion detector fields (AP only). */
+static esp_err_t motion_post(httpd_req_t *req)
+{
+    if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+    if (!http_srv_origin_ok(req)) return ESP_FAIL;
+    if (req->content_len == 0 || req->content_len > MCF_BODY_MAX) {
+        return ld_result_motion(req, HTTPD_400, "bad", "Bad request length");
+    }
+    char body[MCF_BODY_MAX];
+    size_t got = 0;
+    int timeouts = 0;
+    while (got < req->content_len) {
+        int r = httpd_req_recv(req, body + got, req->content_len - got);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++timeouts > LD_RECV_RETRIES) {
+                return httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, NULL);
+            }
+            continue;
+        }
+        if (r <= 0) return ESP_FAIL;
+        got += (size_t)r;
+    }
+    motion_cfg_t cfg;
+    int rc = motion_cfg_parse_form(body, got, &cfg);
+    if (rc != MCF_OK) return ld_result_motion(req, HTTPD_400, "bad", mcf_text(rc));
+    esp_err_t err = ld2410_motion_set_cfg(&cfg);
+    if (err == ESP_ERR_INVALID_ARG) return ld_result_motion(req, HTTPD_400, "bad", "A value is out of range");
+    if (err == ESP_ERR_INVALID_STATE) {
+        return ld_result_motion(req, HTTPD_500, "bad", "Not ready yet, try again");
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "saving motion config failed: %s", esp_err_to_name(err));
+        return ld_result_motion(req, HTTPD_500, "bad", "Saving failed");
+    }
+    return ld_result_motion(req, HTTPD_200, "ok", "Saved");
+}
+
 esp_err_t http_srv_register(const httpd_uri_t *uri)
 {
     if (s_server == NULL) return ESP_ERR_INVALID_STATE;
@@ -587,9 +690,9 @@ esp_err_t http_srv_start(void)
 {
     if (s_server != NULL) return ESP_ERR_INVALID_STATE;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    /* /wifi x2, /ld2410 x2, live page and /ws, /log and /log/data, /update x2, /update/info and
-     * /update/rollback: 12 of 14 */
-    cfg.max_uri_handlers = 14;
+    /* /wifi x2, /ld2410 x2, /ld2410/motion, live page, /ws and /motion/events, /log and
+     * /log/data, /update x2, /update/info and /update/rollback: 14 of 16 */
+    cfg.max_uri_handlers = 16;
     /* httpd needs max_open_sockets <= CONFIG_LWIP_MAX_SOCKETS - 3 (16 in sdkconfig.defaults) */
     cfg.max_open_sockets = 7;
     cfg.close_fn = on_session_close;
@@ -602,9 +705,11 @@ esp_err_t http_srv_start(void)
     static const httpd_uri_t post_wifi = {.uri = "/wifi", .method = HTTP_POST, .handler = wifi_post};
     static const httpd_uri_t get_ld = {.uri = "/ld2410", .method = HTTP_GET, .handler = ld2410_get};
     static const httpd_uri_t post_ld = {.uri = "/ld2410", .method = HTTP_POST, .handler = ld2410_post};
+    static const httpd_uri_t post_motion = {.uri = "/ld2410/motion", .method = HTTP_POST, .handler = motion_post};
     err = http_srv_register(&get_wifi);
     if (err == ESP_OK) err = http_srv_register(&post_wifi);
     if (err == ESP_OK) err = http_srv_register(&get_ld);
     if (err == ESP_OK) err = http_srv_register(&post_ld);
+    if (err == ESP_OK) err = http_srv_register(&post_motion);
     return err;
 }

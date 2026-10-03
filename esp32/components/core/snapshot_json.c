@@ -176,6 +176,12 @@ int snapshot_json(char *out, size_t cap, const snapshot_t *s)
     }
     put_gps(&w, s);
     put_imu(&w, s);
+    put(&w, ",\"motion\":{\"en\":%u,\"active\":%u,\"n\":%lu,\"dist\":", s->motion_en ? 1u : 0u,
+        s->motion_active ? 1u : 0u, (unsigned long)s->motion_n);
+    if (s->have_motion_dist)
+        put(&w, "%u}", (unsigned)s->motion_dist_cm);
+    else
+        put(&w, "null}");
     put(&w, ",\"time_source\":\"%s\"}", tsrc);
     if (w.err) {
         out[0] = 0;

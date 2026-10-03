@@ -29,7 +29,7 @@ static void test_engineering_exact(void)
         "\"max_moving_gate\":8,\"max_still_gate\":7,"
         "\"moving_gate_energy\":[100,90,80,70,60,50,40,30,20],"
         "\"still_gate_energy\":[0,3,6,9,12,15,18,21,24]},"
-        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
+        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"motion\":{\"en\":0,\"active\":0,\"n\":0,\"dist\":null},\"time_source\":\"none\"}";
     TT_ASSERT_EQ(strlen(exp), n);
     TT_ASSERT(strcmp(out, exp) == 0);
 }
@@ -43,13 +43,13 @@ static void test_normal_and_no_data(void)
         "{\"seq\":5,\"frame_no\":4294967295,\"esp_time_us\":9,\"link\":\"lost\",\"data\":{"
         "\"engineering\":0,\"target_state\":3,\"moving_dist_cm\":80,\"moving_energy\":64,"
         "\"still_dist_cm\":120,\"still_energy\":50,\"detect_dist_cm\":85},"
-        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
+        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"motion\":{\"en\":0,\"active\":0,\"n\":0,\"dist\":null},\"time_source\":\"none\"}";
     TT_ASSERT_EQ(strlen(exp), n);
     TT_ASSERT(strcmp(out, exp) == 0);
     memset(&s, 0, sizeof s);
     n = snapshot_json(out, sizeof out, &s);
     exp = "{\"seq\":0,\"frame_no\":0,\"esp_time_us\":0,\"link\":\"no_data\",\"data\":null,"
-        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
+        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"motion\":{\"en\":0,\"active\":0,\"n\":0,\"dist\":null},\"time_source\":\"none\"}";
     TT_ASSERT_EQ(strlen(exp), n);
     TT_ASSERT(strcmp(out, exp) == 0);
     s.link = (snap_link_t)77; /* unknown value must not produce garbage */
@@ -112,7 +112,7 @@ static void test_valid_fix(void)
         "\"lat\":47.8500000,\"lon\":8.7500000,\"alt_m\":412.30,\"speed_kmh\":10.01,"
         "\"course_deg\":180.50,\"utc\":\"2025-10-02T12:05:06.123Z\",\"time_valid\":true,"
         "\"pos_valid\":true,\"utc_state\":null},\"imu\":{\"status\":\"ok\",\"pitch_deg\":12.34,\"roll_deg\":-0.05,"
-        "\"valid\":true},\"time_source\":\"gps\"}";
+        "\"valid\":true},\"motion\":{\"en\":0,\"active\":0,\"n\":0,\"dist\":null},\"time_source\":\"gps\"}";
     TT_ASSERT(n > 0);
     TT_ASSERT(strcmp(tail_of(out), exp) == 0);
 }
@@ -205,6 +205,21 @@ static void test_silent_error_and_sources(void)
     TT_ASSERT_EQ(-EINVAL, snapshot_json(out, sizeof out, &s));
 }
 
+static void test_motion(void)
+{
+    snapshot_t s = fix_snap();
+    char out[SNAPSHOT_JSON_MAX];
+    s.motion_en = 1; s.motion_active = 1; s.motion_n = 42; s.have_motion_dist = 1; s.motion_dist_cm = 312;
+    TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
+    TT_ASSERT(strstr(out, "\"valid\":true},\"motion\":{\"en\":1,\"active\":1,\"n\":42,\"dist\":312},\"time_source\":\"gps\"}"));
+    s.have_motion_dist = 0; s.motion_dist_cm = 99; s.motion_active = 0;
+    TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
+    TT_ASSERT(strstr(out, "\"motion\":{\"en\":1,\"active\":0,\"n\":42,\"dist\":null}"));
+    s.motion_en = 7; s.motion_active = 9; /* any nonzero flag prints as 1 */
+    TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
+    TT_ASSERT(strstr(out, "\"motion\":{\"en\":1,\"active\":1,"));
+}
+
 static void test_utc_state(void)
 {
     static const struct { snap_utc_t st; const char *txt; } c[] = {
@@ -254,6 +269,7 @@ static void test_fix_never_truncates_and_worst_case(void)
     w.gps.sats = 255; w.gps.fix_quality = 255; w.gps.utc_unix_ms = 253402300799999LL;
     w.imu.pitch_cdeg = INT16_MIN; w.imu.roll_cdeg = INT16_MIN;
     w.time_source = TSRC_SNTP;
+    w.motion_en = 1; w.motion_active = 1; w.motion_n = 0xFFFFFFFFu; w.have_motion_dist = 1; w.motion_dist_cm = 65535;
     w.gps_utc_state = SNAP_UTC_NOT_VALID; /* longest utc_state text */
     int n = snapshot_json(buf, sizeof buf, &w);
     TT_ASSERT(n > 0);
@@ -274,6 +290,7 @@ int main(void)
     TT_RUN(test_no_fix_and_partial_flags);
     TT_RUN(test_silent_error_and_sources);
     TT_RUN(test_utc_state);
+    TT_RUN(test_motion);
     TT_RUN(test_fix_never_truncates_and_worst_case);
     return TT_RESULT();
 }

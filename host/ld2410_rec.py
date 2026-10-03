@@ -4,18 +4,25 @@
 Sub-commands:
   record HOST [--port 5410] [-o FILE]   record frames from the ESP32 to a .ldrec file
   export-csv FILE [-o CSV]              decode a recording to CSV
-  info FILE                             counts, sequence range, duration, gaps, GPS/IMU/time stats
+  info FILE                             counts, sequence range, duration, gaps, GPS/IMU/time/
+                                        motion stats
 
-export-csv also takes --gps FILE (write the GPS fixes to a second CSV) and --imu FILE
-(write the IMU samples to a third CSV). frame_utc uses the nearest GPS time_sync of the
+export-csv also takes --gps FILE (write the GPS fixes to a second CSV), --imu FILE
+(write the IMU samples to a third CSV) and --motion FILE (one row per motion event: every
+END record, plus the START records that never got an END, marked open=1).
+frame_utc uses the nearest GPS time_sync of the
 same boot within +-2 s, else the nearest preceding sync of any source; a GPS sync that
 disagrees with the nearest SNTP sync of its boot by more than 1 s is rejected.
 
 Recording protocol v3: the device sends typed records (0 LD2410C frame, 1 gps_fix,
-2 imu, 3 time_sync) sharing one sequence. Byte layouts (all little-endian) are fixed in
+2 imu, 3 time_sync, 4 motion) sharing one sequence. Byte layouts (all little-endian) are fixed in
 docs/superpowers/plans/2026-10-02-esp32-gps-imu.md and mirrored by esp32/components/core
 (C). The decoders are checked against the shared vectors in esp32/tests/vectors. The
-recorder writes .ldrec v3 and reads v2 and v3 files. Stdlib only. The pure
+recorder writes .ldrec v3 and reads v2 and v3 files. Wire type 4 (motion) has no file
+record type of its own: the file stores it as an unknown-type record (REC_UNKNOWN, wire
+type 4, payload raw), so the file format and version stay as they are and files recorded
+before motion existed (or read by an older host) stay valid; the motion decoder and the
+CSV export read it from there. Stdlib only. The pure
 encode/decode functions below do no I/O.
 """
 
@@ -58,6 +65,10 @@ WIRE_FRAME = 0
 WIRE_GPS_FIX = 1
 WIRE_IMU = 2
 WIRE_TIME_SYNC = 3
+WIRE_MOTION = 4  # stored in files as REC_UNKNOWN (wire type 4), see the module docstring
+MOTION_LEN = 28
+MOTION_KIND_START = 1
+MOTION_KIND_END = 2
 GPS_FIX_LEN = 32
 IMU_LEN = 18
 TIME_SYNC_LEN = 9
@@ -115,7 +126,8 @@ class FrameError(ValueError):
     """A raw LD2410C frame that cannot be decoded."""
 
 class PayloadError(ValueError):
-    """A gps_fix / imu / time_sync payload of the wrong size or with nonzero reserved bytes."""
+    """A gps_fix / imu / time_sync / motion payload of the wrong size, nonzero reserved bytes
+    or (motion) a bad kind."""
 
 # --------------------------------------------------------------------------
 # LD2410C frame decoder (mirrors esp32/components/core/ld2410_frame.c)
@@ -271,12 +283,32 @@ class TimeSync:
     utc_unix_us: int
     source: int
 
+@dataclass(frozen=True)
+class MotionRec:
+    """Decoded wire type 4 payload (mirrors rec_motion_t).
+
+    kind 1 = START (duration_ms 0, min/max = values at the first detection), 2 = END.
+    onset_esp_us is the ESP time the event began; the record's own esp_time_us is the
+    time it was pushed (the END is later by about duration_ms).
+    """
+
+    event_no: int
+    kind: int
+    max_energy: int
+    dist_cm: int  # distance at the maximum energy
+    min_dist_cm: int
+    max_dist_cm: int
+    onset_esp_us: int
+    duration_ms: int
+
 _GPS_FMT = "<qiiiHHHBBB3x"
 _IMU_FMT = "<6hhhBB"
 _SYNC_FMT = "<qB"
 assert struct.calcsize(_GPS_FMT) == GPS_FIX_LEN
 assert struct.calcsize(_IMU_FMT) == IMU_LEN
+_MOTION_FMT = "<IBBHHHQI4x"
 assert struct.calcsize(_SYNC_FMT) == TIME_SYNC_LEN
+assert struct.calcsize(_MOTION_FMT) == MOTION_LEN
 
 def decode_gps_fix(p: bytes) -> GpsFix:
     if len(p) != GPS_FIX_LEN:
@@ -295,6 +327,27 @@ def decode_time_sync(p: bytes) -> TimeSync:
     if len(p) != TIME_SYNC_LEN:
         raise PayloadError(f"time_sync payload is {len(p)} bytes, expected {TIME_SYNC_LEN}")
     return TimeSync(*struct.unpack(_SYNC_FMT, p))
+
+def decode_motion(p: bytes) -> MotionRec:
+    if len(p) != MOTION_LEN:
+        raise PayloadError(f"motion payload is {len(p)} bytes, expected {MOTION_LEN}")
+    if p[24] or p[25] or p[26] or p[27]:
+        raise PayloadError("motion: nonzero reserved bytes")
+    if p[4] not in (MOTION_KIND_START, MOTION_KIND_END):
+        raise PayloadError(f"motion: bad kind {p[4]} (expected 1 or 2)")
+    return MotionRec(*struct.unpack(_MOTION_FMT, p))
+
+def encode_motion(m: MotionRec) -> bytes:
+    """Encode like rec_motion_encode(); a bad kind or an out-of-range field is an error."""
+    if m.kind not in (MOTION_KIND_START, MOTION_KIND_END):
+        raise PayloadError(f"motion: bad kind {m.kind} (expected 1 or 2)")
+    try:
+        return struct.pack(
+            _MOTION_FMT, m.event_no, m.kind, m.max_energy, m.dist_cm, m.min_dist_cm,
+            m.max_dist_cm, m.onset_esp_us, m.duration_ms,
+        )  # fmt: skip
+    except struct.error as e:
+        raise PayloadError(f"motion: field out of range: {e}") from e
 
 def encode_gps_fix(g: GpsFix) -> bytes:
     """Encode like rec_gps_fix_encode(): speed_cmps saturates at 65535."""
@@ -670,6 +723,10 @@ GPS_CSV_COLUMNS = [
     "seq", "esp_time_us", "pc_time_ns", "esp_utc", "time_source", "fix_utc", "flags",
     "lat", "lon", "alt_m", "speed_mps", "course_deg", "hdop", "sats", "fix_quality", "error",
 ]  # fmt: skip
+MOTION_CSV_COLUMNS = [
+    "event_no", "start_utc", "end_utc", "duration_s", "max_energy", "dist_m", "min_dist_m",
+    "max_dist_m", "boot", "open",
+]  # fmt: skip
 IMU_CSV_COLUMNS = [
     "seq", "esp_time_us", "pc_time_ns", "esp_utc", "time_source",
     "acc_x_mg", "acc_y_mg", "acc_z_mg", "gyr_x_dps", "gyr_y_dps", "gyr_z_dps",
@@ -862,6 +919,76 @@ def write_imu_csv(records: list[FileRec], out: IO[str]) -> int:
         n += 1
     return n
 
+def _motion_events(records: list[FileRec], boots: list[int]):
+    """Decoded motion records of the file as (file index, boot, MotionRec), in file order.
+
+    Type 4 lives in the file as an UnknownRec with wire_type 4. A damaged payload is
+    skipped and counted in the second return value.
+    """
+    out: list[tuple[int, int, MotionRec]] = []
+    damaged = 0
+    for i, (r, b) in enumerate(zip(records, boots, strict=True)):
+        if isinstance(r, UnknownRec) and r.wire_type == WIRE_MOTION:
+            try:
+                out.append((i, b, decode_motion(r.payload)))
+            except PayloadError as e:
+                damaged += 1
+                log.warning("motion record seq %d skipped: %s", r.seq, e)
+    return out, damaged
+
+def _motion_pairs(
+    events: list[tuple[int, int, MotionRec]],
+) -> tuple[list[tuple[int, MotionRec]], list[tuple[int, MotionRec]]]:
+    """([(boot, END)], [(boot, open START)]); a START is matched by (boot, event_no)."""
+    ends: list[tuple[int, MotionRec]] = []
+    pending: dict[tuple[int, int], tuple[int, int, MotionRec]] = {}
+    orphans: list[tuple[int, int, MotionRec]] = []
+    for i, b, m in events:
+        key = (b, m.event_no)
+        if m.kind == MOTION_KIND_START:
+            if key in pending:  # a repeated START of the same event: the older one stays open
+                orphans.append(pending[key])
+            pending[key] = (i, b, m)
+        else:
+            pending.pop(key, None)
+            ends.append((b, m))
+    open_ = sorted([*orphans, *pending.values()], key=lambda x: x[0])
+    return ends, [(b, m) for _, b, m in open_]
+
+def write_motion_csv(records: list[FileRec], out: IO[str]) -> int:
+    """One row per motion event: every END record, then the STARTs without an END (open).
+
+    start_utc = onset_esp_us, end_utc = onset + duration_ms, both through the time
+    mapping of the record's boot ('' without a time sync). A completed event has
+    open=0; an open one has open=1 with end_utc and duration_s empty and the values of
+    its START. A damaged payload is skipped (logged, counted by `info`).
+    """
+    boots = boot_indices(records)
+    tix = TimeIndex(records, boots)
+    events, _damaged = _motion_events(records, boots)
+    ends, open_ = _motion_pairs(events)
+    w = csv.DictWriter(out, fieldnames=MOTION_CSV_COLUMNS, restval="", lineterminator="\n")
+    w.writeheader()
+    n = 0
+    for is_open, group in ((0, ends), (1, open_)):
+        for b, m in group:
+            row: dict[str, object] = {
+                "event_no": m.event_no,
+                "start_utc": tix.utc_text(b, m.onset_esp_us)[0],
+                "max_energy": m.max_energy,
+                "dist_m": fixed(m.dist_cm, 2),
+                "min_dist_m": fixed(m.min_dist_cm, 2),
+                "max_dist_m": fixed(m.max_dist_cm, 2),
+                "boot": b,
+                "open": is_open,
+            }
+            if not is_open:
+                row["end_utc"] = tix.utc_text(b, m.onset_esp_us + m.duration_ms * 1000)[0]
+                row["duration_s"] = fixed(m.duration_ms, 3)
+            w.writerow(row)
+            n += 1
+    return n
+
 # --------------------------------------------------------------------------
 # info
 # --------------------------------------------------------------------------
@@ -873,6 +1000,8 @@ def summarize(created_unix_ns: int, records: list[FileRec]) -> dict[str, object]
     gps = [r for r in records if isinstance(r, GpsRec)]
     imus = [r for r in records if isinstance(r, ImuRec)]
     syncs = [r for r in records if isinstance(r, TimeSyncRec)]
+    motion, motion_damaged = _motion_events(records, boot_indices(records))
+    _ends, motion_open = _motion_pairs(motion)
     fixes = 0
     utc_verified = 0
     for g in gps:
@@ -906,7 +1035,13 @@ def summarize(created_unix_ns: int, records: list[FileRec]) -> dict[str, object]
         "time_syncs": len(syncs),
         "time_sources": sources,
         "gps_syncs_rejected": TimeIndex(records).gps_rejected,
-        "unknown_records": sum(isinstance(r, UnknownRec) for r in records),
+        "unknown_records": sum(
+            isinstance(r, UnknownRec) and r.wire_type != WIRE_MOTION for r in records
+        ),
+        "motion_starts": sum(m.kind == MOTION_KIND_START for _, _, m in motion),
+        "motion_ends": sum(m.kind == MOTION_KIND_END for _, _, m in motion),
+        "motion_open": len(motion_open),
+        "motion_damaged": motion_damaged,
     }
     if len(frames) >= 2:
         info["duration_s"] = (frames[-1].pc_time_ns - frames[0].pc_time_ns) / 1e9
@@ -930,7 +1065,7 @@ class _Writer:
         self.next_seq = next_seq
         self.boot_id: int | None = None
         self.frames = 0  # LD2410C frames only (what max_frames counts)
-        self.sensor_records = 0  # gps_fix + imu + time_sync
+        self.sensor_records = 0  # gps_fix + imu + time_sync + motion
         self.unknown_records = 0
         self.gaps = 0
         self.reboots = 0
@@ -971,7 +1106,7 @@ class _Writer:
             self.fh.write(encode_wire_record(r, pc_time_ns))
             if r.rtype == WIRE_FRAME:
                 self.frames += 1
-            elif r.rtype in _WIRE_TO_FILE:
+            elif r.rtype in _WIRE_TO_FILE or r.rtype == WIRE_MOTION:
                 self.sensor_records += 1
             else:
                 self.unknown_records += 1
@@ -1138,7 +1273,11 @@ def cmd_record(args: argparse.Namespace) -> int:
 
 def cmd_export_csv(args: argparse.Namespace) -> int:
     _, recs = _load(args.file)
-    for path, writer in ((args.gps, write_gps_csv), (args.imu, write_imu_csv)):
+    for path, writer in (
+        (args.gps, write_gps_csv),
+        (args.imu, write_imu_csv),
+        (args.motion, write_motion_csv),
+    ):
         if path:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer(recs, f)
@@ -1165,6 +1304,11 @@ def cmd_info(args: argparse.Namespace) -> int:
         _out(f"gps rejected:  {s['gps_syncs_rejected']} (off SNTP by > 1 s)")
     if s["unknown_records"]:
         _out(f"unknown type:  {s['unknown_records']} records kept raw")
+    damaged = f" ({s['motion_damaged']} damaged)" if s["motion_damaged"] else ""
+    _out(
+        f"motion events: {s['motion_starts']} starts, {s['motion_ends']} ends, "
+        f"{s['motion_open']} open{damaged}"
+    )
     _out(f"seq range:     {s['first_seq']} .. {s['last_seq']}")
     _out(f"duration (pc): {s['duration_s']} s")
     _out(f"duration (esp): {s['esp_duration_s']} s")
@@ -1190,6 +1334,9 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("-o", "--output")
     e.add_argument("--gps", metavar="FILE", help="also write the GPS fixes to this CSV")
     e.add_argument("--imu", metavar="FILE", help="also write the IMU samples to this CSV")
+    e.add_argument(
+        "--motion", metavar="FILE", help="also write the motion events (one per END, open last)"
+    )
     e.set_defaults(func=cmd_export_csv)
     i = sub.add_parser("info", help="summarize a recording")
     i.add_argument("file")

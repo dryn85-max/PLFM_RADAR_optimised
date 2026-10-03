@@ -1,6 +1,7 @@
 #include "live.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_idf_version.h"
@@ -80,6 +81,44 @@ static esp_err_t page_get(httpd_req_t *req)
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, web_page_start, HTTPD_RESP_USE_STRLEN);
+}
+
+/* GET /motion/events: last motion events, newest first (STA and AP, like the page). One event is
+ * at most about 140 characters; the buffer holds LD_MOTION_EVENTS of them. Only the httpd task
+ * runs this handler, so a static buffer is safe and keeps its stack free. */
+#define MOTION_EVT_JSON_MAX (LD_MOTION_EVENTS * 160 + 8)
+static char s_evt[MOTION_EVT_JSON_MAX];
+
+static esp_err_t events_get(httpd_req_t *req)
+{
+    motion_item_t it[LD_MOTION_EVENTS];
+    int n = ld2410_motion_events(it, LD_MOTION_EVENTS);
+    if (n < 0) n = 0;
+    if (n > LD_MOTION_EVENTS) n = LD_MOTION_EVENTS;
+    uint64_t now = (uint64_t)esp_timer_get_time();
+    size_t len = 0;
+    s_evt[len++] = '[';
+    for (int i = 0; i < n; i++) {
+        uint64_t ago = now > it[i].onset_us ? (now - it[i].onset_us) / 1000u : 0;
+        char dur[16];
+        if (it[i].active) snprintf(dur, sizeof dur, "null");
+        else snprintf(dur, sizeof dur, "%lu", (unsigned long)it[i].dur_ms);
+        int w = snprintf(s_evt + len, sizeof s_evt - len,
+                         "%s{\"no\":%lu,\"ago_ms\":%llu,\"dur_ms\":%s,\"energy\":%u,"
+                         "\"dist\":%u,\"min\":%u,\"max\":%u}",
+                         i ? "," : "", (unsigned long)it[i].no, (unsigned long long)ago, dur,
+                         (unsigned)it[i].energy, (unsigned)it[i].dist_cm, (unsigned)it[i].min_cm,
+                         (unsigned)it[i].max_cm);
+        if (w < 0 || (size_t)w >= sizeof s_evt - len - 2) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, NULL);
+        }
+        len += (size_t)w;
+    }
+    s_evt[len++] = ']';
+    s_evt[len] = '\0';
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, s_evt, (ssize_t)len);
 }
 
 /* Handshake done: register the client. Returning ESP_FAIL closes the connection. */
@@ -219,6 +258,16 @@ static void tick(void)
     }
     fill_gps(&s);
     fill_imu(&s);
+    {
+        int en, active, dist;
+        uint32_t no;
+        ld2410_motion_state(&en, &active, &no, &dist);
+        s.motion_en = en != 0;
+        s.motion_active = active != 0;
+        s.motion_n = no;
+        s.have_motion_dist = dist >= 0;
+        s.motion_dist_cm = dist >= 0 ? (uint16_t)dist : 0;
+    }
     s.time_source = time_source_current();
     int n = snapshot_json(s_tmp, sizeof s_tmp, &s);
     if (n <= 0) return;
@@ -285,8 +334,11 @@ esp_err_t live_start(void)
                                        .ws_post_handshake_cb = ws_register,
 #endif
     };
+    static const httpd_uri_t get_events = {.uri = "/motion/events", .method = HTTP_GET,
+                                           .handler = events_get};
     esp_err_t err = http_srv_register(&get_page);
     if (err == ESP_OK) err = http_srv_register(&get_ws);
+    if (err == ESP_OK) err = http_srv_register(&get_events);
     if (err != ESP_OK) return err;
     BaseType_t ok = xTaskCreate(live_task, "live_10hz", 4096, NULL, 4, &s_task);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;

@@ -32,6 +32,7 @@ GPS_VECS = ["gps_fix_nominal", "gps_fix_southwest", "gps_fix_nofix", "gps_fix_ex
             "gps_fix_utc_verified"]
 IMU_VECS = ["imu_nominal", "imu_extremes"]
 SYNC_VECS = ["time_sync_gps", "time_sync_sntp", "time_sync_edge"]
+MOTION_VECS = ["motion_start", "motion_end", "motion_extremes"]
 NORMAL_RAW = vec("frame_normal")[0]
 ENG_RAW = vec("frame_engineering")[0]
 
@@ -76,6 +77,8 @@ def test_every_vector_is_covered():
         "batch_gap_wrap",
         "batch_reboot",
         "batch_v3_mixed",
+        "batch_v3_motion",
+        *MOTION_VECS,
         *GPS_VECS,
         *IMU_VECS,
         *SYNC_VECS,
@@ -1621,3 +1624,220 @@ def test_unknown_wire_type_in_stream_is_recorded(tmp_path):
     assert srv.requests == [0, 3]
     assert mix_summary(recs) == [("f", 0), ("unk", 1, 9), ("unk", 2, 200), ("f", 3)]
     assert recs[1].payload == b"new" and recs[2].payload == b""
+
+
+# ---- record type 4: motion ------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", MOTION_VECS)
+def test_motion_vectors(name):
+    raw, exp = vec(name)
+    assert exp["record_type"] == lr.WIRE_MOTION == 4 and raw.hex() == exp["payload_hex"]
+    assert len(raw) == lr.MOTION_LEN == 28
+    m = lr.decode_motion(raw)
+    assert asdict(m) == exp["motion"]
+    assert lr.encode_motion(m) == raw
+
+
+def test_motion_hand_derived_bytes():
+    # independent of the vectors; same bytes as the C test test_motion_layout_and_bounds
+    exp = bytes([
+        4, 3, 2, 1, 2, 5, 7, 6, 9, 8, 0x0B, 0x0A,
+        0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11, 0x24, 0x23, 0x22, 0x21, 0, 0, 0, 0,
+    ])  # fmt: skip
+    m = lr.MotionRec(0x01020304, 2, 5, 0x0607, 0x0809, 0x0A0B, 0x1112131415161718, 0x21222324)
+    assert lr.encode_motion(m) == exp and lr.decode_motion(exp) == m
+    assert (lr.MOTION_KIND_START, lr.MOTION_KIND_END) == (1, 2)
+
+
+def test_motion_vector_values_and_extremes():
+    s = lr.decode_motion(vec("motion_start")[0])
+    assert (s.event_no, s.kind, s.duration_ms, s.onset_esp_us) == (7, 1, 0, 5_000_000)
+    e = lr.decode_motion(vec("motion_end")[0])
+    assert (e.event_no, e.kind, e.duration_ms) == (7, 2, 12345)
+    assert (e.min_dist_cm, e.max_dist_cm) == (150, 310)
+    x = lr.decode_motion(vec("motion_extremes")[0])
+    assert x.event_no == 2**32 - 1 and x.onset_esp_us == 2**64 - 1 and x.duration_ms == 2**32 - 1
+    assert x.max_energy == 255 and x.dist_cm == x.min_dist_cm == x.max_dist_cm == 65535
+
+
+def test_motion_wrong_length_reserved_and_kind():
+    good = bytearray(vec("motion_start")[0])
+    for n in range(45):
+        if n == 28:
+            lr.decode_motion(bytes(good))
+        else:
+            with pytest.raises(lr.PayloadError, match="expected"):
+                lr.decode_motion((bytes(good) + bytes(n))[:n])
+    for i in (24, 25, 26, 27):
+        for val in (1, 0x80, 255):
+            bad = bytearray(good)
+            bad[i] = val
+            with pytest.raises(lr.PayloadError, match="reserved"):
+                lr.decode_motion(bytes(bad))
+    for kind in range(256):
+        bad = bytearray(good)
+        bad[4] = kind
+        if kind in (1, 2):
+            assert lr.decode_motion(bytes(bad)).kind == kind
+        else:
+            with pytest.raises(lr.PayloadError, match="kind"):
+                lr.decode_motion(bytes(bad))
+    with pytest.raises(lr.PayloadError):
+        lr.encode_motion(lr.MotionRec(1, 3, 0, 0, 0, 0, 0, 0))
+    with pytest.raises(lr.PayloadError):  # out of range field: no silent wrap
+        lr.encode_motion(lr.MotionRec(2**32, 1, 0, 0, 0, 0, 0, 0))
+
+
+def test_batch_v3_motion_vector_and_file_semantics():
+    raw, exp = vec("batch_v3_motion")
+    hdr, recs = lr.parse_batch(raw)
+    assert (hdr.version, hdr.count, hdr.boot_id) == (3, 4, 0x0C0FFEE5)
+    assert [r.rtype for r in recs] == [0, 4, 0, 4]
+    assert [(r.seq, r.esp_time_us, r.rtype, r.raw.hex()) for r in recs] == [
+        (j["seq"], j["esp_time_us"], j["type"], j["raw_hex"]) for j in exp["records"]
+    ]
+    assert recs[1].raw == vec("motion_start")[0] and recs[3].raw == vec("motion_end")[0]
+    # file format: type 4 is stored as an unknown-type record (file type 6, wire type 4);
+    # the file format is unchanged, so old and new files are readable by old and new hosts
+    out = b"".join(lr.encode_wire_record(r, 99) for r in recs)
+    assert lr.encode_wire_record(recs[1], 99)[0] == lr.REC_UNKNOWN
+    _, back = lr.parse_file(lr.encode_file_header(1) + out)
+    assert [type(r).__name__ for r in back] == ["FrameRec", "UnknownRec", "FrameRec", "UnknownRec"]
+    assert back[1].wire_type == 4 and back[1].payload == recs[1].raw
+
+
+def mot(seq, esp, kind, ev=1, onset=None, dur=0, energy=50, dist=200, mn=100, mx=300, payload=None):
+    onset = esp if onset is None else onset
+    pl = payload or lr.encode_motion(lr.MotionRec(ev, kind, energy, dist, mn, mx, onset, dur))
+    return lr.UnknownRec(seq, esp, 7, lr.WIRE_MOTION, pl)
+
+
+def motion_rows(recs):
+    buf = io.StringIO()
+    n = lr.write_motion_csv(recs, buf)
+    rows = list(csv.DictReader(io.StringIO(buf.getvalue())))
+    assert n == len(rows)
+    return rows
+
+
+def test_motion_csv_complete_and_open_events():
+    recs = [
+        sync_rec(0, 0, U0),
+        mot(1, 1_000_000, 1, ev=1, onset=1_000_000),
+        mot(2, 4_500_000, 2, ev=1, onset=1_000_000, dur=3500, energy=90, dist=210, mn=150, mx=310),
+        mot(3, 6_000_000, 1, ev=2, onset=6_000_000, energy=40, dist=500, mn=500, mx=500),  # open
+    ]
+    rows = motion_rows(recs)
+    assert list(rows[0].keys()) == lr.MOTION_CSV_COLUMNS
+    assert lr.MOTION_CSV_COLUMNS == [
+        "event_no", "start_utc", "end_utc", "duration_s", "max_energy", "dist_m", "min_dist_m",
+        "max_dist_m", "boot", "open",
+    ]  # fmt: skip
+    assert len(rows) == 2
+    done, op = rows
+    assert done["event_no"] == "1" and done["open"] == "0" and done["boot"] == "0"
+    assert done["start_utc"] == "2026-10-02T12:34:57.000000Z"
+    assert done["end_utc"] == "2026-10-02T12:35:00.500000Z"  # onset + 3.5 s
+    assert done["duration_s"] == "3.500" and done["max_energy"] == "90"
+    assert (done["dist_m"], done["min_dist_m"], done["max_dist_m"]) == ("2.10", "1.50", "3.10")
+    assert (op["event_no"], op["open"]) == ("2", "1")
+    assert op["end_utc"] == "" and op["duration_s"] == ""
+    assert op["start_utc"] == "2026-10-02T12:35:02.000000Z" and op["max_energy"] == "40"
+    assert op["dist_m"] == "5.00"
+
+
+def test_motion_csv_end_without_start_and_row_order():
+    # END whose START was never recorded (ring overwrite): still a row; open rows come last
+    recs = [
+        sync_rec(0, 0, U0),
+        mot(1, 1_000_000, 1, ev=5, onset=1_000_000),  # open (never ended)
+        mot(2, 9_000_000, 2, ev=6, onset=2_000_000, dur=7000),  # END only
+        mot(3, 9_500_000, 1, ev=7, onset=9_500_000),  # open
+    ]
+    rows = motion_rows(recs)
+    assert [(r["event_no"], r["open"]) for r in rows] == [("6", "0"), ("5", "1"), ("7", "1")]
+    assert rows[0]["duration_s"] == "7.000"
+
+
+def test_motion_csv_across_reboot():
+    recs = [
+        sync_rec(0, 0, U0),
+        mot(1, 1_000_000, 1, ev=1, onset=1_000_000),
+        lr.RebootRec(1, 2, 5),
+        sync_rec(0, 0, U0 + 100_000_000),  # new boot, esp clock restarted
+        mot(1, 1_000_000, 1, ev=1, onset=1_000_000),
+        mot(2, 3_000_000, 2, ev=1, onset=1_000_000, dur=2000),
+    ]
+    rows = motion_rows(recs)
+    # the boot-0 start has no end (the END of the same event_no belongs to boot 1): open
+    got = [(r["event_no"], r["boot"], r["open"]) for r in rows]
+    assert got == [("1", "1", "0"), ("1", "0", "1")]
+    assert rows[0]["start_utc"] == "2026-10-02T12:36:37.000000Z"
+    assert rows[0]["end_utc"] == "2026-10-02T12:36:39.000000Z"
+    assert rows[1]["start_utc"] == "2026-10-02T12:34:57.000000Z"
+
+
+def test_motion_csv_without_time_sync_and_damaged_payloads():
+    recs = [
+        mot(1, 1_000_000, 2, ev=1, onset=1_000_000, dur=1000),  # no sync in the boot
+        mot(2, 2_000_000, 1, payload=b"\x01\x02"),  # damaged: skipped, never fatal
+        mot(3, 3_000_000, 1, payload=bytes(28)),  # kind 0
+        lr.UnknownRec(4, 4, 4, 9, b"x"),  # other unknown type: ignored
+    ]
+    rows = motion_rows(recs)
+    assert len(rows) == 1 and rows[0]["start_utc"] == "" and rows[0]["end_utc"] == ""
+    assert rows[0]["duration_s"] == "1.000"
+    assert lr.write_motion_csv([], io.StringIO()) == 0
+
+
+def test_motion_info_counts(tmp_path, capsys):
+    recs = [
+        mot(1, 10, 1, ev=1),
+        mot(2, 20, 2, ev=1, dur=5),
+        mot(3, 30, 1, ev=2),  # open
+        mot(4, 40, 1, payload=b"bad"),
+        lr.UnknownRec(5, 50, 1, 9, b""),
+        frame_at(6, 60),
+    ]
+    s = lr.summarize(0, recs)
+    assert (s["motion_starts"], s["motion_ends"], s["motion_open"]) == (2, 1, 1)
+    assert s["motion_damaged"] == 1
+    assert s["unknown_records"] == 1  # type 4 is known, type 9 is not
+    f = tmp_path / "m.ldrec"
+    f.write_bytes(build_file(recs))
+    assert lr.main(["info", str(f)]) == 0
+    out = capsys.readouterr().out
+    assert "motion events: 2 starts, 1 ends, 1 open (1 damaged)" in out
+    assert "unknown type:  1 records kept raw" in out
+    f.write_bytes(build_file([frame_at(0, 1)]))
+    assert lr.main(["info", str(f)]) == 0
+    assert "motion events: 0 starts, 0 ends, 0 open" in capsys.readouterr().out
+
+
+def test_cli_export_motion_file(tmp_path, capsys):
+    f = tmp_path / "m.ldrec"
+    f.write_bytes(
+        build_file(
+            [
+                sync_rec(0, 0, U0),
+                mot(1, 1_000_000, 1),
+                mot(2, 2_000_000, 2, onset=1_000_000, dur=1000),
+                frame_at(3, 5),
+            ]
+        )
+    )
+    m_csv = tmp_path / "mo.csv"
+    assert lr.main(["export-csv", str(f), "--motion", str(m_csv)]) == 0
+    assert capsys.readouterr().out.startswith("seq,")  # main CSV still goes to stdout
+    rows = list(csv.DictReader(m_csv.open()))
+    assert len(rows) == 1 and rows[0]["duration_s"] == "1.000"
+    with pytest.raises(SystemExit):
+        lr.main(["export-csv", str(f), "--motion"])  # needs a FILE
+
+
+def test_recorder_stream_counts_motion_as_sensor_record(tmp_path):
+    script = [[batch(0, [0, 1, 2], other={1: (4, vec("motion_start")[0])})]]
+    _srv, recs = run_recorder(tmp_path, script, 2)
+    assert mix_summary(recs) == [("f", 0), ("unk", 1, 4), ("f", 2)]
+    assert recs[1].wire_type == 4 and recs[1].payload == vec("motion_start")[0]

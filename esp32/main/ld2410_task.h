@@ -10,6 +10,7 @@
 #include "ld2410_cmd.h"
 #include "ld2410_frame.h"
 #include "ld_settings.h"
+#include "motion_det.h"
 #include "rec_proto.h"
 #include "ringbuf.h"
 
@@ -83,6 +84,34 @@ typedef struct {
  * ESP_ERR_NO_MEM. On any non-OK return *req is left untouched. A timed-out request may
  * still be carried out by the task. Data frames pause while it runs (up to about 1 s). */
 esp_err_t ld2410_request(ld_req_t *req, uint32_t timeout_ms);
+
+/* ---- Motion detector (runs in the LD2410C task) ---- */
+#define LD_MOTION_EVENTS 10
+
+/* One event for the page. active: dur_ms is not final yet (0). energy/dist/min/max are the
+ * START values while active (seen during the start delay) and the final ones after the END. */
+typedef struct {
+    uint32_t no;
+    uint64_t onset_us; /* esp_timer us of the first moving frame */
+    uint32_t dur_ms;
+    int active;
+    uint8_t energy;
+    uint16_t dist_cm, min_cm, max_cm;
+} motion_item_t;
+
+/* Last events, newest first; returns how many were copied (0..max, at most LD_MOTION_EVENTS). */
+int ld2410_motion_events(motion_item_t *out, int max);
+/* en: detector enabled; active: an event is ACTIVE; last_no: number of the last started event
+ * (0 = none); dist_cm_or_neg: moving distance of the latest frame, -1 when it has no moving
+ * target or no frame arrived for about a second. Any pointer may be NULL. */
+void ld2410_motion_state(int *en, int *active, uint32_t *last_no, int *dist_cm_or_neg);
+/* Current configuration copy. */
+void ld2410_motion_get_cfg(motion_cfg_t *out);
+/* Validate (motion_cfg_check, else ESP_ERR_INVALID_ARG), store in NVS namespace "motion"
+ * (may block on flash: call from the HTTP handler, never from a frame path), then hand over to
+ * the LD2410C task, which applies it from its next frame/tick. On an NVS error the running
+ * configuration is unchanged. ESP_ERR_INVALID_STATE before ld2410_start(). */
+esp_err_t ld2410_motion_set_cfg(const motion_cfg_t *cfg);
 
 /* Ring access for readers. Hold the lock only while copying; never block
  * (network I/O, long waits) while holding it. */
