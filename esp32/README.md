@@ -117,6 +117,8 @@ client and one transient socket); `sdkconfig`, `build/` and
 precedence over `sdkconfig.defaults`: after a change to the defaults, delete
 `esp32/sdkconfig` before building (`idf.py fullclean` does not remove it). The `espressif/mdns` component is fetched
 at build time, pinned exactly (`main/idf_component.yml`, `==1.14.0`).
+`esp32/dependencies.lock` is committed (resolved by the CI build, ESP-IDF v5.5.5); a
+local build with another ESP-IDF version may rewrite it: do not commit such a rewrite.
 
 If the board does not enter download mode by itself: hold **BOOT**, tap
 **RESET**, release **BOOT**, then flash again.
@@ -276,6 +278,10 @@ page; only the AP password line is printed.
   (see "AP on demand"). If it does not connect, the
   AP starts alongside (AP+STA) and the STA keeps retrying in the background
   (backoff 2 s doubling to 30 s). A dropped STA link is also retried.
+- STA reconnect attempts pause while a client is connected to the ESP32 AP (fallback
+  or on demand), so the scans do not disturb the AP link (for example a phone fixing
+  wrong credentials), and resume 2 s after the last client leaves. The console logs
+  `STA retries paused (AP client connected)` / `STA retries resumed`.
 - On the STA network the board is reachable as `http://aeris-mvp.local`
   (mDNS, VERIFY) or by the STA IP from the console.
 - **BOOT released after 5 to 10 s while the firmware is running** erases the
@@ -403,7 +409,8 @@ a busy or silent module gives an error text on the page.
 `GET /` serves one self-contained page (no external resources). It opens a
 WebSocket to `/ws`, which pushes the **latest snapshot** as JSON at 10 Hz. A
 slow client only gets the newest snapshot (no per-client queue; up to 4
-clients). The page shows:
+clients). WebSocket sockets have a 1 s send timeout: a client that does not take a
+frame within 1 s is closed and the page reconnects by itself. The page shows:
 
 - sensor link status (`no_data`, `ok`, `lost` after more than 1 s without a
   frame) and WebSocket status (reconnects automatically);
@@ -595,7 +602,7 @@ is the matching ESP32 time. There are two sources:
 
 | Source | Code | When a record is written | Accuracy |
 |---|---|---|---|
-| GPS | 1 | on every RMC with status `A` and valid time and date (about 1 Hz), **only while the UTC state is `valid` or `no ubx`** (never while `not valid`, see "GPS"); stamped when the parser completes the RMC line | no PPS on the board: the UTC value belongs to the second boundary but the sentence arrives later (a 70-character RMC takes about 70 ms at 9600 Bd, plus the receiver's output delay). Measured on the bench (2026-10-02, 1413 syncs over 23 min, against SNTP): the GPS stamp is **128 ms late** (median), p1..p99 119..136 ms, no drift; not corrected in the recording. The whole-second error after the first fix is excluded by the UTC verification (see "GPS"); in the `no ubx` fallback it can still occur |
+| GPS | 1 | on every RMC with status `A` and valid time and date (about 1 Hz), **only while the UTC state is `valid` or `no ubx`** (never while `not valid`, see "GPS"); stamped when the parser completes the RMC line | no PPS on the board: the UTC value belongs to the second boundary but the sentence arrives later (a 70-character RMC takes about 70 ms at 9600 Bd, plus the receiver's output delay). Measured on the bench (2026-10-02, 1413 syncs over 23 min, against SNTP): the GPS stamp is **128 ms late** (median), p1..p99 119..136 ms, no drift; corrected in the `time_sync` UTC value by +128 ms (stamp taken when the RMC line completes; `gps_fix` and the live page keep the raw RMC time). The whole-second error after the first fix is excluded by the UTC verification (see "GPS"); in the `no ubx` fallback it can still occur |
 | SNTP | 2 | on each synchronisation with `pool.ntp.org` (ESP-IDF `esp_netif_sntp`), started once the STA link has an IP address; needs the home Wi-Fi with internet access | typically tens of ms over the internet (not measured separately; the GPS figures above are relative to it); the time is the ESP32 system clock right after the SNTP callback |
 
 **Priority.** The live page shows GPS while the latest GPS `time_sync` is less
@@ -720,7 +727,9 @@ uv run python host/ld2410_rec.py info run.ldrec
   valid position and fix quality > 0, over all gps records), `gps utc verified: N`
   (fixes with flags bit 4 set) and the time-sync sources.
 
-One recording client at a time: a new connection replaces the old one. The
+One recording client at a time: a new connection replaces the old one. TCP
+keepalive (5 s idle, 2 s interval, 3 probes) drops a vanished client after about
+11 s. The
 ring buffer holds 4 MiB in PSRAM (if that allocation fails the firmware falls
 back to 32 KiB of internal RAM and logs a warning), so a recording survives a
 Wi-Fi drop as long as the buffer still covers the outage.
@@ -875,7 +884,8 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   `main/rgb_led.c`).
 - WebSocket close handling (slot removal, reconnect of the page).
 - Recording server preemption (a new client replacing the old one) and the
-  5 s send/receive timeouts; there is no TCP keepalive (BACKLOG).
+  5 s send/receive timeouts; TCP keepalive (5 s idle, 2 s interval, 3 probes) drops a
+  vanished client after about 11 s.
 - mDNS (`aeris-mvp.local`) on the home network.
 - A 64-character hexadecimal Wi-Fi password (WPA2 treats it as a raw PSK; the
   63-character ASCII case is the normal one).
@@ -890,7 +900,14 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   start time at the owner's window, NEO-6M datasheet not in
   `hardware/datasheets/`.
 - GPS time accuracy without PPS: measured on the bench 2026-10-02 (128 ms
-  late against SNTP, see "Time sources and accuracy").
+  late against SNTP, see "Time sources and accuracy"). The residual GPS-vs-SNTP
+  difference after the +128 ms correction is expected near 0: re-measure on the bench.
+- A sleeping phone on the live page no longer slows other page loads by more than
+  about 1 s (1 s WebSocket send timeout).
+- A phone on the fallback AP keeps its link while fixing credentials (STA retries
+  paused).
+- The recording port is freed within about 15 s after the recorder's Wi-Fi is
+  switched off (TCP keepalive).
 - UBX UTC verification **confirmed on the bench 2026-10-03** (balcony, module
   after a long power-off): the NEO-6M answers the NAV-TIMEUTC poll on UART1 in
   its default configuration (about one answer per second, `bad_ck 0`); fix at
