@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AERIS-10 Lite update</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1c1f24;--mut:#667;--bar:#2f6fed;--bd:#d8dbe0;--ok:#1f8f4e;--bad:#c0392b}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1e2126;--fg:#e8eaed;--mut:#98a0ab;--bar:#5b8def;--bd:#33373e;--ok:#4cc27e;--bad:#e8685a}}
+*{box-sizing:border-box}
+body{margin:0;padding:12px;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:640px;margin:0 auto}
+h1{font-size:1.1rem;margin:0 0 10px}h2{font-size:.95rem;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:10px}
+.k{font-size:.8rem;color:var(--mut)}.k a{color:var(--bar)}
+dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:2px 12px}
+dt{color:var(--mut);font-size:.9rem}dd{margin:0;overflow-wrap:anywhere}
+input[type=file]{display:block;width:100%;margin:0 0 12px;padding:10px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px}
+button{width:100%;padding:12px;font:inherit;font-weight:600;color:#fff;background:var(--bar);border:0;border-radius:8px}
+button:disabled{opacity:.5}
+button.dg{color:var(--bad);background:var(--bg);border:1px solid var(--bd)}
+progress{width:100%;height:14px;margin-top:12px}
+#msg{margin-top:10px;font-weight:600;overflow-wrap:anywhere}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+<h1>Firmware update</h1>
+<div class="card"><h2>Running image</h2>
+<dl><dt>Version</dt><dd id="ver">&hellip;</dd>
+<dt>Built</dt><dd id="built">&hellip;</dd>
+<dt>Slot</dt><dd id="slot">&hellip;</dd>
+<dt>State</dt><dd id="state">&hellip;</dd></dl></div>
+<div class="card"><h2>Other slot</h2>
+<dl><dt>Slot</dt><dd id="oslot">&hellip;</dd>
+<dt>Version</dt><dd id="over">&hellip;</dd>
+<dt>State</dt><dd id="ostate">&hellip;</dd></dl></div>
+<form class="card" id="f">
+<h2>Upload new firmware</h2>
+<input id="file" type="file" accept=".bin" required>
+<button id="up" type="submit">Upload</button>
+<progress id="pr" max="100" value="0" hidden></progress>
+<div id="msg" role="status"></div>
+<p class="k">The image is written to the other slot, checked, and the device reboots into it. The new image is kept after 30 s of working Wi-Fi and web server, otherwise the device returns to this one. Frames and the recording are interrupted during the update.</p>
+</form>
+<div class="card" id="rbc" hidden>
+<h2>Rollback</h2>
+<button id="rb" class="dg" type="button">Rollback to previous</button>
+</div>
+<p class="k"><a href="/wifi">Wi-Fi setup</a> &middot; <a href="/ld2410">LD2410C settings</a> &middot; <a href="/log">Log</a></p>
+</main>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var info = null, busy = false;
+
+  function say(t, cls) { var m = $("msg"); m.textContent = t; m.className = cls || ""; }
+  function setBusy(b) { busy = b; $("up").disabled = b; $("rb").disabled = b; $("file").disabled = b; }
+
+  function show(i) {
+    info = i;
+    $("ver").textContent = i.ver;
+    $("built").textContent = i.date + " " + i.time;
+    $("slot").textContent = i.slot;
+    $("state").textContent = i.state;
+    $("oslot").textContent = i.other_slot;
+    $("over").textContent = i.other_ver === null ? "empty" : i.other_ver;
+    $("ostate").textContent = i.other_state;
+    $("rbc").hidden = !i.rollback;
+  }
+
+  function load(cb) {
+    var x = new XMLHttpRequest();
+    x.open("GET", "/update/info");
+    x.onload = function () {
+      if (x.status === 200) {
+        try { show(JSON.parse(x.responseText)); if (cb) cb(true); return; } catch (e) { /* fall through */ }
+      }
+      if (cb) cb(false);
+    };
+    x.onerror = function () { if (cb) cb(false); };
+    x.send();
+  }
+
+  /* After "OK, rebooting": poll until the device answers again, then show the new state. */
+  function waitReboot() {
+    say("Rebooting, waiting for the device…", "");
+    var tries = 0;
+    (function poll() {
+      setTimeout(function () {
+        load(function (ok) {
+          if (ok) { setBusy(false); $("pr").hidden = true; say("Device is back. Check the version above.", "ok"); }
+          else if (++tries < 60) poll();
+          else { setBusy(false); say("Device did not come back; reconnect to its Wi-Fi and reload.", "bad"); }
+        });
+      }, 3000);
+    })();
+  }
+
+  function post(url, body, onprogress) {
+    var x = new XMLHttpRequest();
+    x.open("POST", url);
+    if (onprogress) x.upload.onprogress = onprogress;
+    x.onload = function () {
+      var t = x.responseText || ("HTTP " + x.status);
+      if (x.status === 200) { say(t, "ok"); waitReboot(); }
+      else { setBusy(false); say("Failed: " + t, "bad"); }
+    };
+    x.onerror = function () { setBusy(false); say("Connection lost; the update may not have completed.", "bad"); };
+    x.send(body);
+  }
+
+  $("f").onsubmit = function (e) {
+    e.preventDefault();
+    if (busy) return;
+    var f = $("file").files[0];
+    if (!f) { say("Choose a .bin file", "bad"); return; }
+    if (info && f.size > info.max) { say("File is larger than the slot (" + info.max + " bytes)", "bad"); return; }
+    if (f.size === 0) { say("File is empty", "bad"); return; }
+    setBusy(true);
+    $("pr").value = 0; $("pr").hidden = false;
+    say("Uploading…", "");
+    post("/update", f, function (ev) {
+      if (ev.lengthComputable) {
+        var p = Math.floor(ev.loaded * 100 / ev.total);
+        $("pr").value = p;
+        say("Uploading " + p + " %", "");
+      }
+    });
+  };
+
+  $("rb").onclick = function () {
+    if (busy) return;
+    if (!confirm("Reboot into the previous image?")) return;
+    setBusy(true);
+    say("Rolling back…", "");
+    post("/update/rollback", null, null);
+  };
+
+  load(function (ok) { if (!ok) say("Could not read the device state", "bad"); });
+})();
+</script>
+</body>
+</html>

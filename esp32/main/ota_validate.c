@@ -15,6 +15,11 @@
 
 static const char *TAG = "ota";
 static esp_timer_handle_t s_timer;
+/* Latched: once Wi-Fi (AP counts) or the HTTP server has been seen up since boot it stays "up"
+ * for the validity check. A pending image that brought them up has proved itself; a later
+ * home-network drop or STA reconnect must not roll a working image back. */
+static bool s_wifi_seen;
+static bool s_http_seen;
 
 /* Runs in the esp_timer task. The rollback call reboots and does not return; the timer task has
  * no other duty that matters at that point, and logging has already been issued. */
@@ -22,7 +27,9 @@ static void check_cb(void *arg)
 {
     (void)arg;
     uint32_t up_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    ota_act_t act = ota_check_step(true, wifi_mgr_is_up(), http_srv_is_running(), up_ms);
+    if (wifi_mgr_is_up()) s_wifi_seen = true;
+    if (http_srv_is_running()) s_http_seen = true;
+    ota_act_t act = ota_check_step(true, s_wifi_seen, s_http_seen, up_ms);
     if (act == OTA_ACT_MARK_VALID) {
         esp_timer_stop(s_timer);
         esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
@@ -34,7 +41,7 @@ static void check_cb(void *arg)
     } else if (act == OTA_ACT_ROLLBACK) {
         esp_timer_stop(s_timer);
         ESP_LOGW(TAG, "OTA: new image not healthy after %u s (Wi-Fi %d, HTTP %d), rolling back",
-                 (unsigned)(up_ms / 1000), (int)wifi_mgr_is_up(), (int)http_srv_is_running());
+                 (unsigned)(up_ms / 1000), (int)s_wifi_seen, (int)s_http_seen);
         esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
         /* Only returns on failure (e.g. no previous valid image). */
         ESP_LOGE(TAG, "OTA: rollback failed: %s", esp_err_to_name(err));

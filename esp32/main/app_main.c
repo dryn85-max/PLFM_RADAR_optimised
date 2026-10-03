@@ -10,6 +10,7 @@
 #include "imu_task.h"
 #include "ld2410_task.h"
 #include "live.h"
+#include "ota_http.h"
 #include "ota_validate.h"
 #include "rec_srv.h"
 #include "status_led_task.h"
@@ -109,6 +110,10 @@ void app_main(void)
         err = web_log_register();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "web_log_register failed: %s", esp_err_to_name(err));
+        }
+        err = ota_http_register();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "ota_http_register failed: %s", esp_err_to_name(err));
         }
     }
     ota_validate_start(); /* last: Wi-Fi and HTTP state is final */
