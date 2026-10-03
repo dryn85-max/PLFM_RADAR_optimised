@@ -1,5 +1,6 @@
 #include <stdio.h>
 
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -40,6 +41,10 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "web_log_init failed: %s", esp_err_to_name(err));
     }
+    /* The ESP-IDF "App version" boot line is printed before the web log hook exists; repeat the
+     * version here so it is visible in /log (e.g. after an OTA update). */
+    const esp_app_desc_t *app = esp_app_get_description();
+    ESP_LOGI(TAG, "firmware %s (built %s %s)", app->version, app->date, app->time);
 
     /* Status LED first so Wi-Fi states are visible; a failure only leaves the LED dark. */
     err = status_led_start();

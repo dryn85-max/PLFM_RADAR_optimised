@@ -169,7 +169,8 @@ writes `ota_0` while `ota_1` may be the active slot: for USB flashing always use
 4. Reload the page: it shows the new `Version` (git hash), build date and time and the
    running slot. If the AP was started on demand (home network stored), it is off after the
    reboot because the device joins the home network: read the version from the home network
-   (the `App version` line in `/log`) or turn the AP on again with BOOT 2 to 5 s.
+   (the `app: firmware <version>` line near the top of `/log`; the ESP-IDF `App version`
+   boot line is printed before the web log starts and is only on the USB console) or turn the AP on again with BOOT 2 to 5 s.
 
 The page also shows the version in the other slot (or "empty"). `GET /update/info` returns
 the same data as JSON (AP only like the page).
