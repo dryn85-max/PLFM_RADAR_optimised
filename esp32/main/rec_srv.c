@@ -6,7 +6,8 @@
  *    request, then sends a batch about every second.
  * The ring lock is taken only inside ld2410_ring_batch() while copying; every
  * send() happens without it, with SO_SNDTIMEO so a stalled client cannot hold
- * anything for long. */
+ * anything for long. TCP keepalive on every connection: a client that vanished without a
+ * FIN/RST is noticed after about REC_KEEPIDLE_S + REC_KEEPINTVL_S * REC_KEEPCNT = 11 s. */
 #include "rec_srv.h"
 
 #include <errno.h>
@@ -26,6 +27,9 @@
 
 #define REQ_TIMEOUT_S 5
 #define SEND_TIMEOUT_S 5
+#define REC_KEEPIDLE_S 5
+#define REC_KEEPINTVL_S 2
+#define REC_KEEPCNT 3
 #define BATCH_PERIOD_MS 1000
 #define BATCH_BUF_BYTES (16u * 1024u)
 
@@ -52,6 +56,17 @@ static void set_timeout(int fd, int opt, int seconds)
 {
     struct timeval tv = {.tv_sec = seconds, .tv_usec = 0};
     setsockopt(fd, SOL_SOCKET, opt, &tv, sizeof tv);
+}
+
+static void set_keepalive(int fd)
+{
+    int on = 1, idle = REC_KEEPIDLE_S, intvl = REC_KEEPINTVL_S, cnt = REC_KEEPCNT;
+    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on) != 0 ||
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle) != 0 ||
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl) != 0 ||
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt) != 0) {
+        ESP_LOGW(TAG, "TCP keepalive not fully set (errno %d)", errno);
+    }
 }
 
 /* Read exactly len bytes (each recv bounded by SO_RCVTIMEO). */
@@ -89,6 +104,7 @@ static void serve(int fd)
 
     set_timeout(fd, SO_RCVTIMEO, REQ_TIMEOUT_S);
     set_timeout(fd, SO_SNDTIMEO, SEND_TIMEOUT_S);
+    set_keepalive(fd);
     if (!recv_exact(fd, req, sizeof req)) {
         ESP_LOGW(TAG, "no request");
         return;

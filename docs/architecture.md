@@ -214,7 +214,7 @@ Data flow:
    unchanged for every type. A missing or silent GPS or IMU never touches the
    LD2410C path.
 2b. **Time.** UTC is carried by `time_sync` records: GPS on each RMC with status
-   `A` and valid time and date (no PPS: measured 128 ms late) while the UTC state is `valid`, or `no ubx` as a
+   `A` and valid time and date (no PPS: measured 128 ms late, corrected by +128 ms in the `time_sync` value) while the UTC state is `valid`, or `no ubx` as a
    fallback (the GPS task polls UBX NAV-TIMEUTC once per second and withholds GPS
    `time_sync` while validUTC = 0, i.e. the leap-second count is not yet known), SNTP
    on each synchronisation over the STA link. Both are recorded; the live page

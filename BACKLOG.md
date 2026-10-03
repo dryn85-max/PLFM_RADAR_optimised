@@ -99,25 +99,21 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   The IMU code is already separated from the tilt filter for such an addition.
 - [ ] **Tilt zero button** (stores an offset so the radar's mounting error can
   be cancelled), from the AP-only settings page (the live page stays open on the
-  home network); tilt is absolute until then.
+  home network); tilt is absolute until then. Postponed until the rotating radar (owner
+  2026-10-03): the recording carries the raw accelerations, so a mounting offset
+  can be removed on the host.
 - [ ] **Radar motion detector** (presence/motion event on the radar data, with
   its own recording and live indication); out of scope of the GPS/IMU cycle.
 - [ ] **IMU recording at 100 Hz option.** The recording carries 10 Hz averaged
   `imu` records; a raw 100 Hz option (larger records or a new type, more ring
   buffer traffic) was left out. The rate is one constant in the firmware.
 - [ ] **GPS PPS wiring for precise time.** Without PPS the GPS time stamp is
-  taken at reception of the RMC sentence (measured 2026-10-02: 128 ms late,
-  p1..p99 119..136 ms, against SNTP). Wire
+  taken at reception of the RMC sentence (measured 2026-10-02: 128 ms late
+  against SNTP). The 128 ms is now corrected by a constant in the `time_sync`
+  value; PPS would remove the remaining spread (p1..p99 119..136 ms, about
+  +-10 ms). Wire
   the module's PPS output to a free GPIO, stamp the edge in an interrupt and
   correct the `time_sync` record.
-- [ ] **GPS time: subtract the measured 128 ms RMC delay?** The whole-second UTC
-  error after the first fix (bench 2026-10-02: +3 s for 5.6 min) is done in the
-  firmware (owner decision 2026-10-03): GPS `time_sync` is written only while UBX
-  `NAV-TIMEUTC` reports validUTC = 1 (and as a fallback when the module does not
-  answer UBX), also without SNTP; the host SNTP check stays as a second line of
-  defence; bench verification is in the VERIFY list of `esp32/README.md`. Open:
-  whether to subtract the measured 128 ms RMC delay (p1..p99 119..136 ms,
-  against SNTP) from the GPS `time_sync` value; today it is not corrected.
 - [ ] **LD2410C settings: gate 0/1 write not bench-tested.** The settings cycle
   passed on the bench 2026-10-02 (see the VERIFY list in `esp32/README.md`),
   except a `0x0064` write for gate 0 or 1 with the unchanged still value
@@ -140,26 +136,10 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   for air temperature; D) keep the ADS7830. NTC probes from the ZFC39 kit are an
   option for the probe itself. Needs an owner decision. Not needed now (owner
   2026-10-02: no part that can overheat on the bench).
-- [ ] **Commit `esp32/dependencies.lock`.** The `espressif/mdns` version is now
-  pinned exactly (`==1.14.0`, as resolved by CI) but the lock file is still
-  git-ignored and not committed; commit it for fully reproducible builds.
-- [ ] **TCP keepalive for the recording server** (only 1 s keep-alive batches and
-  5 s socket timeouts today); a half-open connection from a vanished client is
-  noticed by the send timeout only.
 - [ ] **Live page and recording port stay open on the home network** (owner
   decision 2026-10-02: no password; the settings pages `/wifi` and `/ld2410` are
   AP-only). Authentication of the live page and port 5410 is not planned; revisit
   if the board is used on a shared network.
-- [ ] **A stalled WebSocket client blocks the httpd task** (final review,
-  2026-10-02): `httpd_ws_send_frame_async` runs synchronously in the httpd task,
-  so one stalled browser delays page loads and the other clients for up to the
-  5 s send timeout per frame. Options: shorter send timeout, or a per-client
-  send task. Proposal, owner decision.
-- [ ] **STA retries disturb the fallback AP** (final review, 2026-10-02): in
-  AP+STA fallback every STA retry scans channels and the AP follows the STA
-  channel, which can disrupt a phone fixing wrong credentials on the AP. Option:
-  pause STA retries while a station is connected to the AP. Proposal, owner
-  decision.
 
 ## RTL track
 

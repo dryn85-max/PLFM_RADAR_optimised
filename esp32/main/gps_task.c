@@ -26,6 +26,12 @@
 #define GPS_SILENT_US 3000000
 #define GPS_LOG_US 10000000
 #define GPS_POLL_US 1000000
+/* The ESP stamp of a GPS time_sync is taken when the RMC line completes, d = 128 ms after
+ * the UTC instant the RMC names (bench 2026-10-02 against SNTP, p1..p99 119..136 ms). The
+ * host maps utc(t) = utc_sync + (t - t_sync) (host/ld2410_rec.py utc_us), so for the same
+ * stamp the record must carry utc_rmc + d. Only time_sync gets it; gps_fix and the live
+ * snapshot keep the raw RMC time. */
+#define GPS_RMC_DELAY_US 128000
 /* UTC state machine (spec R3): a NAV-TIMEUTC answer younger than UTC_FRESH_US decides
  * valid / not valid; with no fresh answer the state is "not valid" (wait, GPS time is not
  * used yet) until NO_UBX_US have passed since the later of the last answer and the talk
@@ -124,7 +130,7 @@ static void on_event(const nmea_event_t *ev, void *vctx)
          * answer UBX at all (spec decision 2); never while "not valid" (leap seconds). */
         if ((ev->fix.flags & both) == both && ev->fix.utc_unix_ms > 0 &&
             (st == GPS_UTC_VALID || st == GPS_UTC_NO_UBX)) {
-            rec_time_sync_t ts = {.utc_unix_us = ev->fix.utc_unix_ms * 1000, .source = TIME_SRC_GPS};
+            rec_time_sync_t ts = {.utc_unix_us = ev->fix.utc_unix_ms * 1000 + GPS_RMC_DELAY_US, .source = TIME_SRC_GPS};
             uint8_t buf[REC_TIME_SYNC_LEN];
             if (rec_time_sync_encode(buf, &ts) == 0) {
                 push_record(ctx->rmc_us, REC_TYPE_TIME_SYNC, buf, sizeof(buf));
