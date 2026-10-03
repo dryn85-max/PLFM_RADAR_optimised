@@ -110,16 +110,14 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   p1..p99 119..136 ms, against SNTP). Wire
   the module's PPS output to a free GPIO, stamp the edge in an interrupt and
   correct the `time_sync` record.
-- [ ] **GPS UTC wrong by whole seconds after the first fix.** Bench 2026-10-02:
-  the NEO-6M reported UTC 3 s ahead for 5.6 min after its first fix (likely the
-  default leap-second count before the satellites' UTC parameters are decoded;
-  VERIFY). The host conversion gives GPS priority, so those records get a UTC
-  about 3 s late. Partly handled (owner decision 2026-10-02): the host rejects
-  a GPS `time_sync` more than 1 s off SNTP, which needs Wi-Fi STA. Open: the
-  case without SNTP (ignore GPS time for the first 12.5 min after a fix, or ask
-  the receiver via UBX `NAV-TIMEUTC` validity flags, which ends the "factory
-  configuration, no UBX" rule), and whether to subtract the measured 128 ms
-  RMC delay.
+- [ ] **GPS time: subtract the measured 128 ms RMC delay?** The whole-second UTC
+  error after the first fix (bench 2026-10-02: +3 s for 5.6 min) is done in the
+  firmware (owner decision 2026-10-03): GPS `time_sync` is written only while UBX
+  `NAV-TIMEUTC` reports validUTC = 1 (and as a fallback when the module does not
+  answer UBX), also without SNTP; the host SNTP check stays as a second line of
+  defence; bench verification is in the VERIFY list of `esp32/README.md`. Open:
+  whether to subtract the measured 128 ms RMC delay (p1..p99 119..136 ms,
+  against SNTP) from the GPS `time_sync` value; today it is not corrected.
 - [ ] **LD2410C settings: gate 0/1 write not bench-tested.** The settings cycle
   passed on the bench 2026-10-02 (see the VERIFY list in `esp32/README.md`),
   except a `0x0064` write for gate 0 or 1 with the unchanged still value
@@ -130,6 +128,14 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   the BMI160 register values, delays and sensitivities in `esp32/main/imu_task.c`
   (marked VERIFY there and in the README) and the NEO-6M default NMEA output,
   baud rate, cold-start figures and PPS behaviour.
+- [ ] **OTA firmware update.** Owner 2026-10-03: a separate cycle after PR #10,
+  to be brainstormed. Idea: two OTA app slots plus `otadata` in the 32 MB flash
+  (for example 2 x 4 MB), NVS kept at 0x9000 so the Wi-Fi credentials survive;
+  one last USB flash is needed for the new partition table. Rollback:
+  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, the new app is marked valid only
+  after a healthy boot. Upload only from the AP (page `/update` and
+  `curl --data-binary @build/aeris_mvp.bin http://192.168.4.1/update`), never
+  from the home network.
 - [ ] **Decide A (everything on the ESP32-S3) vs B (hybrid STM32 + ESP32-S3)
   when the RF chain is bought.** Pin-count analysis summary: the ESP32-S3
   N32R8V has about 27-31 usable GPIO (octal flash/PSRAM take GPIO26-37, strapping

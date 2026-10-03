@@ -20,6 +20,15 @@ typedef enum {
     SNAP_GPS_OK = 2
 } snap_gps_t;
 
+/* UBX NAV-TIMEUTC state (spec R4/R5). Zero (UNKNOWN) is what a zero-initialised
+ * snapshot_t carries: the GPS task has not reported a state -> "utc_state": null. */
+typedef enum {
+    SNAP_UTC_UNKNOWN = 0, /* not reported -> null */
+    SNAP_UTC_NO_UBX = 1,  /* no NAV-TIMEUTC answer from the module -> "no_ubx" */
+    SNAP_UTC_NOT_VALID = 2, /* answers arrive, validUTC = 0 -> "not_valid" */
+    SNAP_UTC_VALID = 3    /* validUTC = 1 -> "valid" */
+} snap_utc_t;
+
 typedef enum {
     SNAP_IMU_ABSENT = 0, /* no sensor answered since boot */
     SNAP_IMU_ERROR = 1,  /* answered before, now failing or stale */
@@ -40,6 +49,7 @@ typedef struct {
     snap_gps_t gps_status;
     uint8_t have_gps;      /* 0: `gps` not valid (no epoch yet) */
     rec_gps_fix_t gps;
+    snap_utc_t gps_utc_state; /* 0 (zero-init) = unknown */
     snap_imu_t imu_status;
     uint8_t have_imu;      /* 0: `imu` not valid (no record yet) */
     rec_imu_t imu;
@@ -48,7 +58,9 @@ typedef struct {
 
 /* Top-level keys: seq, frame_no, esp_time_us, link, data, then after "data": "gps", "imu", "time_source".
  *   gps: {status:"absent"|"silent"|"ok", fix:bool, fix_quality, sats, hdop,
- *         lat, lon, alt_m, speed_kmh, course_deg, utc, time_valid, pos_valid}
+ *         lat, lon, alt_m, speed_kmh, course_deg, utc, time_valid, pos_valid,
+ *         utc_state:"valid"|"not_valid"|"no_ubx"|null}  (last key; null = unknown, also
+ *         for any out-of-range enum value; independent of status/have_gps)
  *   imu: {status:"absent"|"error"|"ok", pitch_deg, roll_deg, valid:bool}
  *   time_source: "gps"|"sntp"|"none"
  * Values that are not valid are null (everything but status/flags when the

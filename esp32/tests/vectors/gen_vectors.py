@@ -137,6 +137,19 @@ def main():
             "fix_quality": 2,
             "flags": 0x07,
         },
+        # UBX-verified UTC: all four NMEA flags plus bit 4 (GPS_FLAG_UTC_VERIFIED)
+        "gps_fix_utc_verified": {
+            "utc_unix_ms": 1790944498250,
+            "lat_e7": 525200000,
+            "lon_e7": 134050000,
+            "alt_cm": 3475,
+            "speed_cmps": 0,
+            "course_cdeg": 0,
+            "hdop_x100": 80,
+            "sats": 10,
+            "fix_quality": 1,
+            "flags": 0x1F,
+        },
         # no fix: everything invalid, utc 0
         "gps_fix_nofix": {
             "utc_unix_ms": 0,

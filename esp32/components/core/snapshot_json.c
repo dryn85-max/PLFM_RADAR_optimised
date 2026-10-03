@@ -109,7 +109,13 @@ static void put_gps(w_t *w, const snapshot_t *s)
     } else {
         put(w, "null");
     }
-    put(w, ",\"time_valid\":%s,\"pos_valid\":%s}", tm ? "true" : "false", pos ? "true" : "false");
+    put(w, ",\"time_valid\":%s,\"pos_valid\":%s", tm ? "true" : "false", pos ? "true" : "false");
+    switch (s->gps_utc_state) {
+    case SNAP_UTC_NO_UBX: put(w, ",\"utc_state\":\"no_ubx\"}"); break;
+    case SNAP_UTC_NOT_VALID: put(w, ",\"utc_state\":\"not_valid\"}"); break;
+    case SNAP_UTC_VALID: put(w, ",\"utc_state\":\"valid\"}"); break;
+    default: put(w, ",\"utc_state\":null}"); break;
+    }
 }
 
 static void put_imu(w_t *w, const snapshot_t *s)

@@ -175,8 +175,11 @@ stays in the repo unchanged.
  |        +--> ring buffer, 4 MiB PSRAM (typed records, one seq)       |
  |        +--> latest snapshot (mutex)                                 |
  |   request queue (depth 1): /ld2410 settings, between frame reads    |
- | gps task (core 1, prio 4): UART2 -> nmea (RMC/GGA)                  |
- |        +--> gps_fix per epoch, time_sync (GPS) per valid RMC        |
+ | gps task (core 1, prio 4): UART2 -> gps_rx -> nmea (RMC/GGA) + ubx  |
+ |        UBX NAV-TIMEUTC poll 1 Hz on TX -> UTC state valid/not valid/|
+ |        no ubx                                                       |
+ |        +--> gps_fix per epoch (bit 4 = UTC verified)                |
+ |        +--> time_sync (GPS) per valid RMC, gated on the UTC state   |
  | imu task (core 1, prio 3): I2C -> BMI160 100 Hz -> tilt filter      |
  |        +--> imu record every 100 ms (10 Hz)                         |
  | SNTP (pool.ntp.org, on STA IP) -> time_sync (SNTP)                  |
@@ -211,13 +214,15 @@ Data flow:
    unchanged for every type. A missing or silent GPS or IMU never touches the
    LD2410C path.
 2b. **Time.** UTC is carried by `time_sync` records: GPS on each RMC with status
-   `A` and valid time and date (no PPS: measured 128 ms late), SNTP
+   `A` and valid time and date (no PPS: measured 128 ms late) while the UTC state is `valid`, or `no ubx` as a
+   fallback (the GPS task polls UBX NAV-TIMEUTC once per second and withholds GPS
+   `time_sync` while validUTC = 0, i.e. the leap-second count is not yet known), SNTP
    on each synchronisation over the STA link. Both are recorded; the live page
    shows GPS while its latest sync is under 5 s old, else SNTP. The PC converts
    `esp_time_us` to UTC with a GPS `time_sync` of the same boot within +-2 s, else
    the nearest preceding `time_sync` of any source; a GPS sync more than 1 s off
-   the nearest SNTP sync of its boot is rejected (whole-second UTC error of the
-   NEO-6M after a cold-start fix).
+   the nearest SNTP sync of its boot is rejected (second line of defence for the
+   whole-second UTC error of the NEO-6M after a cold-start fix).
 2c. **Tilt.** Pitch and roll are absolute (complementary filter on the gravity
    direction; body frame +X boresight, +Y left, +Z up; sensor-to-body mapping is
    a firmware constant). There is no azimuth: no magnetometer.
@@ -270,6 +275,10 @@ task owns the on-board RGB LED (GPIO38, RMT driver, 5 % brightness) and picks th
 colour from a pure function (`status_led`), by priority: button zone colour,
 confirmation flashes (3 x), AP only (blue steady), AP on demand (blue slow
 blink), off.
+
+The console log is readable on a phone at `/log` (an `esp_log` hook feeds a 16 KB RAM
+ring; `ESP_LOGx` only, not persistent; see the "Web console log" section of
+[esp32/README.md](../esp32/README.md)).
 
 Not verified on hardware yet; see the VERIFY list in
 [esp32/README.md](../esp32/README.md) (the GPS and IMU parts have never run on

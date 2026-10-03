@@ -28,7 +28,8 @@ def vec(name: str) -> tuple[bytes, dict]:
     return (VEC / f"{name}.bin").read_bytes(), json.loads((VEC / f"{name}.json").read_text())
 
 
-GPS_VECS = ["gps_fix_nominal", "gps_fix_southwest", "gps_fix_nofix", "gps_fix_extremes"]
+GPS_VECS = ["gps_fix_nominal", "gps_fix_southwest", "gps_fix_nofix", "gps_fix_extremes",
+            "gps_fix_utc_verified"]
 IMU_VECS = ["imu_nominal", "imu_extremes"]
 SYNC_VECS = ["time_sync_gps", "time_sync_sntp", "time_sync_edge"]
 NORMAL_RAW = vec("frame_normal")[0]
@@ -804,6 +805,14 @@ def jtuple(d: dict) -> dict:
     return {k: tuple(v) if isinstance(v, list) else v for k, v in d.items()}
 
 
+def test_gps_utc_verified_flag():
+    assert lr.GPS_FLAG_UTC_VERIFIED == 0x10
+    v = lr.decode_gps_fix(vec("gps_fix_utc_verified")[0])
+    assert v.flags == 0x1F and v.utc_verified and v.has_fix
+    assert not lr.decode_gps_fix(vec("gps_fix_nominal")[0]).utc_verified
+    assert not lr.decode_gps_fix(vec("gps_fix_nofix")[0]).utc_verified
+
+
 @pytest.mark.parametrize("name", GPS_VECS)
 def test_gps_fix_vectors(name):
     raw, exp = vec(name)
@@ -1471,7 +1480,7 @@ def test_info_gps_imu_time_stats(tmp_path, capsys):
         gps_rec(4, 10),
         gps_rec(5, 20, fix_quality=0),  # position flag but quality 0: no fix
         gps_rec(6, 30, flags=0x03),  # time/date only, no position: no fix
-        gps_rec(7, 40),
+        gps_rec(7, 40, flags=0x1F),  # fix with UTC verified
         imu_rec(8, 50),
         lr.UnknownRec(9, 60, 1, 9, b""),
         frame_at(10, 70),
@@ -1479,13 +1488,14 @@ def test_info_gps_imu_time_stats(tmp_path, capsys):
     ]
     s = lr.summarize(0, recs)
     assert (s["frames"], s["gps_records"], s["gps_fixes"], s["imu_records"]) == (2, 4, 2, 1)
-    assert s["fix_ratio"] == 0.5 and s["time_syncs"] == 4
+    assert s["fix_ratio"] == 0.5 and s["time_syncs"] == 4 and s["gps_utc_verified"] == 1
     assert s["time_sources"] == {"gps": 1, "sntp": 2} and s["unknown_records"] == 1
     f = tmp_path / "i.ldrec"
     f.write_bytes(build_file(recs))
     assert lr.main(["info", str(f)]) == 0
     out = capsys.readouterr().out
     assert "gps records:   4" in out and "gps fix ratio: 0.500 (2 with fix)" in out
+    assert "gps utc verified: 1" in out
     assert "imu records:   1" in out and "time syncs:    4 (gps 1, sntp 2)" in out
     assert "unknown type:  1 records kept raw" in out
     assert "frames:        2" in out
@@ -1494,6 +1504,7 @@ def test_info_gps_imu_time_stats(tmp_path, capsys):
     assert lr.main(["info", str(f)]) == 0
     out = capsys.readouterr().out
     assert "gps fix ratio: n/a" in out and "time syncs:    0 (none)" in out
+    assert "gps utc verified: 0" in out
 
 
 def test_info_prints_rejected_gps_line_only_when_nonzero(tmp_path, capsys):

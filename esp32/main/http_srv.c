@@ -94,7 +94,7 @@ static const char WIFI_FORM[] =
     "<label>Password (empty = open network, otherwise 8-64 characters)"
     "<input name=\"password\" type=\"password\" maxlength=\"64\"></label>"
     "<button type=\"submit\">Save and reboot</button>"
-    "</form><p class=\"k\"><a href=\"/ld2410\">LD2410C radar settings</a></p></main>"
+    "</form><p class=\"k\"><a href=\"/ld2410\">LD2410C radar settings</a> &middot; <a href=\"/log\">Log</a></p></main>"
     "<script>document.querySelectorAll('a[data-s]').forEach(function(a){"
     "a.onclick=function(){document.getElementById('ssid').value=a.dataset.s;return false}})"
     "</script></body></html>";
@@ -266,7 +266,7 @@ static esp_err_t wifi_post(httpd_req_t *req)
 #define LD_REQ_TIMEOUT_MS 5000
 #define LD_RECV_RETRIES 3 /* recv timeouts tolerated while reading the /ld2410 body */
 
-#define LD_LINKS_INNER "<a href=\"/ld2410\">refresh</a> &middot; <a href=\"/wifi\">Wi-Fi setup</a>"
+#define LD_LINKS_INNER "<a href=\"/ld2410\">refresh</a> &middot; <a href=\"/wifi\">Wi-Fi setup</a> &middot; <a href=\"/log\">Log</a>"
 #define LD_LINKS "<div class=\"k\">" LD_LINKS_INNER "</div>"
 
 /* Table 7 (p.15) of Protocolo_comunicacion_serial_LD2410C.pdf; -1 = not settable. */
@@ -560,8 +560,8 @@ esp_err_t http_srv_start(void)
 {
     if (s_server != NULL) return ESP_ERR_INVALID_STATE;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    /* /wifi x2, /ld2410 x2, live page and /ws: 6 of 8 */
-    cfg.max_uri_handlers = 8;
+    /* /wifi x2, /ld2410 x2, live page and /ws, /log and /log/data: 8 of 10 */
+    cfg.max_uri_handlers = 10;
     /* httpd needs max_open_sockets <= CONFIG_LWIP_MAX_SOCKETS - 3 (16 in sdkconfig.defaults) */
     cfg.max_open_sockets = 7;
     cfg.close_fn = on_session_close;

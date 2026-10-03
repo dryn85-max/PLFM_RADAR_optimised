@@ -29,7 +29,7 @@ static void test_engineering_exact(void)
         "\"max_moving_gate\":8,\"max_still_gate\":7,"
         "\"moving_gate_energy\":[100,90,80,70,60,50,40,30,20],"
         "\"still_gate_energy\":[0,3,6,9,12,15,18,21,24]},"
-        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
+        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
     TT_ASSERT_EQ(strlen(exp), n);
     TT_ASSERT(strcmp(out, exp) == 0);
 }
@@ -43,13 +43,13 @@ static void test_normal_and_no_data(void)
         "{\"seq\":5,\"frame_no\":4294967295,\"esp_time_us\":9,\"link\":\"lost\",\"data\":{"
         "\"engineering\":0,\"target_state\":3,\"moving_dist_cm\":80,\"moving_energy\":64,"
         "\"still_dist_cm\":120,\"still_energy\":50,\"detect_dist_cm\":85},"
-        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
+        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
     TT_ASSERT_EQ(strlen(exp), n);
     TT_ASSERT(strcmp(out, exp) == 0);
     memset(&s, 0, sizeof s);
     n = snapshot_json(out, sizeof out, &s);
     exp = "{\"seq\":0,\"frame_no\":0,\"esp_time_us\":0,\"link\":\"no_data\",\"data\":null,"
-        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
+        "\"gps\":{\"status\":\"absent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,\"hdop\":null,\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,\"utc\":null,\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null},\"imu\":{\"status\":\"absent\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false},\"time_source\":\"none\"}";
     TT_ASSERT_EQ(strlen(exp), n);
     TT_ASSERT(strcmp(out, exp) == 0);
     s.link = (snap_link_t)77; /* unknown value must not produce garbage */
@@ -111,7 +111,7 @@ static void test_valid_fix(void)
         "\"gps\":{\"status\":\"ok\",\"fix\":true,\"fix_quality\":1,\"sats\":9,\"hdop\":1.20,"
         "\"lat\":47.8500000,\"lon\":8.7500000,\"alt_m\":412.30,\"speed_kmh\":10.01,"
         "\"course_deg\":180.50,\"utc\":\"2025-10-02T12:05:06.123Z\",\"time_valid\":true,"
-        "\"pos_valid\":true},\"imu\":{\"status\":\"ok\",\"pitch_deg\":12.34,\"roll_deg\":-0.05,"
+        "\"pos_valid\":true,\"utc_state\":null},\"imu\":{\"status\":\"ok\",\"pitch_deg\":12.34,\"roll_deg\":-0.05,"
         "\"valid\":true},\"time_source\":\"gps\"}";
     TT_ASSERT(n > 0);
     TT_ASSERT(strcmp(tail_of(out), exp) == 0);
@@ -145,7 +145,7 @@ static void test_no_fix_and_partial_flags(void)
     TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
     TT_ASSERT(strstr(out, "\"gps\":{\"status\":\"ok\",\"fix\":false,\"fix_quality\":0,\"sats\":0,\"hdop\":null,"
                           "\"lat\":null,\"lon\":null,\"alt_m\":null,\"speed_kmh\":null,\"course_deg\":null,"
-                          "\"utc\":\"2025-10-02T12:05:06.123Z\",\"time_valid\":true,\"pos_valid\":false}"));
+                          "\"utc\":\"2025-10-02T12:05:06.123Z\",\"time_valid\":true,\"pos_valid\":false,\"utc_state\":null}"));
     /* time without date: utc stays null */
     s.gps.flags = GPS_FLAG_TIME_VALID;
     TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
@@ -182,7 +182,7 @@ static void test_silent_error_and_sources(void)
     TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
     TT_ASSERT(strstr(out, "\"gps\":{\"status\":\"silent\",\"fix\":false,\"fix_quality\":null,\"sats\":null,"
                           "\"hdop\":null,\"lat\":null,"));
-    TT_ASSERT(strstr(out, "\"time_valid\":false,\"pos_valid\":false}"));
+    TT_ASSERT(strstr(out, "\"time_valid\":false,\"pos_valid\":false,\"utc_state\":null}"));
     TT_ASSERT(strstr(out, "\"imu\":{\"status\":\"error\",\"pitch_deg\":null,\"roll_deg\":null,\"valid\":false}"));
     TT_ASSERT(strstr(out, "\"time_source\":\"sntp\"}"));
     /* IMU ok but filter not valid yet, or no record yet */
@@ -203,6 +203,32 @@ static void test_silent_error_and_sources(void)
     TT_ASSERT_EQ(-EINVAL, snapshot_json(out, sizeof out, &s));
     s = fix_snap(); s.imu_status = (snap_imu_t)5;
     TT_ASSERT_EQ(-EINVAL, snapshot_json(out, sizeof out, &s));
+}
+
+static void test_utc_state(void)
+{
+    static const struct { snap_utc_t st; const char *txt; } c[] = {
+        {SNAP_UTC_UNKNOWN, ",\"utc_state\":null}"},
+        {SNAP_UTC_NO_UBX, ",\"utc_state\":\"no_ubx\"}"},
+        {SNAP_UTC_NOT_VALID, ",\"utc_state\":\"not_valid\"}"},
+        {SNAP_UTC_VALID, ",\"utc_state\":\"valid\"}"},
+        {(snap_utc_t)99, ",\"utc_state\":null}"}, /* out of range -> unknown */
+    };
+    for (unsigned i = 0; i < sizeof c / sizeof *c; i++) {
+        snapshot_t s = fix_snap();
+        char out[SNAPSHOT_JSON_MAX];
+        s.gps_utc_state = c[i].st;
+        TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
+        /* last key of the gps object, right before the imu object */
+        char exp[96];
+        snprintf(exp, sizeof exp, "\"pos_valid\":true%s,\"imu\"", c[i].txt);
+        TT_ASSERT(strstr(out, exp) != NULL);
+        /* independent of the gps status: still reported when the module is silent */
+        s.gps_status = SNAP_GPS_SILENT;
+        TT_ASSERT(snapshot_json(out, sizeof out, &s) > 0);
+        snprintf(exp, sizeof exp, "\"pos_valid\":false%s,\"imu\"", c[i].txt);
+        TT_ASSERT(strstr(out, exp) != NULL);
+    }
 }
 
 static void test_fix_never_truncates_and_worst_case(void)
@@ -228,6 +254,7 @@ static void test_fix_never_truncates_and_worst_case(void)
     w.gps.sats = 255; w.gps.fix_quality = 255; w.gps.utc_unix_ms = 253402300799999LL;
     w.imu.pitch_cdeg = INT16_MIN; w.imu.roll_cdeg = INT16_MIN;
     w.time_source = TSRC_SNTP;
+    w.gps_utc_state = SNAP_UTC_NOT_VALID; /* longest utc_state text */
     int n = snapshot_json(buf, sizeof buf, &w);
     TT_ASSERT(n > 0);
     printf("worst-case snapshot JSON: %d bytes + NUL, limit %d\n", n, SNAPSHOT_JSON_MAX);
@@ -246,6 +273,7 @@ int main(void)
     TT_RUN(test_negative_coordinates);
     TT_RUN(test_no_fix_and_partial_flags);
     TT_RUN(test_silent_error_and_sources);
+    TT_RUN(test_utc_state);
     TT_RUN(test_fix_never_truncates_and_worst_case);
     return TT_RESULT();
 }

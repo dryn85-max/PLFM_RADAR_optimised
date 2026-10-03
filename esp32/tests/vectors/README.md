@@ -28,6 +28,7 @@ JSON keys mirror the C struct field names (`ld_data_t`, `ld_ack_t`,
 | `gps_fix_nominal` | gps_fix payload (32 B), all four valid flags (0x0F), 52.52 N 13.405 E, 34.75 m, UTC 2026-10-02T12:34:56.789Z | `record_type:1, payload_hex, gps_fix{utc_unix_ms, lat_e7, lon_e7, alt_cm, speed_cmps, course_cdeg, hdop_x100, sats, fix_quality, flags}` |
 | `gps_fix_southwest` | southern and western hemisphere (negative lat/lon), negative altitude, altitude flag clear (0x07) | same keys |
 | `gps_fix_nofix` | no fix: flags 0, utc 0, position 0, HDOP 99.99, 0 satellites | same keys |
+| `gps_fix_utc_verified` | UBX-verified UTC: flags 0x1F (the four NMEA flags plus `GPS_FLAG_UTC_VERIFIED` 0x10), UTC 2026-10-02T12:34:58.250Z, 10 satellites | same keys |
 | `gps_fix_extremes` | lat -90 deg, lon -180 deg, alt INT32_MIN, utc INT64_MAX, speed/HDOP 65535, sats/quality/flags 255 | same keys |
 | `imu_nominal` | imu payload (18 B), valid | `record_type:2, payload_hex, imu{acc_mg[3], gyr_ddps[3], pitch_cdeg, roll_cdeg, n_samples, status}` |
 | `imu_extremes` | INT16 minima/maxima, pitch -90 deg, roll 180 deg, status 0 (invalid), 255 samples | same keys |
