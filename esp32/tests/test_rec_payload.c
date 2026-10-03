@@ -24,7 +24,8 @@ static void jarr(const char *j, const char *key, int16_t *out, int n)
     }
 }
 
-static const char *const GPS_VECS[] = {"gps_fix_nominal", "gps_fix_southwest", "gps_fix_nofix", "gps_fix_extremes"};
+static const char *const GPS_VECS[] = {"gps_fix_nominal", "gps_fix_southwest", "gps_fix_nofix", "gps_fix_extremes",
+                                     "gps_fix_utc_verified"};
 static const char *const IMU_VECS[] = {"imu_nominal", "imu_extremes"};
 static const char *const SYNC_VECS[] = {"time_sync_gps", "time_sync_sntp", "time_sync_edge"};
 
@@ -156,6 +157,24 @@ static void test_saturation(void)
     }
 }
 
+/* flags are a plain byte: every value, incl. GPS_FLAG_UTC_VERIFIED, is passed unchanged */
+static void test_flags_passthrough(void)
+{
+    TT_ASSERT_EQ(0x10, GPS_FLAG_UTC_VERIFIED);
+    TT_ASSERT_EQ(0, GPS_FLAG_UTC_VERIFIED & (GPS_FLAG_TIME_VALID | GPS_FLAG_DATE_VALID |
+                                             GPS_FLAG_POS_VALID | GPS_FLAG_ALT_VALID));
+    rec_gps_fix_t g, d;
+    uint8_t o[REC_GPS_FIX_LEN];
+    memset(&g, 0, sizeof g);
+    for (unsigned f = 0; f < 256; f++) {
+        g.flags = (uint8_t)f;
+        TT_ASSERT_EQ(0, rec_gps_fix_encode(o, &g));
+        TT_ASSERT_EQ(f, o[28]);
+        TT_ASSERT_EQ(0, rec_gps_fix_decode(o, sizeof o, &d));
+        TT_ASSERT_EQ(f, d.flags);
+    }
+}
+
 static void test_bad_input(void)
 {
     uint8_t buf[64]; memset(buf, 0, sizeof buf);
@@ -215,6 +234,7 @@ int main(void)
     TT_RUN(test_sync_vectors);
     TT_RUN(test_explicit_layout);
     TT_RUN(test_saturation);
+    TT_RUN(test_flags_passthrough);
     TT_RUN(test_bad_input);
     TT_RUN(test_record_check);
     return TT_RESULT();

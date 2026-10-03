@@ -285,13 +285,69 @@ static void test_oversized_then_good(void)
     TT_ASSERT_EQ(1, c.n);
     TT_ASSERT_EQ(UBX_MAX_PAYLOAD, c.len[0]);
     TT_ASSERT_EQ(0, p.skipped);
-    /* maximum 16-bit length: skip counter must not wrap early */
-    uint8_t h[6] = {0xB5, 0x62, 0x01, 0x02, 0xFF, 0xFF};
+}
+
+/* Length above UBX_SKIP_MAX: false sync, nothing is swallowed. */
+static void test_huge_length_is_false_sync(void)
+{
+    static const uint16_t lens[] = {UBX_SKIP_MAX + 1u, 1000u, 0xFFFFu};
+    for (size_t k = 0; k < sizeof lens / sizeof lens[0]; k++) {
+        uint8_t buf[64];
+        size_t n = 0;
+        buf[n++] = 0xB5;
+        buf[n++] = 0x62;
+        buf[n++] = 0x01;
+        buf[n++] = 0x02;
+        buf[n++] = (uint8_t)(lens[k] & 0xFF);
+        buf[n++] = (uint8_t)(lens[k] >> 8);
+        n += mk_nav(buf + n, 0x07);
+        for (size_t split = 0; split <= n; split++) {
+            ubx_t p;
+            col_t c = {0};
+            ubx_init(&p);
+            ubx_feed(&p, buf, split, on_ubx, &c);
+            ubx_feed(&p, buf + split, n - split, on_ubx, &c);
+            TT_ASSERT_EQ(1, c.n);
+            TT_ASSERT_EQ(0x07, c.pl[0][19]);
+            TT_ASSERT_EQ(1, p.bad_len);
+            TT_ASSERT_EQ(0, p.skipped);
+            TT_ASSERT_EQ(0, p.bad_ck);
+            TT_ASSERT_EQ(1, p.good);
+            TT_ASSERT(ubx_idle(&p));
+        }
+    }
+    /* the replayed bytes hold a real frame: B5 62 + (B5 62 01 21 ...) reads as
+     * class B5, id 62, length 0x2101 -> false sync, the frame behind is found */
+    uint8_t buf[64];
+    size_t n = 0;
+    buf[n++] = 0xB5;
+    buf[n++] = 0x62;
+    n += mk_nav(buf + n, 0x03);
+    ubx_t p;
+    col_t c = {0};
     ubx_init(&p);
-    memset(&c, 0, sizeof c);
-    ubx_feed(&p, h, 6, on_ubx, &c);
+    ubx_feed(&p, buf, n, on_ubx, &c);
+    TT_ASSERT_EQ(1, p.bad_len);
+    TT_ASSERT_EQ(1, c.n);
+    TT_ASSERT_EQ(1, p.good);
+}
+
+/* Exactly UBX_SKIP_MAX is still skipped by length. */
+static void test_skip_max_is_skipped(void)
+{
+    uint8_t big[UBX_SKIP_MAX];
+    uint8_t buf[UBX_SKIP_MAX + 64];
+    memset(big, 0xB5, sizeof big);
+    size_t n = mkframe(buf, 0x05, 0x01, big, sizeof big);
+    n += mk_nav(buf + n, 0x07);
+    ubx_t p;
+    col_t c = {0};
+    ubx_init(&p);
+    ubx_feed(&p, buf, n, on_ubx, &c);
+    TT_ASSERT_EQ(1, c.n);
     TT_ASSERT_EQ(1, p.skipped);
-    TT_ASSERT(!ubx_idle(&p));
+    TT_ASSERT_EQ(0, p.bad_len);
+    TT_ASSERT_EQ(0, p.bad_ck);
 }
 
 static void test_truncated_then_new_sync(void)
@@ -342,6 +398,8 @@ int main(void)
     TT_RUN(test_bad_checksum_then_good);
     TT_RUN(test_resync_inside_corrupt_frame);
     TT_RUN(test_oversized_then_good);
+    TT_RUN(test_huge_length_is_false_sync);
+    TT_RUN(test_skip_max_is_skipped);
     TT_RUN(test_truncated_then_new_sync);
     TT_RUN(test_state_resets);
     return TT_RESULT();

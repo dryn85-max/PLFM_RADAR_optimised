@@ -48,9 +48,18 @@ static void ck_add(ubx_t *p, uint8_t c)
 
 static void step(ubx_t *p, uint8_t c, ubx_cb_t cb, void *ctx);
 
-/* Bad checksum: restart the search right after the first sync byte, replaying the
- * bytes received since (sync2, class, id, length, payload, CK_A, CK_B). Each replay
- * is strictly shorter than the failed frame, so the recursion is bounded. */
+/* False sync (bad checksum, or an implausible length): restart the search right
+ * after the first sync byte, replaying the bytes received since (sync2, class, id,
+ * length[, payload, CK_A, CK_B]). Each replay is strictly shorter than the failed
+ * frame, so the recursion is bounded. */
+static void replay(ubx_t *p, const uint8_t *tmp, size_t n, ubx_cb_t cb, void *ctx)
+{
+    p->state = UBX_ST_IDLE;
+    for (size_t i = 0; i < n; i++) {
+        step(p, tmp[i], cb, ctx);
+    }
+}
+
 static void resync(ubx_t *p, uint8_t rx_b, ubx_cb_t cb, void *ctx)
 {
     uint8_t tmp[1 + 2 + 2 + UBX_MAX_PAYLOAD + 2];
@@ -64,10 +73,7 @@ static void resync(ubx_t *p, uint8_t rx_b, ubx_cb_t cb, void *ctx)
     n += p->len;
     tmp[n++] = p->rx_a;
     tmp[n++] = rx_b;
-    p->state = UBX_ST_IDLE;
-    for (size_t i = 0; i < n; i++) {
-        step(p, tmp[i], cb, ctx);
-    }
+    replay(p, tmp, n, cb, ctx);
 }
 
 static void step(ubx_t *p, uint8_t c, ubx_cb_t cb, void *ctx)
@@ -106,7 +112,13 @@ static void step(ubx_t *p, uint8_t c, ubx_cb_t cb, void *ctx)
         p->len = (uint16_t)(p->len | ((uint16_t)c << 8));
         ck_add(p, c);
         p->idx = 0;
-        if (p->len > UBX_MAX_PAYLOAD) {
+        if (p->len > UBX_SKIP_MAX) {
+            /* implausible length: a spurious sync in NMEA text, not a frame */
+            const uint8_t tmp[5] = {UBX_SYNC2, p->cls, p->id, (uint8_t)(p->len & 0xFFu),
+                                    (uint8_t)(p->len >> 8)};
+            p->bad_len++;
+            replay(p, tmp, sizeof tmp, cb, ctx);
+        } else if (p->len > UBX_MAX_PAYLOAD) {
             p->skipped++;
             /* payload + 2 checksum bytes are discarded, unverified */
             p->idx = (uint32_t)p->len + 2u;

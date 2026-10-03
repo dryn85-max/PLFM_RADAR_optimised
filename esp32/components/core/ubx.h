@@ -7,12 +7,14 @@
  * class, id, length and payload. Polling (section 27.2, p. 86): a message is polled
  * by sending its class/id with an empty payload.
  *
- * Parser: feed the raw byte stream in chunks of any size. A frame whose length
- * exceeds UBX_MAX_PAYLOAD is skipped by its length (payload and checksum bytes are
- * discarded without verification) and counted in `skipped`. On a bad checksum the
- * frame is counted in `bad_ck` and the search restarts after the first sync byte:
- * the bytes already received after it are re-examined, so a good frame hidden
- * inside a corrupted one is still found. */
+ * Parser: feed the raw byte stream in chunks of any size. A frame whose length is in
+ * (UBX_MAX_PAYLOAD, UBX_SKIP_MAX] is skipped by its length (payload and checksum
+ * bytes are discarded without verification) and counted in `skipped`. A length above
+ * UBX_SKIP_MAX is treated as a false sync (e.g. a stray B5 62 in NMEA text): counted
+ * in `bad_len` (not in `skipped`), no bytes are skipped and the search restarts after
+ * the first sync byte. On a bad checksum the frame is counted in `bad_ck` and the
+ * search restarts the same way: the bytes already received after the first sync byte
+ * are re-examined, so a good frame hidden inside a corrupted one is still found. */
 #ifndef UBX_H
 #define UBX_H
 
@@ -23,6 +25,7 @@
 #define UBX_SYNC1 0xB5u
 #define UBX_SYNC2 0x62u
 #define UBX_MAX_PAYLOAD 64u
+#define UBX_SKIP_MAX 512u /* longest frame still skipped by its length */
 #define UBX_CLASS_NAV 0x01u
 #define UBX_ID_NAV_TIMEUTC 0x21u
 #define UBX_TIMEUTC_LEN 20u
@@ -62,7 +65,8 @@ typedef struct {
 
     uint32_t good;
     uint32_t bad_ck;
-    uint32_t skipped;
+    uint32_t skipped; /* frames with length in (UBX_MAX_PAYLOAD, UBX_SKIP_MAX] */
+    uint32_t bad_len; /* false syncs: length > UBX_SKIP_MAX */
 } ubx_t;
 
 void ubx_init(ubx_t *p);

@@ -263,11 +263,47 @@ static void test_ubx_directly_after_nmea_and_bad_ubx(void)
     }
 }
 
+static void test_huge_length_does_not_swallow_nmea(void)
+{
+    /* A stray B5 62 with length 65535 / 513 between NMEA lines: both lines intact. */
+    static const uint16_t lens[] = {0xFFFFu, 513u};
+    char l[160];
+    size_t k = mk_nmea(l, RMC1);
+    for (size_t li = 0; li < 2; li++) {
+        uint8_t buf[512];
+        size_t n = 0;
+        memcpy(buf, l, k);
+        n = k;
+        buf[n++] = 0xB5;
+        buf[n++] = 0x62;
+        buf[n++] = 0x01;
+        buf[n++] = 0x02;
+        buf[n++] = (uint8_t)(lens[li] & 0xFF);
+        buf[n++] = (uint8_t)(lens[li] >> 8);
+        memcpy(buf + n, l, k);
+        n += k;
+        memcpy(buf + n, l, k);
+        n += k;
+        for (size_t s = 0; s <= n; s++) {
+            gps_rx_t r;
+            ncol_t nc;
+            ucol_t uc;
+            run(buf, n, s, &r, &nc, &uc);
+            TT_ASSERT_EQ(0, uc.n);
+            TT_ASSERT_EQ(1, r.ubx.bad_len);
+            TT_ASSERT_EQ(0, r.ubx.skipped);
+            TT_ASSERT_EQ(3, r.nmea.good_lines);
+            TT_ASSERT_EQ(0, r.nmea.bad_lines);
+        }
+    }
+}
+
 int main(void)
 {
     TT_RUN(test_mixed_every_split);
     TT_RUN(test_dollar_and_sync_inside_payload);
     TT_RUN(test_lone_b5_and_b5_in_nmea_line);
     TT_RUN(test_ubx_directly_after_nmea_and_bad_ubx);
+    TT_RUN(test_huge_length_does_not_swallow_nmea);
     return TT_RESULT();
 }

@@ -65,6 +65,7 @@ GPS_FLAG_TIME = 0x01
 GPS_FLAG_DATE = 0x02
 GPS_FLAG_POS = 0x04
 GPS_FLAG_ALT = 0x08
+GPS_FLAG_UTC_VERIFIED = 0x10  # UBX NAV-TIMEUTC validUTC = 1 (esp32 rec_payload.h)
 IMU_STATUS_VALID = 0x01
 SOURCE_NAMES = {1: "gps", 2: "sntp"}
 SOURCE_GPS = 1
@@ -243,6 +244,10 @@ class GpsFix:
     @property
     def alt_valid(self) -> bool:
         return bool(self.flags & GPS_FLAG_ALT)
+
+    @property
+    def utc_verified(self) -> bool:
+        return bool(self.flags & GPS_FLAG_UTC_VERIFIED)
 
     @property
     def has_fix(self) -> bool:
@@ -869,9 +874,12 @@ def summarize(created_unix_ns: int, records: list[FileRec]) -> dict[str, object]
     imus = [r for r in records if isinstance(r, ImuRec)]
     syncs = [r for r in records if isinstance(r, TimeSyncRec)]
     fixes = 0
+    utc_verified = 0
     for g in gps:
         with contextlib.suppress(PayloadError):
-            fixes += decode_gps_fix(g.payload).has_fix
+            fix = decode_gps_fix(g.payload)
+            fixes += fix.has_fix
+            utc_verified += fix.utc_verified
     sources: dict[str, int] = {}
     for t in syncs:
         try:
@@ -892,6 +900,7 @@ def summarize(created_unix_ns: int, records: list[FileRec]) -> dict[str, object]
         "esp_duration_s": None,
         "gps_records": len(gps),
         "gps_fixes": fixes,
+        "gps_utc_verified": utc_verified,
         "fix_ratio": fixes / len(gps) if gps else None,
         "imu_records": len(imus),
         "time_syncs": len(syncs),
@@ -1147,6 +1156,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     _out(f"gps records:   {s['gps_records']}")
     ratio = s["fix_ratio"]
     _out(f"gps fix ratio: {'n/a' if ratio is None else f'{ratio:.3f}'} ({s['gps_fixes']} with fix)")
+    _out(f"gps utc verified: {s['gps_utc_verified']}")
     _out(f"imu records:   {s['imu_records']}")
     srcs = s["time_sources"]
     srctxt = ", ".join(f"{k} {v}" for k, v in sorted(srcs.items())) or "none"  # type: ignore[attr-defined]

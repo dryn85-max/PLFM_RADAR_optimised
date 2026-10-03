@@ -34,6 +34,9 @@
 #define GPS_FLAG_DATE_VALID 0x02u
 #define GPS_FLAG_POS_VALID 0x04u
 #define GPS_FLAG_ALT_VALID 0x08u
+/* Set only while the last UBX NAV-TIMEUTC had validUTC = 1 (spec R3/R4); never from
+ * NMEA alone. rec_gps_fix_encode/decode pass flags through unchanged. */
+#define GPS_FLAG_UTC_VERIFIED 0x10u
 
 #define IMU_STATUS_VALID 0x01u
 
