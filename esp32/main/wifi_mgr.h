@@ -2,6 +2,8 @@
 #ifndef WIFI_MGR_H
 #define WIFI_MGR_H
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 #include "esp_netif.h"
 #include "wifi_scan.h"
@@ -30,5 +32,9 @@ esp_err_t wifi_mgr_ap_on_demand(void);
 /* Start the GPIO0 (BOOT) monitor task; action on release: held 2-5 s = AP on demand, 5-10 s =
  * erase STA credentials and restart, otherwise nothing. Feeds the status LED. */
 esp_err_t wifi_mgr_boot_monitor_start(void);
+
+/* True when the network is usable: the STA has an IP, or the (fallback / on-demand) AP is running.
+ * Safe to call from any task; false before wifi_mgr_start. */
+bool wifi_mgr_is_up(void);
 
 #endif

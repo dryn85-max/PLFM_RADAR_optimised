@@ -16,6 +16,9 @@ esp_err_t http_srv_register(const httpd_uri_t *uri);
 /* Server handle (NULL before http_srv_start). */
 httpd_handle_t http_srv_handle(void);
 
+/* True once the server has been started. */
+bool http_srv_is_running(void);
+
 /* Called (in the httpd task) when a client socket is closed; set before http_srv_start. */
 void http_srv_set_close_hook(void (*hook)(int fd));
 

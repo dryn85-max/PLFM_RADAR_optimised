@@ -10,15 +10,20 @@
 #include "imu_task.h"
 #include "ld2410_task.h"
 #include "live.h"
+#include "ota_validate.h"
 #include "rec_srv.h"
 #include "status_led_task.h"
 #include "web_log.h"
 #include "wifi_mgr.h"
 
-/* sdkconfig.defaults selects the 1.5 MB single-app partition table; an existing esp32/sdkconfig
- * overrides the defaults and would keep the 1 MB table, which the firmware already fills to 97 %. */
-#ifndef CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE
-#error "CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y is required (delete esp32/sdkconfig and rebuild)"
+/* sdkconfig.defaults selects the custom OTA partition table (esp32/partitions.csv) and the
+ * bootloader rollback; an existing esp32/sdkconfig overrides the defaults and would keep the old
+ * single-app table (no OTA slots) or no rollback support. */
+#ifndef CONFIG_PARTITION_TABLE_CUSTOM
+#error "CONFIG_PARTITION_TABLE_CUSTOM=y is required (delete esp32/sdkconfig and rebuild)"
+#endif
+#ifndef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+#error "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y is required (delete esp32/sdkconfig and rebuild)"
 #endif
 
 #define RING_BYTES_PSRAM (4u * 1024u * 1024u)
@@ -106,4 +111,5 @@ void app_main(void)
             ESP_LOGE(TAG, "web_log_register failed: %s", esp_err_to_name(err));
         }
     }
+    ota_validate_start(); /* last: Wi-Fi and HTTP state is final */
 }

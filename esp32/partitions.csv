@@ -1,0 +1,16 @@
+# AERIS-10 Lite MVP partition table (OTA, two app slots). Selected from sdkconfig.defaults.
+#
+# nvs stays at 0x9000 / 0x6000, the same offset and size as the earlier single-app tables, so the
+# stored Wi-Fi credentials and the AP password survive the one-time USB migration.
+# otadata (0xf000, 0x2000) holds the OTA slot selection; phy_init keeps its usual place.
+# App slots start at 0x20000 (64 KB aligned, as the MMU page size requires) and are 4 MB each;
+# ota_1 has no offset: gen_esp32part.py places it right after ota_0 (0x420000, also 64 KB aligned).
+# There is no factory app: the first USB flash goes to ota_0.
+# Total end 0x820000, well inside the 32 MB flash.
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+otadata,  data, ota,     0xf000,  0x2000,
+phy_init, data, phy,     0x11000, 0x1000,
+ota_0,    app,  ota_0,   0x20000, 4M,
+ota_1,    app,  ota_1,   ,        4M,

@@ -23,6 +23,8 @@ static void (*s_close_hook)(int fd);
 
 httpd_handle_t http_srv_handle(void) { return s_server; }
 
+bool http_srv_is_running(void) { return s_server != NULL; }
+
 void http_srv_set_close_hook(void (*hook)(int fd)) { s_close_hook = hook; }
 
 /* Replaces the default session close: must close the socket itself. */
