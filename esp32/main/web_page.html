@@ -49,6 +49,9 @@ h2{font-size:.95rem;margin:0 0 8px}
 .ring{fill:none;stroke:var(--bd);stroke-width:4}.ring.lv{stroke:var(--ok)}
 .na{color:var(--mut)}
 a{color:var(--bar)}
+#mev{list-style:none;margin:8px 0 0;padding:0;font-size:.85rem}
+#mev li{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;padding:6px 0;border-top:1px solid var(--bd)}
+#mev .mt{color:var(--mut)}
 </style>
 </head>
 <body>
@@ -75,6 +78,12 @@ a{color:var(--bar)}
     <div class="k">Moving, gates 0&ndash;8</div><div class="bars m" id="gm"></div><div class="lab" id="lm"></div>
     <div class="k" style="margin-top:10px">Still, gates 0&ndash;8</div><div class="bars s" id="gs"></div><div class="lab" id="ls"></div>
   </div>
+</div>
+<div class="card" id="mcard" hidden>
+  <div class="sp"><h2>Motion</h2><span class="st warn" id="mst">-</span></div>
+  <div class="k">Current distance</div><div class="v" id="mdi">&mdash;</div>
+  <ul id="mev"></ul>
+  <div class="k" id="mnone">no events yet</div>
 </div>
 <div class="card">
   <div class="sp"><h2>GPS</h2><span class="st warn" id="gst">not connected</span></div>
@@ -218,8 +227,57 @@ a{color:var(--bar)}
   }
   renderGps(null, "none"); renderImu(null);
 
+  /* Motion card: shown only when the snapshot carries "motion" (older firmware: stays hidden).
+     The event list is refetched when n or active changes; one fetch at a time. */
+  var mKey = null, mBusy = false, mAgain = false;
+  function ago(ms) {
+    var s = Math.round(ms / 1000);
+    if (s < 60) return s + " s ago";
+    if (s < 3600) return Math.floor(s / 60) + " min " + (s % 60) + " s ago";
+    return Math.floor(s / 3600) + " h " + Math.floor(s % 3600 / 60) + " min ago";
+  }
+  function li(left, right) {
+    var e = document.createElement("li");
+    var a = document.createElement("span"); a.textContent = left;
+    var b = document.createElement("span"); b.className = "mt"; b.textContent = right;
+    e.appendChild(a); e.appendChild(b); return e;
+  }
+  function renderEvents(list) {
+    var ul = $("mev");
+    while (ul.firstChild) ul.removeChild(ul.firstChild);
+    if (!Array.isArray(list)) list = [];
+    list.forEach(function (e) {
+      if (!e || typeof e !== "object") return;
+      var d = num(e.dur_ms);
+      ul.appendChild(li("#" + val(e.no) + " " + (num(e.ago_ms) === null ? "-" : ago(e.ago_ms)) +
+        " \u00b7 " + (d === null ? "active" : (d / 1000).toFixed(1) + " s"),
+        metres(e.dist) + " (" + metres(e.min) + "\u2013" + metres(e.max) + ") \u00b7 energy " + val(e.energy)));
+    });
+    $("mnone").hidden = ul.children.length > 0;
+  }
+  function fetchEvents() {
+    if (mBusy) { mAgain = true; return; }
+    mBusy = true; mAgain = false;
+    var done = function () { mBusy = false; if (mAgain) fetchEvents(); };
+    fetch("/motion/events", { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (l) { renderEvents(l); done(); })
+      .catch(function () { mKey = null; done(); }); /* retry on the next snapshot */
+  }
+  function renderMotion(mo) {
+    var card = $("mcard");
+    if (!mo || typeof mo !== "object") { card.hidden = true; return; }
+    card.hidden = false;
+    var en = mo.en === 1, act = mo.active === 1;
+    setSt("mst", !en ? "disabled" : act ? "active" : "idle", !en ? "warn" : act ? "bad" : "ok");
+    $("mdi").textContent = num(mo.dist) === null ? "\u2014" : metres(mo.dist);
+    var key = val(mo.n) + "/" + (act ? 1 : 0);
+    if (key !== mKey) { mKey = key; fetchEvents(); }
+  }
+
   function render(m) {
     if (!m || typeof m !== "object") return;
+    renderMotion(m.motion);
     setLink(m.link);
     $("seq").textContent = val(m.frame_no);
     updFps(m.frame_no, m.link);
