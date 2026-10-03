@@ -13,6 +13,7 @@
 
 #include "ld2410_task.h"
 #include "ld_settings.h"
+#include "origin_check.h"
 #include "wifi_form.h"
 #include "wifi_scan.h"
 #include "wifi_mgr.h"
@@ -22,6 +23,8 @@ static httpd_handle_t s_server;
 static void (*s_close_hook)(int fd);
 
 httpd_handle_t http_srv_handle(void) { return s_server; }
+
+bool http_srv_is_running(void) { return s_server != NULL; }
 
 void http_srv_set_close_hook(void (*hook)(int fd)) { s_close_hook = hook; }
 
@@ -94,7 +97,7 @@ static const char WIFI_FORM[] =
     "<label>Password (empty = open network, otherwise 8-64 characters)"
     "<input name=\"password\" type=\"password\" maxlength=\"64\"></label>"
     "<button type=\"submit\">Save and reboot</button>"
-    "</form><p class=\"k\"><a href=\"/ld2410\">LD2410C radar settings</a> &middot; <a href=\"/log\">Log</a></p></main>"
+    "</form><p class=\"k\"><a href=\"/ld2410\">LD2410C radar settings</a> &middot; <a href=\"/log\">Log</a> &middot; <a href=\"/update\">Firmware update</a></p></main>"
     "<script>document.querySelectorAll('a[data-s]').forEach(function(a){"
     "a.onclick=function(){document.getElementById('ssid').value=a.dataset.s;return false}})"
     "</script></body></html>";
@@ -160,6 +163,28 @@ bool http_srv_req_on_ap(httpd_req_t *req)
     return local != 0 && local == info.ip.addr;
 }
 
+#define ORIGIN_MAX 64
+
+bool http_srv_origin_ok(httpd_req_t *req)
+{
+    size_t n = httpd_req_get_hdr_value_len(req, "Origin"); /* 0: absent (or empty) */
+    char buf[ORIGIN_MAX + 1];
+    bool ok = true;
+    if (n > ORIGIN_MAX) {
+        ok = false;
+    } else if (n > 0) {
+        ok = httpd_req_get_hdr_value_str(req, "Origin", buf, sizeof buf) == ESP_OK &&
+             origin_allowed(buf, n, HTTP_SRV_AP_ORIGIN);
+    }
+    if (ok) return true;
+    ESP_LOGW(TAG, "cross-site request rejected: %s %.64s", http_method_str(req->method), req->uri);
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_sendstr(req, "cross-site request rejected");
+    return false;
+}
+
 static esp_err_t wifi_get(httpd_req_t *req)
 {
     if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
@@ -206,6 +231,7 @@ static void restart_cb(void *arg)
 static esp_err_t wifi_post(httpd_req_t *req)
 {
     if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+    if (!http_srv_origin_ok(req)) return ESP_FAIL;
     if (req->content_len == 0 || req->content_len > WF_BODY_MAX) {
         return wifi_result(req, HTTPD_400, "bad", "Bad request length");
     }
@@ -266,7 +292,7 @@ static esp_err_t wifi_post(httpd_req_t *req)
 #define LD_REQ_TIMEOUT_MS 5000
 #define LD_RECV_RETRIES 3 /* recv timeouts tolerated while reading the /ld2410 body */
 
-#define LD_LINKS_INNER "<a href=\"/ld2410\">refresh</a> &middot; <a href=\"/wifi\">Wi-Fi setup</a> &middot; <a href=\"/log\">Log</a>"
+#define LD_LINKS_INNER "<a href=\"/ld2410\">refresh</a> &middot; <a href=\"/wifi\">Wi-Fi setup</a> &middot; <a href=\"/log\">Log</a> &middot; <a href=\"/update\">Update</a>"
 #define LD_LINKS "<div class=\"k\">" LD_LINKS_INNER "</div>"
 
 /* Table 7 (p.15) of Protocolo_comunicacion_serial_LD2410C.pdf; -1 = not settable. */
@@ -482,6 +508,7 @@ static int ld_find_action(const char *body, size_t len)
 static esp_err_t ld2410_post(httpd_req_t *req)
 {
     if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+    if (!http_srv_origin_ok(req)) return ESP_FAIL;
     if (req->content_len == 0 || req->content_len > LDS_BODY_MAX) {
         return ld_result(req, HTTPD_400, "bad", "Bad request length");
     }
@@ -560,8 +587,9 @@ esp_err_t http_srv_start(void)
 {
     if (s_server != NULL) return ESP_ERR_INVALID_STATE;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    /* /wifi x2, /ld2410 x2, live page and /ws, /log and /log/data: 8 of 10 */
-    cfg.max_uri_handlers = 10;
+    /* /wifi x2, /ld2410 x2, live page and /ws, /log and /log/data, /update x2, /update/info and
+     * /update/rollback: 12 of 14 */
+    cfg.max_uri_handlers = 14;
     /* httpd needs max_open_sockets <= CONFIG_LWIP_MAX_SOCKETS - 3 (16 in sdkconfig.defaults) */
     cfg.max_open_sockets = 7;
     cfg.close_fn = on_session_close;

@@ -97,6 +97,12 @@ static esp_timer_handle_t s_idle_timer;
 
 esp_netif_t *wifi_mgr_ap_netif(void) { return s_ap_netif; }
 
+bool wifi_mgr_is_up(void)
+{
+    if (s_events == NULL) return false;
+    return (xEventGroupGetBits(s_events) & GOT_IP_BIT) != 0 || s_ap_kind != AP_KIND_NONE;
+}
+
 static uint32_t hw_random(void) { return esp_random(); }
 
 static esp_err_t load_str(const char *key, char *buf, size_t cap)

@@ -128,14 +128,6 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   the BMI160 register values, delays and sensitivities in `esp32/main/imu_task.c`
   (marked VERIFY there and in the README) and the NEO-6M default NMEA output,
   baud rate, cold-start figures and PPS behaviour.
-- [ ] **OTA firmware update.** Owner 2026-10-03: a separate cycle after PR #10,
-  to be brainstormed. Idea: two OTA app slots plus `otadata` in the 32 MB flash
-  (for example 2 x 4 MB), NVS kept at 0x9000 so the Wi-Fi credentials survive;
-  one last USB flash is needed for the new partition table. Rollback:
-  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, the new app is marked valid only
-  after a healthy boot. Upload only from the AP (page `/update` and
-  `curl --data-binary @build/aeris_mvp.bin http://192.168.4.1/update`), never
-  from the home network.
 - [ ] **Decide A (everything on the ESP32-S3) vs B (hybrid STM32 + ESP32-S3)
   when the RF chain is bought.** Pin-count analysis summary: the ESP32-S3
   N32R8V has about 27-31 usable GPIO (octal flash/PSRAM take GPIO26-37, strapping

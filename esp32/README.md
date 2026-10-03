@@ -104,10 +104,10 @@ idf.py set-target esp32s3
 idf.py build flash monitor
 ```
 
-`sdkconfig.defaults` is committed (octal flash and PSRAM, the ESP-IDF "single factory app
-(large)" partition table: NVS at 0x9000 as before, 1.5 MB app, since the 1 MB app of the plain
-table was 97 % full; `app_main.c` stops the build with `#error` while a stale `sdkconfig` still
-selects another table; console on
+`sdkconfig.defaults` is committed (octal flash and PSRAM, the custom OTA partition
+table `partitions.csv` (see "Firmware update over Wi-Fi (OTA)") with
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`; `app_main.c` stops the build with `#error`
+while a stale `sdkconfig` still selects another table or lacks rollback; console on
 USB-Serial-JTAG, WebSocket support with the post-handshake callback
 (`CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT`: from v5.5.5 on, esp_http_server
 reports a new WebSocket client only through it), `CONFIG_LWIP_MAX_SOCKETS=16`: httpd uses
@@ -120,6 +120,122 @@ at build time, pinned exactly (`main/idf_component.yml`, `==1.14.0`).
 
 If the board does not enter download mode by itself: hold **BOOT**, tap
 **RESET**, release **BOOT**, then flash again.
+
+## Firmware update over Wi-Fi (OTA)
+
+Partition table (`esp32/partitions.csv`, 32 MB flash, no factory app):
+
+| Name | Type | Offset | Size |
+|---|---|---|---|
+| `nvs` | data | 0x9000 | 0x6000 |
+| `otadata` | data | 0xf000 | 0x2000 |
+| `phy_init` | data | 0x11000 | 0x1000 |
+| `ota_0` | app | 0x20000 | 4 MB |
+| `ota_1` | app | 0x420000 | 4 MB |
+
+NVS keeps its old offset and size, so the Wi-Fi credentials and the AP password
+survive the migration. Everything after 0x820000 is unused. There is no secure
+boot or image signing: the protection is that `/update` is served only to clients of
+the AP.
+
+### One-time migration by USB
+
+The new table needs one last USB flash (bootloader, partition table, otadata and
+`ota_0` are written; NVS at 0x9000 is not touched):
+
+```
+git pull
+rm -f esp32/sdkconfig
+cd esp32
+idf.py -p PORT build flash monitor
+```
+
+`PORT` is the USB-Serial-JTAG port (for example `/dev/cu.usbmodem1101`). If
+`esp32/sdkconfig` is left over from the earlier tables, the build stops with the
+`#error` from `app_main.c` (it asks for the custom partition table and rollback):
+delete it (`rm -f esp32/sdkconfig`) and build again. After an OTA, `idf.py app-flash`
+writes `ota_0` while `ota_1` may be the active slot: for USB flashing always use the full
+`idf.py flash` (it also resets otadata). The first USB-flashed image is not
+"pending verification", so the rules below start with the first OTA update.
+
+### Update from the page
+
+1. Open the AP: hold **BOOT** for 2 to 5 s (AP on demand, see above) or use the fallback AP
+   when no home network is stored.
+2. Join `AERIS-MVP-XXXX` and open **http://192.168.4.1/update**.
+3. Choose `build/aeris_mvp.bin` (after `idf.py build`) and press **Upload**. The progress
+   bar follows the upload; at the end the page shows the result and the device reboots
+   about 1 s later.
+4. Reload the page: it shows the new `Version` (git hash), build date and time and the
+   running slot. If the AP was started on demand (home network stored), it is off after the
+   reboot because the device joins the home network: read the version from the home network
+   (the `app: firmware <version>` line near the top of `/log`; the ESP-IDF `App version`
+   boot line is printed before the web log starts and is only on the USB console) or turn the AP on again with BOOT 2 to 5 s.
+
+The page also shows the version in the other slot (or "empty"). `GET /update/info` returns
+the same data as JSON (AP only like the page).
+
+Browser uploads must come from the `/update` page itself: the page is served from
+`http://192.168.4.1`, so its `Origin` is accepted. A page opened from another site gets
+403 (see "Cross-site request guard").
+
+### Cross-site request guard (CSRF)
+
+The state-changing endpoints are AP-only (404 elsewhere), but a web page open in a browser on
+a phone or Mac joined to the AP could still make that browser POST to `192.168.4.1`. So
+`POST /wifi`, `POST /ld2410`, `POST /update` and `POST /update/rollback` also check the
+`Origin` request header, after the AP-only check: absent is allowed (curl and other
+non-browser clients send none); present, it must equal `http://192.168.4.1` (ASCII
+case-insensitive, whole string: no trailing slash, port or `https`). Anything else, including
+`null` or a value over 64 bytes, gets `403 cross-site request rejected` with `Connection:
+close`, the body is not read, and one warning line (method and URI) goes to the log. GET
+handlers and curl are unaffected. Code: `components/core/origin_check.[ch]` (host-tested) and
+`http_srv_origin_ok()` in `main/http_srv.c`.
+
+### Update from the Mac
+
+The Mac joins the AP, then:
+
+```
+cd esp32 && idf.py build && curl --data-binary @build/aeris_mvp.bin http://192.168.4.1/update
+```
+
+The body is the raw `.bin` (no multipart; the `Content-Type` header is ignored,
+`Content-Length` is required). On success curl prints `OK, rebooting`.
+
+Error replies (plain text, no reboot, the partial write is discarded): 400 (empty body,
+invalid image), 408 (upload stalled), 413 (larger than the 4 MB slot), 409 (another update
+is running, or the running image is not confirmed yet), 500 (flash or internal error).
+
+### Validity and rollback
+
+A freshly uploaded image starts as "pending verification":
+
+- It is marked valid after **30 s** since boot once Wi-Fi was up (STA got an IP, or an
+  AP runs) and the HTTP server was running. Both conditions are latched: once seen since
+  boot they count as met, so a later home-network drop does not roll back a working image.
+- If that is not reached within **120 s**, the image marks itself invalid and the
+  device reboots into the previous image (automatic rollback).
+- If the device resets before the image became valid (crash, power cut), the bootloader
+  rolls back to the previous image.
+- **Rollback to previous** on the page: switches the boot slot to the other image and
+  reboots. The button is shown only when the other slot holds a bootable image (valid, or
+  with no recorded state, for example the first USB flash); not for an empty slot or an
+  image that was rolled back or never confirmed.
+- While the running image is still pending, a new update is refused with 409 ("running
+  image is not confirmed yet, retry in a minute"); wait for the 30 s mark.
+
+### During an update
+
+Flash writes disturb the LD2410C frames and the GPS and IMU tasks. A recording
+sees a GAP and, after the reboot, a new `boot_id`. The HTTP server is busy with the upload, so the
+live page pauses; the page and `/ws` come back after the reboot. Do not power the stand
+off while it uploads or reboots.
+
+### Never from the home network
+
+`/update`, `/update/info` and `/update/rollback` answer **404** to every client that is not
+on the AP, for every method. Update only over the AP.
 
 ## First boot
 
@@ -803,3 +919,12 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 - Stack use of the log hook (256 B line buffer plus the `va_list` copy) in
   small-stack tasks (GPS 4096 B, status LED 3072 B, recording tasks 4096 B)
   under real load.
+- OTA: confirmed on the bench 2026-10-03 from macOS: the USB migration to the
+  new partition table kept the Wi-Fi settings; one update with `curl` and two
+  from the page (ota_0 and ota_1 in turn, about 10 s for 1 MB), each marked
+  valid about 30 s after boot; the Rollback button booted the previous slot,
+  which was then marked valid too. After each reboot the on-demand AP is off
+  (the board is back on the home Wi-Fi), so the computer drops the AP and may
+  ask for its password again; the password itself is unchanged. Still open:
+  the automatic rollback after a deliberately broken image (120 s) and the
+  upload from iOS Safari (XHR upload of a ~1 MB file over the AP).
