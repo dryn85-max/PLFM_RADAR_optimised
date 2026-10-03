@@ -28,8 +28,12 @@
 #define GPS_POLL_US 1000000
 /* UTC state machine (spec R3): a NAV-TIMEUTC answer younger than UTC_FRESH_US decides
  * valid / not valid; with no fresh answer the state is "not valid" (wait, GPS time is not
- * used yet) until NO_UBX_US have passed since the last answer, or since the module started
- * talking if it never answered; then "no ubx" (time_sync fallback). */
+ * used yet) until NO_UBX_US have passed since the later of the last answer and the talk
+ * start (the first good NMEA line after the link was unknown: never talked, or silent for
+ * more than GPS_SILENT_US); then "no ubx" (time_sync fallback). The talk start matters
+ * when the module comes back after a silence: its old answer is stale, and without the
+ * talk start the state would be "no ubx" at once and an unverified time_sync could be
+ * written before the first new answer. */
 #define UTC_FRESH_US 3000000
 #define UTC_NO_UBX_US 5000000
 /* Core 1 with the LD2410C task, but below it (priority 5): the GPS load is about
@@ -47,7 +51,7 @@ static gps_snapshot_t s_snap;
 static bool s_any_bytes;
 static uint64_t s_last_good_us;
 static uint64_t s_last_sync_us; /* esp_time of the latest GPS time_sync record, 0 = none */
-static uint64_t s_first_byte_us; /* when the first byte arrived (valid if s_any_bytes) */
+static uint64_t s_talk_start_us; /* first good NMEA line after the link was unknown */
 static bool s_have_utc;          /* a NAV-TIMEUTC answer was decoded */
 static uint64_t s_utc_us;        /* when the latest one was decoded */
 static bool s_utc_valid;         /* its validUTC bit */
@@ -69,7 +73,7 @@ static gps_utc_t utc_state_locked(uint64_t now)
     if (s_have_utc && (int64_t)(now - s_utc_us) < UTC_FRESH_US) {
         return s_utc_valid ? GPS_UTC_VALID : GPS_UTC_NOT_VALID;
     }
-    uint64_t ref = s_have_utc ? s_utc_us : s_first_byte_us;
+    uint64_t ref = (s_have_utc && (int64_t)(s_utc_us - s_talk_start_us) > 0) ? s_utc_us : s_talk_start_us;
     return (int64_t)(now - ref) > UTC_NO_UBX_US ? GPS_UTC_NO_UBX : GPS_UTC_NOT_VALID;
 }
 
@@ -183,11 +187,11 @@ static void gps_task(void *arg)
             gps_rx_feed(&rx, chunk, (size_t)n, on_event, &ctx, on_ubx, &ctx);
             uint64_t now = (uint64_t)esp_timer_get_time();
             xSemaphoreTake(s_mtx, portMAX_DELAY);
-            if (!s_any_bytes) {
-                s_first_byte_us = now;
-            }
             s_any_bytes = true;
             if (rx.nmea.good_lines != seen_good) {
+                if (s_last_good_us == 0 || (int64_t)(now - s_last_good_us) > GPS_SILENT_US) {
+                    s_talk_start_us = now; /* link was UNKNOWN: talking again */
+                }
                 s_last_good_us = now;
             }
             s_snap.good_lines = rx.nmea.good_lines;
@@ -259,7 +263,7 @@ esp_err_t gps_start(void)
     s_any_bytes = false;
     s_last_good_us = 0;
     s_last_sync_us = 0;
-    s_first_byte_us = 0;
+    s_talk_start_us = 0;
     s_have_utc = false;
     s_utc_us = 0;
     s_utc_valid = false;

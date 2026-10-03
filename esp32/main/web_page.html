@@ -195,7 +195,8 @@ h2{font-size:.95rem;margin:0 0 8px}
     $("gsc").textContent = sp === null ? "-" : sp.toFixed(1) + " km/h";
     $("gco").textContent = co === null ? "-" : co.toFixed(0) + "\u00b0";
     $("gut").textContent = typeof g.utc === "string" ? g.utc.replace("T", " ").replace("Z", " UTC") : "-";
-    $("gun").textContent = g.utc_state === "not_valid" ? "(leap seconds not yet known)"
+    $("gun").textContent = typeof g.utc !== "string" ? "\u00a0"
+      : g.utc_state === "not_valid" ? "(leap seconds not yet known)"
       : g.utc_state === "no_ubx" ? "(not verified: no UBX answer)" : "\u00a0";
   }
   function renderImu(m) {

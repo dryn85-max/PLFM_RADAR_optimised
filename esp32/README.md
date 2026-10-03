@@ -321,7 +321,7 @@ clients). The page shows:
 
 Values that are not valid show `-`; the snapshot JSON carries `null` for them
 (top-level keys `gps`, `imu`, `time_source`; `gps.utc_state` is `valid`,
-`not_valid`, `no_ubx` or `null` while the module has not yet sent a byte). The page needs no new connection:
+`not_valid`, `no_ubx` or `null` whenever the GPS link is not `ok`, i.e. no good NMEA line in the last 3 s). The page needs no new connection:
 the same 10 Hz WebSocket snapshot carries everything.
 
 The console logs `ws client added fd=.. slot=..` / `ws client removed fd=..`
@@ -337,7 +337,7 @@ problem is visible in the console):
   lines good N bad N dropped N` (`fix Q` is the GGA fix quality, 0 = no fix;
   `bad` counts checksum and malformed-line errors, `dropped` overlong or
   abandoned lines).
-- `gps` UTC line (once the module has sent a byte): `utc valid, ubx good N bad_ck N
+- `gps` UTC line (only while the GPS link is `ok`, i.e. a good NMEA line in the last 3 s; absent otherwise): `utc valid, ubx good N bad_ck N
   skipped N bad_len N`, `utc not valid, ubx good ...`, or, as a warning, `utc no ubx:
   no NAV-TIMEUTC answer (GPS time is not verified), ubx good ...` (UBX frame counters
   since boot).
@@ -375,11 +375,14 @@ sentences are ignored) and UBX binary frames to `components/core/ubx.[ch]`.
     GPS `time_sync` records are written and `gps_fix.flags` bit 4 (UTC verified) is set.
   - `not valid`: the latest answer under 3 s old has validUTC = 0 (the receiver
     does not yet know the leap-second count), or no fresh answer yet while the
-    5 s limit below has not passed. **No GPS `time_sync` is written** and bit 4 is
+    5 s limit below has not passed (also during the first 5 s after the talk start). **No GPS `time_sync` is written** and bit 4 is
     clear; the `gps_fix` records keep coming.
   - `no ubx`: no NAV-TIMEUTC answer for more than 5 s (counted from the last
-    answer, or from the first received byte if there was never one: the TX wire
-    is missing, or the module does not take UBX input). **Fallback:** GPS
+    answer or from the talk start, whichever is later; the talk start is the first
+    good NMEA line after the link was unknown, i.e. never talked or silent for more
+    than 3 s, so a module coming back after a silence waits 5 s for a new answer
+    before the fallback; with no answer at all: the TX wire is missing, or the module
+    does not take UBX input). **Fallback:** GPS
     `time_sync` records are written as before (time unverified), bit 4 stays
     clear, the 10 s log line warns and the live page says `(not verified: no UBX
     answer)`.
@@ -387,6 +390,12 @@ sentences are ignored) and UBX binary frames to `components/core/ubx.[ch]`.
   The wire GPIO4 -> module RX is therefore **required** for verification (it is
   connected on the bench, owner 2026-10-03). Without a UBX answer the behaviour is
   as before the change.
+
+  Known limits (accepted, not fixed): a UBX frame damaged on the line (overrun,
+  noise) can swallow the start of the next NMEA line, which is then lost; a corrupted
+  length of 65-512 skips up to 514 bytes, about 0.5 s of NMEA at 9600 Bd. The resync
+  replay is recursive, its depth bounded by the frame length (measured: up to 11
+  levels, and only with crafted input).
 
 - **One `gps_fix` record per NMEA epoch** (RMC and GGA with the same UTC time
   field; about 1 Hz), written **also without a fix**, with the validity flags
