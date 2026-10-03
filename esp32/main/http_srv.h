@@ -25,4 +25,15 @@ void http_srv_set_close_hook(void (*hook)(int fd));
 /* True if the request arrived on the soft-AP interface (conservative: unknown -> false). */
 bool http_srv_req_on_ap(httpd_req_t *req);
 
+/* The soft-AP address (ESP-IDF default) and the only browser Origin the AP-only POST endpoints
+ * accept (CSRF guard, see origin_check.h). */
+#define HTTP_SRV_AP_ORIGIN "http://192.168.4.1"
+
+/* CSRF guard for the state-changing POST handlers; call after http_srv_req_on_ap. Absent Origin
+ * (curl) passes. Otherwise it must match HTTP_SRV_AP_ORIGIN, else this sends 403 "cross-site
+ * request rejected" with Connection: close, logs one warning and returns false: the handler
+ * must then return ESP_FAIL without reading the body (httpd closes the socket). An Origin
+ * header longer than 64 bytes is rejected too. */
+bool http_srv_origin_ok(httpd_req_t *req);
+
 #endif

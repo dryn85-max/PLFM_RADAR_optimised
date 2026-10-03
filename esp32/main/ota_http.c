@@ -186,6 +186,7 @@ static esp_err_t update_info_get(httpd_req_t *req)
 static esp_err_t update_post(httpd_req_t *req)
 {
     if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+    if (!http_srv_origin_ok(req)) return ESP_FAIL;
 
     const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
     if (next == NULL) return reply_close(req, HTTPD_500, "no update partition");
@@ -295,6 +296,7 @@ static esp_err_t update_post(httpd_req_t *req)
 static esp_err_t rollback_post(httpd_req_t *req)
 {
     if (!http_srv_req_on_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+    if (!http_srv_origin_ok(req)) return ESP_FAIL;
     /* Any body is ignored; "Connection: close" in reply() keeps it from being read as a request. */
 
     if (atomic_flag_test_and_set(&s_busy)) {

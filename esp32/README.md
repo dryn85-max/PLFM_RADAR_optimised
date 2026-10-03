@@ -175,6 +175,23 @@ writes `ota_0` while `ota_1` may be the active slot: for USB flashing always use
 The page also shows the version in the other slot (or "empty"). `GET /update/info` returns
 the same data as JSON (AP only like the page).
 
+Browser uploads must come from the `/update` page itself: the page is served from
+`http://192.168.4.1`, so its `Origin` is accepted. A page opened from another site gets
+403 (see "Cross-site request guard").
+
+### Cross-site request guard (CSRF)
+
+The state-changing endpoints are AP-only (404 elsewhere), but a web page open in a browser on
+a phone or Mac joined to the AP could still make that browser POST to `192.168.4.1`. So
+`POST /wifi`, `POST /ld2410`, `POST /update` and `POST /update/rollback` also check the
+`Origin` request header, after the AP-only check: absent is allowed (curl and other
+non-browser clients send none); present, it must equal `http://192.168.4.1` (ASCII
+case-insensitive, whole string: no trailing slash, port or `https`). Anything else, including
+`null` or a value over 64 bytes, gets `403 cross-site request rejected` with `Connection:
+close`, the body is not read, and one warning line (method and URI) goes to the log. GET
+handlers and curl are unaffected. Code: `components/core/origin_check.[ch]` (host-tested) and
+`http_srv_origin_ok()` in `main/http_srv.c`.
+
 ### Update from the Mac
 
 The Mac joins the AP, then:
