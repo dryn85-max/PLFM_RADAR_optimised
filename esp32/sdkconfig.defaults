@@ -37,6 +37,9 @@ CONFIG_HTTPD_WS_SUPPORT=y
 # pulling this change (live.c stops the build with #error otherwise).
 CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 
+# OTA mark-valid/invalid calls validate the image (flash reads, SHA) from the esp_timer task.
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=4096
+
 # Sockets: httpd (7 sessions + listen + control) + recording server (listen,
 # client, one transient while it is being replaced). httpd requires
 # max_open_sockets (7) <= LWIP_MAX_SOCKETS - 3.

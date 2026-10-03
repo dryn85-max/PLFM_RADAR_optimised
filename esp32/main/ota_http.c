@@ -320,6 +320,13 @@ static esp_err_t rollback_post(httpd_req_t *req)
     return sent;
 }
 
+static bool s_registered;
+
+bool ota_http_registered(void)
+{
+    return s_registered;
+}
+
 esp_err_t ota_http_register(void)
 {
     static const httpd_uri_t get_page = {.uri = "/update", .method = HTTP_GET, .handler = update_page_get};
@@ -330,5 +337,6 @@ esp_err_t ota_http_register(void)
     if (err == ESP_OK) err = http_srv_register(&get_info);
     if (err == ESP_OK) err = http_srv_register(&post_up);
     if (err == ESP_OK) err = http_srv_register(&post_rb);
+    s_registered = (err == ESP_OK);
     return err;
 }

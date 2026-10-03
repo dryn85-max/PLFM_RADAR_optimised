@@ -145,7 +145,7 @@ The new table needs one last USB flash (bootloader, partition table, otadata and
 
 ```
 git pull
-rm esp32/sdkconfig
+rm -f esp32/sdkconfig
 cd esp32
 idf.py -p PORT build flash monitor
 ```
@@ -153,7 +153,9 @@ idf.py -p PORT build flash monitor
 `PORT` is the USB-Serial-JTAG port (for example `/dev/cu.usbmodem1101`). If
 `esp32/sdkconfig` is left over from the earlier tables, the build stops with the
 `#error` from `app_main.c` (it asks for the custom partition table and rollback):
-delete `esp32/sdkconfig` and build again. The first USB-flashed image is not
+delete it (`rm -f esp32/sdkconfig`) and build again. After an OTA, `idf.py app-flash`
+writes `ota_0` while `ota_1` may be the active slot: for USB flashing always use the full
+`idf.py flash` (it also resets otadata). The first USB-flashed image is not
 "pending verification", so the rules below start with the first OTA update.
 
 ### Update from the page
@@ -164,8 +166,10 @@ delete `esp32/sdkconfig` and build again. The first USB-flashed image is not
 3. Choose `build/aeris_mvp.bin` (after `idf.py build`) and press **Upload**. The progress
    bar follows the upload; at the end the page shows the result and the device reboots
    about 1 s later.
-4. Reload the page: it shows the new `App version` (git hash), build date and time and the
-   running slot.
+4. Reload the page: it shows the new `Version` (git hash), build date and time and the
+   running slot. If the AP was started on demand (home network stored), it is off after the
+   reboot because the device joins the home network: read the version from the home network
+   (the `App version` line in `/log`) or turn the AP on again with BOOT 2 to 5 s.
 
 The page also shows the version in the other slot (or "empty"). `GET /update/info` returns
 the same data as JSON (AP only like the page).

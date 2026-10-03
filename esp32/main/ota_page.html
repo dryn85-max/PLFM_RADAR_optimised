@@ -58,7 +58,7 @@ progress{width:100%;height:14px;margin-top:12px}
   var info = null, busy = false;
 
   function say(t, cls) { var m = $("msg"); m.textContent = t; m.className = cls || ""; }
-  function setBusy(b) { busy = b; $("up").disabled = b; $("rb").disabled = b; $("file").disabled = b; }
+  function setBusy(b) { busy = b; $("up").disabled = b || !!(info && info.state === "pending verify"); $("rb").disabled = b; $("file").disabled = b; }
 
   function show(i) {
     info = i;
@@ -70,6 +70,12 @@ progress{width:100%;height:14px;margin-top:12px}
     $("over").textContent = i.other_ver === null ? "empty" : i.other_ver;
     $("ostate").textContent = i.other_state;
     $("rbc").hidden = !i.rollback;
+    if (i.state === "pending verify" && !busy) {
+      $("up").disabled = true;
+      say("The running firmware is not confirmed yet (about 30 s after boot); reload in a moment.", "bad");
+    } else if (!busy) {
+      $("up").disabled = false;
+    }
   }
 
   function load(cb) {
@@ -94,7 +100,7 @@ progress{width:100%;height:14px;margin-top:12px}
         load(function (ok) {
           if (ok) { setBusy(false); $("pr").hidden = true; say("Device is back. Check the version above.", "ok"); }
           else if (++tries < 60) poll();
-          else { setBusy(false); say("Device did not come back; reconnect to its Wi-Fi and reload.", "bad"); }
+          else { setBusy(false); say("Device did not come back. If the AP was on demand it is off after the reboot: check the new version on /log or the live page from your home network, or press BOOT 2-5 s again.", "bad"); }
         });
       }, 3000);
     })();

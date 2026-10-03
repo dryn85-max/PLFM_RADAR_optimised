@@ -4,10 +4,12 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 
 #include "http_srv.h"
 #include "ota_check.h"
+#include "ota_http.h"
 #include "ota_validate.h"
 #include "wifi_mgr.h"
 
@@ -28,7 +30,7 @@ static void check_cb(void *arg)
     (void)arg;
     uint32_t up_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (wifi_mgr_is_up()) s_wifi_seen = true;
-    if (http_srv_is_running()) s_http_seen = true;
+    if (http_srv_is_running() && ota_http_registered()) s_http_seen = true;
     ota_act_t act = ota_check_step(true, s_wifi_seen, s_http_seen, up_ms);
     if (act == OTA_ACT_MARK_VALID) {
         esp_timer_stop(s_timer);
@@ -43,8 +45,13 @@ static void check_cb(void *arg)
         ESP_LOGW(TAG, "OTA: new image not healthy after %u s (Wi-Fi %d, HTTP %d), rolling back",
                  (unsigned)(up_ms / 1000), (int)s_wifi_seen, (int)s_http_seen);
         esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
-        /* Only returns on failure (e.g. no previous valid image). */
-        ESP_LOGE(TAG, "OTA: rollback failed: %s", esp_err_to_name(err));
+        /* Only returns on failure. After a USB flash otadata has no previous entry, so the call
+         * fails with ESP_ERR_OTA_ROLLBACK_FAILED. The image is still PENDING_VERIFY: a plain
+         * restart makes the bootloader mark it ABORTED and boot the other slot. No reboot loop,
+         * an ABORTED image is no longer pending. */
+        ESP_LOGE(TAG, "OTA: rollback failed: %s, restarting for the bootloader to roll back",
+                 esp_err_to_name(err));
+        esp_restart();
     }
 }
 

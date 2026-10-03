@@ -4,9 +4,14 @@
 #ifndef OTA_HTTP_H
 #define OTA_HTTP_H
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 /* Register the four handlers (4 of the server's URI slots). Call after http_srv_start(). */
 esp_err_t ota_http_register(void);
+
+/* True once ota_http_register() has succeeded (all four handlers registered). */
+bool ota_http_registered(void);
 
 #endif
