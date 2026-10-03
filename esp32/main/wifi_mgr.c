@@ -21,6 +21,11 @@
  *    connected. When it fires with no client, the mode returns to STA. The fallback AP (no
  *    credentials / STA failed) is never switched off; a request while an AP runs only restarts
  *    the idle timer of an on-demand AP.
+ *  - STA retries are paused while an AP client is connected (fallback or on-demand AP, STA wanted):
+ *    neither the retry timer nor the disconnect handler issues esp_wifi_connect(); a connect already
+ *    in flight finishes. The suppressed retry is remembered (s_retry_suppressed) and armed for
+ *    BACKOFF_MIN_MS when the client count drops to 0; the backoff is otherwise unchanged. Scans stay
+ *    allowed.
  *  - BOOT (GPIO0), action on release, held-zone colour on the RGB LED (core boot_btn): 2-5 s = AP on
  *    demand, 5-10 s = erase the STA credentials and restart (the AP password is kept), > 10 s or
  *    < 2 s = nothing. A button already down when the task starts is ignored until released once.
@@ -84,6 +89,7 @@ static EventGroupHandle_t s_events;
 static esp_timer_handle_t s_retry_timer;
 static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 static volatile bool s_sta_wanted;
+static volatile bool s_retry_suppressed; /* a STA retry was skipped while an AP client was connected */
 static volatile bool s_sta_connecting; /* esp_wifi_connect() issued, no CONNECTED/DISCONNECTED yet */
 static SemaphoreHandle_t s_scan_lock;  /* held during a scan and while issuing a connect */
 
@@ -155,10 +161,29 @@ static void load_or_create_ap_pass(char *out /* WF_AP_PASS_LEN + 1 */)
     }
 }
 
+/* True when a new STA connect must not be issued now (an AP client is connected); the skipped retry
+ * is remembered in s_retry_suppressed. Runs in the esp_timer task and the event loop task. The flag is
+ * set BEFORE the client count is re-read, and the AP_STADISCONNECTED handler decrements the count
+ * BEFORE it reads the flag: whichever order they interleave in, either this caller sees 0 and
+ * proceeds, or the handler sees the flag and arms the retry. */
+static bool retry_suppress(void)
+{
+    if (s_ap_clients == 0) return false;
+    bool was = s_retry_suppressed;
+    s_retry_suppressed = true;
+    if (s_ap_clients == 0) { /* the last client left meanwhile: go on */
+        s_retry_suppressed = false;
+        return false;
+    }
+    if (!was) ESP_LOGI(TAG, "STA retries paused (AP client connected)");
+    return true;
+}
+
 static void retry_cb(void *arg)
 {
     (void)arg;
     if (!s_sta_wanted) return;
+    if (retry_suppress()) return; /* resumed by AP_STADISCONNECTED */
     if (xSemaphoreTake(s_scan_lock, 0) != pdTRUE) { /* a scan is running: try again shortly */
         esp_timer_start_once(s_retry_timer, (uint64_t)RETRY_DEFER_MS * 1000u);
         return;
@@ -218,7 +243,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_sta_connecting = false;
         xEventGroupClearBits(s_events, GOT_IP_BIT);
-        if (s_sta_wanted) {
+        if (s_sta_wanted && !retry_suppress()) {
             esp_timer_stop(s_retry_timer); /* error if not running: ignored */
             esp_timer_start_once(s_retry_timer, (uint64_t)s_backoff_ms * 1000u);
             s_backoff_ms = s_backoff_ms * 2u > BACKOFF_MAX_MS ? BACKOFF_MAX_MS : s_backoff_ms * 2u;
@@ -229,6 +254,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
         if (s_ap_clients > 0) s_ap_clients--;
         if (s_ap_clients == 0 && s_ap_kind == AP_KIND_DEMAND) idle_timer_restart();
+        if (s_ap_clients == 0 && s_sta_wanted && s_retry_suppressed) {
+            s_retry_suppressed = false;
+            ESP_LOGI(TAG, "STA retries resumed");
+            esp_timer_stop(s_retry_timer); /* error if not running: ignored */
+            esp_timer_start_once(s_retry_timer, (uint64_t)BACKOFF_MIN_MS * 1000u);
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *ev = (const ip_event_got_ip_t *)data;
         s_backoff_ms = BACKOFF_MIN_MS;
