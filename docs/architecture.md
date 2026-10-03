@@ -280,6 +280,14 @@ The console log is readable on a phone at `/log` (an `esp_log` hook feeds a 16 K
 ring; `ESP_LOGx` only, not persistent; see the "Web console log" section of
 [esp32/README.md](../esp32/README.md)).
 
+Firmware updates run over Wi-Fi (OTA): the 32 MB flash holds `nvs` (0x9000, unchanged),
+`otadata` and two 4 MB app slots (`ota_0` 0x20000, `ota_1` 0x420000), no factory app. A new
+image boots as "pending verification" and is kept after 30 s of working Wi-Fi and HTTP
+server (latched), or rolled back after 120 s or on a reset before that. `/update` (page,
+raw `POST` of the `.bin`, `/update/info`, `/update/rollback`) is served only to AP clients;
+see the "Firmware update over Wi-Fi (OTA)" section of
+[esp32/README.md](../esp32/README.md).
+
 Not verified on hardware yet; see the VERIFY list in
 [esp32/README.md](../esp32/README.md) (the GPS and IMU parts have never run on
 the boards; the BMI160 register values are unverified). Open follow-ups
