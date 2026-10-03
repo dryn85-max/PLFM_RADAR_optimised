@@ -919,7 +919,12 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 - Stack use of the log hook (256 B line buffer plus the `va_list` copy) in
   small-stack tasks (GPS 4096 B, status LED 3072 B, recording tasks 4096 B)
   under real load.
-- OTA: the first update over Wi-Fi on the real board (page and `curl`), the 30 s
-  validity, the rollback after a deliberately broken image (120 s), the Rollback
-  button, and the USB migration keeping the Wi-Fi settings; the upload from iOS
-  Safari (XHR upload of a ~1 MB file over the AP).
+- OTA: confirmed on the bench 2026-10-03 from macOS: the USB migration to the
+  new partition table kept the Wi-Fi settings; one update with `curl` and two
+  from the page (ota_0 and ota_1 in turn, about 10 s for 1 MB), each marked
+  valid about 30 s after boot; the Rollback button booted the previous slot,
+  which was then marked valid too. After each reboot the on-demand AP is off
+  (the board is back on the home Wi-Fi), so the computer drops the AP and may
+  ask for its password again; the password itself is unchanged. Still open:
+  the automatic rollback after a deliberately broken image (120 s) and the
+  upload from iOS Safari (XHR upload of a ~1 MB file over the AP).
