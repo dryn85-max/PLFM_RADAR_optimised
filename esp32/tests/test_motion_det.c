@@ -1,5 +1,7 @@
 /* Host tests for motion_det: timing boundaries, zone/energy edges, link loss, config changes. */
+#include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "tinytest.h"
 #include "motion_det.h"
@@ -386,6 +388,254 @@ static void test_ev_untouched_without_event(void)
     TT_ASSERT_EQ(0, memcmp(pat, &ev, sizeof ev));
 }
 
+/* ---- motion_cfg_check / motion_cfg_parse_form ---- */
+
+#define OK "en=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=3000"
+
+static int parse(const char *body, motion_cfg_t *out)
+{
+    return motion_cfg_parse_form(body, strlen(body), out);
+}
+
+static void sentinel(motion_cfg_t *c)
+{
+    memset(c, 0x5A, sizeof *c);
+}
+
+static int untouched(const motion_cfg_t *c)
+{
+    motion_cfg_t s;
+    sentinel(&s);
+    return memcmp(&s, c, sizeof s) == 0;
+}
+
+static void test_cfg_check(void)
+{
+    motion_cfg_t c;
+    motion_cfg_defaults(&c);
+    TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    TT_ASSERT_EQ(-EINVAL, motion_cfg_check(NULL));
+    c.en = 2; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.en = 0; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.dmin_cm = 0; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.dmax_cm = 900; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.dmax_cm = 901; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.dmin_cm = 500; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.dmin_cm = 499; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.dmin_cm = 501; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.dmin_cm = 900; c.dmax_cm = 900;
+    TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.emin = 0; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.emin = 100; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.emin = 101; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.tstart_ms = 99; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.tstart_ms = 100; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.tstart_ms = 10000; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.tstart_ms = 10001; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.tend_ms = 499; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.tend_ms = 500; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.tend_ms = 60000; TT_ASSERT_EQ(0, motion_cfg_check(&c));
+    motion_cfg_defaults(&c); c.tend_ms = 60001; TT_ASSERT_EQ(-EINVAL, motion_cfg_check(&c));
+}
+
+static void test_parse_ok(void)
+{
+    motion_cfg_t c;
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_OK, parse(OK, &c));
+    TT_ASSERT_EQ(1, c.en);
+    TT_ASSERT_EQ(100, c.dmin_cm);
+    TT_ASSERT_EQ(500, c.dmax_cm);
+    TT_ASSERT_EQ(30, c.emin);
+    TT_ASSERT_EQ(1000, c.tstart_ms);
+    TT_ASSERT_EQ(3000, c.tend_ms);
+    /* any order, unknown fields, empty segments, URL-encoded digits, leading zeros */
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_OK, parse("x=1&&tend=00500&foo&tstart=%31%30%30&emin=0&dmax=900&dmin=0"
+                               "&en=0&bar=%zz&dmin2=5", &c));
+    TT_ASSERT_EQ(0, c.en);
+    TT_ASSERT_EQ(0, c.dmin_cm);
+    TT_ASSERT_EQ(900, c.dmax_cm);
+    TT_ASSERT_EQ(0, c.emin);
+    TT_ASSERT_EQ(100, c.tstart_ms);
+    TT_ASSERT_EQ(500, c.tend_ms);
+    /* a trailing '&' is fine */
+    TT_ASSERT_EQ(MCF_OK, parse(OK "&", &c));
+}
+
+static void test_parse_boundaries(void)
+{
+    motion_cfg_t c;
+    TT_ASSERT_EQ(MCF_OK, parse("en=1&dmin=0&dmax=900&emin=100&tstart=10000&tend=60000", &c));
+    TT_ASSERT_EQ(60000, c.tend_ms);
+    TT_ASSERT_EQ(MCF_OK, parse("en=0&dmin=899&dmax=900&emin=0&tstart=100&tend=500", &c));
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=2&dmin=100&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=1&dmin=100&dmax=901&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=1&dmin=901&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=1&dmin=100&dmax=500&emin=101&tstart=1000&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=1&dmin=100&dmax=500&emin=30&tstart=99&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=1&dmin=100&dmax=500&emin=30&tstart=10001&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=499", &c));
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=60001", &c));
+    TT_ASSERT_EQ(MCF_E_RANGE, parse("en=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=99999", &c));
+    TT_ASSERT(untouched(&c));
+}
+
+static void test_parse_order(void)
+{
+    motion_cfg_t c;
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_E_ORDER, parse("en=1&dmin=500&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_ORDER, parse("en=1&dmin=600&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT(untouched(&c));
+    TT_ASSERT_EQ(MCF_OK, parse("en=1&dmin=499&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT_EQ(499, c.dmin_cm);
+}
+
+static void test_parse_missing_each(void)
+{
+    static const char *const all[] = {"en=1", "dmin=100", "dmax=500", "emin=30",
+                                      "tstart=1000", "tend=3000"};
+    for (unsigned skip = 0; skip < 6; skip++) {
+        char body[128] = "";
+        for (unsigned i = 0; i < 6; i++) {
+            if (i == skip) continue;
+            if (body[0]) strcat(body, "&");
+            strcat(body, all[i]);
+        }
+        motion_cfg_t c;
+        sentinel(&c);
+        TT_ASSERT_EQ(MCF_E_MISSING, parse(body, &c));
+        TT_ASSERT(untouched(&c));
+    }
+    motion_cfg_t c;
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_E_MISSING, parse("", &c));
+    /* a key without '=' does not count */
+    TT_ASSERT_EQ(MCF_E_MISSING, parse("en&dmin=100&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    /* a prefix or extension of a name is a different field */
+    TT_ASSERT_EQ(MCF_E_MISSING, parse("enx=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_MISSING, parse("e=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT(untouched(&c));
+}
+
+static void test_parse_duplicate_each(void)
+{
+    static const char *const all[] = {"en=1", "dmin=100", "dmax=500", "emin=30",
+                                      "tstart=1000", "tend=3000"};
+    for (unsigned dup = 0; dup < 6; dup++) {
+        char body[160] = OK "&";
+        strcat(body, all[dup]);
+        motion_cfg_t c;
+        sentinel(&c);
+        TT_ASSERT_EQ(MCF_E_DUPLICATE, parse(body, &c));
+        TT_ASSERT(untouched(&c));
+    }
+}
+
+static void test_parse_bad_values(void)
+{
+    static const char *const bad[] = {"", "-1", "+1", " 1", "1 ", "1+", "+", "1.5", "0x10", "a",
+                                      "%2B1", "%2D1", "%20", "%", "%3", "%zz", "%0", "1%",
+                                      "%00", "1%0g"};
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        static const char *const names[] = {"en", "dmin", "dmax", "emin", "tstart", "tend"};
+        static const char *const vals[] = {"1", "100", "500", "30", "1000", "3000"};
+        for (unsigned f = 0; f < 6; f++) {
+            char body[160] = "";
+            for (unsigned k = 0; k < 6; k++) {
+                if (k) strcat(body, "&");
+                strcat(body, names[k]);
+                strcat(body, "=");
+                strcat(body, k == f ? bad[i] : vals[k]);
+            }
+            motion_cfg_t c;
+            sentinel(&c);
+            int r = parse(body, &c);
+            if (r != MCF_E_BAD_VALUE)
+                printf("  unexpected %d for %s\n", r, body);
+            TT_ASSERT_EQ(MCF_E_BAD_VALUE, r);
+            TT_ASSERT(untouched(&c));
+        }
+    }
+    /* an empty value of an unknown field is ignored */
+    motion_cfg_t c;
+    TT_ASSERT_EQ(MCF_OK, parse(OK "&junk=", &c));
+    TT_ASSERT_EQ(MCF_OK, parse(OK "&junk=%zz", &c));
+}
+
+static void test_parse_too_long(void)
+{
+    motion_cfg_t c;
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_E_TOO_LONG, parse("en=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=000000", &c));
+    TT_ASSERT_EQ(MCF_E_TOO_LONG, parse("en=111111&dmin=100&dmax=500&emin=30&tstart=1000&tend=3000", &c));
+    TT_ASSERT_EQ(MCF_E_TOO_LONG, parse("en=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=%33%30%30%30%30%30", &c));
+    TT_ASSERT(untouched(&c));
+    /* exactly 5 characters (also via escapes) is not too long */
+    TT_ASSERT_EQ(MCF_OK, parse("en=00001&dmin=00100&dmax=00500&emin=00030&tstart=01000&tend=%303000", &c));
+    TT_ASSERT_EQ(3000, c.tend_ms);
+}
+
+static void test_parse_body_limit(void)
+{
+    char body[MCF_BODY_MAX + 64];
+    motion_cfg_t c;
+    /* a valid body padded with an unknown field up to the limit, then one byte over */
+    size_t base = strlen(OK);
+    memset(body, 0, sizeof body);
+    memcpy(body, OK "&", base + 1);
+    size_t pad = MCF_BODY_MAX - (base + 1) - 2;
+    memcpy(body + base + 1, "z=", 2);
+    memset(body + base + 3, 'a', pad);
+    TT_ASSERT_EQ(MCF_BODY_MAX, base + 3 + pad);
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_OK, motion_cfg_parse_form(body, MCF_BODY_MAX, &c));
+    sentinel(&c);
+    body[MCF_BODY_MAX] = 'a';
+    TT_ASSERT_EQ(MCF_E_TOO_LONG, motion_cfg_parse_form(body, MCF_BODY_MAX + 1, &c));
+    TT_ASSERT(untouched(&c));
+}
+
+static void test_parse_not_nul_terminated(void)
+{
+    /* the byte after len must never be read: exact-size heap copies (ASan checks) */
+    size_t n = strlen(OK);
+    char *b = malloc(n);
+    memcpy(b, OK, n);
+    motion_cfg_t c;
+    TT_ASSERT_EQ(MCF_OK, motion_cfg_parse_form(b, n, &c));
+    TT_ASSERT_EQ(3000, c.tend_ms);
+    /* cut inside the last value: "tend=3" is a valid (but out-of-range) value, no over-read */
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_E_RANGE, motion_cfg_parse_form(b, n - 3, &c));
+    /* cut in the middle of an escape */
+    free(b);
+    const char *e = "en=1&dmin=100&dmax=500&emin=30&tstart=1000&tend=%35%30%30";
+    n = strlen(e);
+    b = malloc(n);
+    memcpy(b, e, n);
+    TT_ASSERT_EQ(MCF_OK, motion_cfg_parse_form(b, n, &c));
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_E_BAD_VALUE, motion_cfg_parse_form(b, n - 1, &c));
+    TT_ASSERT_EQ(MCF_E_BAD_VALUE, motion_cfg_parse_form(b, n - 2, &c));
+    TT_ASSERT(untouched(&c));
+    free(b);
+    /* embedded NUL inside a value is not a digit */
+    static const char nul[] = "en=1\0" "2&dmin=100&dmax=500&emin=30&tstart=1000&tend=3000";
+    sentinel(&c);
+    TT_ASSERT_EQ(MCF_E_BAD_VALUE, motion_cfg_parse_form(nul, sizeof nul - 1, &c));
+    TT_ASSERT(untouched(&c));
+}
+
+static void test_parse_null_args(void)
+{
+    motion_cfg_t c;
+    TT_ASSERT_EQ(MCF_E_ARG, motion_cfg_parse_form(NULL, 5, &c));
+    TT_ASSERT_EQ(MCF_E_ARG, motion_cfg_parse_form(OK, strlen(OK), NULL));
+}
+
 int main(void)
 {
     TT_RUN(test_defaults);
@@ -413,5 +663,16 @@ int main(void)
     TT_RUN(test_now_before_last_active);
     TT_RUN(test_null_args);
     TT_RUN(test_ev_untouched_without_event);
+    TT_RUN(test_cfg_check);
+    TT_RUN(test_parse_ok);
+    TT_RUN(test_parse_boundaries);
+    TT_RUN(test_parse_order);
+    TT_RUN(test_parse_missing_each);
+    TT_RUN(test_parse_duplicate_each);
+    TT_RUN(test_parse_bad_values);
+    TT_RUN(test_parse_too_long);
+    TT_RUN(test_parse_body_limit);
+    TT_RUN(test_parse_not_nul_terminated);
+    TT_RUN(test_parse_null_args);
     return TT_RESULT();
 }
