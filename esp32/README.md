@@ -774,14 +774,15 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   start time at the owner's window, NEO-6M datasheet not in
   `hardware/datasheets/`.
 - GPS time accuracy without PPS: measured on the bench 2026-10-02 (128 ms
-  late against SNTP, see "Time sources and accuracy"); the cause of the 3 s
-  error after the first fix (default leap-second count) is still VERIFY.
-- UBX UTC verification on the bench: after a cold start (module without backup
-  power, or a long power-off) the log shows `utc not valid` for some minutes and
-  no GPS `time_sync`, then `utc valid` (validUTC 0, then 1); with the GPIO4 wire
-  unplugged `utc no ubx` and GPS time as before. That the NEO-6M accepts UBX input
-  on UART1 in its default configuration (and answers the poll at 9600 Bd) is not
-  stated in the u-blox 6 document checked here: **VERIFY**.
+  late against SNTP, see "Time sources and accuracy").
+- UBX UTC verification **confirmed on the bench 2026-10-03** (balcony, module
+  after a long power-off): the NEO-6M answers the NAV-TIMEUTC poll on UART1 in
+  its default configuration (about one answer per second, `bad_ck 0`); fix at
+  about 100 s after boot, `utc not valid` (validUTC 0) for about 4.5 min after
+  the fix with no GPS `time_sync` and the time source staying SNTP, then
+  `utc valid` and the time source GPS. This also confirms the cause of the
+  whole-second error seen on 2026-10-02 (leap seconds not yet known). Still
+  open: the `utc no ubx` fallback with the GPIO4 wire unplugged.
 - SNTP: sync cadence (the ESP-IDF default interval is assumed; a 36 min
   recording showed one real sync and the 60 s re-emits), and its own accuracy
   on the home network.
@@ -793,9 +794,10 @@ verified by CI (no Docker/ESP-IDF in the development environment).
   possible gyro offset drift (no bias calibration).
 - Snapshot JSON size and live-page behaviour with GPS and IMU at 10 Hz on the
   real hardware.
-- `/log` page and its Copy button on iOS Safari over plain http (the clipboard
-  API needs a secure context, so the `execCommand` fallback or Select all is
-  expected to be used); auto-scroll and polling on the phone.
+- `/log` page: live log on a phone confirmed on the bench 2026-10-03 (no AP
+  password line in it). Still open: the Copy button on iOS Safari over plain
+  http (the clipboard API needs a secure context, so the `execCommand`
+  fallback or Select all is expected to be used).
 - Stack use of the log hook (256 B line buffer plus the `va_list` copy) in
   small-stack tasks (GPS 4096 B, status LED 3072 B, recording tasks 4096 B)
   under real load.
