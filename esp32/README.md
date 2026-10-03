@@ -68,7 +68,7 @@ GY-NEO6MV2 (UART2):
 | VCC | 3V3 | 3.3 V supply (see the power note) |
 | GND | G | common ground |
 | TX | GPIO5 | UART2 RX of the ESP32 |
-| RX | GPIO4 | UART2 TX of the ESP32 (the firmware sends nothing) |
+| RX | GPIO4 | UART2 TX of the ESP32 (the UBX NAV-TIMEUTC poll; **required** for the UTC verification, see "GPS") |
 
 GY-BMI160 (I2C, 400 kHz):
 
@@ -308,8 +308,11 @@ clients). The page shows:
 - a **GPS card**: badge (`fix`, `no fix`, `no data` = module silent for more than
   3 s, `not connected` = no byte ever received), fix state with the GGA fix
   quality, satellites and HDOP, latitude, longitude (7 decimals), altitude,
-  speed (km/h), course, UTC (only when time and date are valid) and the **time
-  source** currently shown (`GPS`, `SNTP` or `none`);
+  speed (km/h), course, UTC (only when time and date are valid), a note under the
+  UTC (`(leap seconds not yet known)` while the receiver reports its UTC as not
+  valid, `(not verified: no UBX answer)` when it does not answer the UBX poll;
+  nothing when verified) and the **time source** currently shown (`GPS`, `SNTP`
+  or `none`);
 - a **Tilt card**: badge (`ok`, `no data`, `error`, `not connected`), pitch
   (nose up +) and roll (right side down +) in degrees with two decimals, and a
   level indicator (artificial horizon; the ring turns to the "level" colour when
@@ -317,7 +320,8 @@ clients). The page shows:
   record is older than 1 s.
 
 Values that are not valid show `-`; the snapshot JSON carries `null` for them
-(top-level keys `gps`, `imu`, `time_source`). The page needs no new connection:
+(top-level keys `gps`, `imu`, `time_source`; `gps.utc_state` is `valid`,
+`not_valid`, `no_ubx` or `null` while the module has not yet sent a byte). The page needs no new connection:
 the same 10 Hz WebSocket snapshot carries everything.
 
 The console logs `ws client added fd=.. slot=..` / `ws client removed fd=..`
@@ -333,6 +337,10 @@ problem is visible in the console):
   lines good N bad N dropped N` (`fix Q` is the GGA fix quality, 0 = no fix;
   `bad` counts checksum and malformed-line errors, `dropped` overlong or
   abandoned lines).
+- `gps` UTC line (once the module has sent a byte): `utc valid, ubx good N bad_ck N
+  skipped N bad_len N`, `utc not valid, ubx good ...`, or, as a warning, `utc no ubx:
+  no NAV-TIMEUTC answer (GPS time is not verified), ubx good ...` (UBX frame counters
+  since boot).
 - `imu`: `no BMI160 on I2C (SDA 8, SCL 9, 0x68/0x69; not connected?), i2c errors
   N, probe timeouts N, bus resets N, last probe NACK|TIMEOUT|none yet`; or `ok|error, pitch X.X deg, roll Y.Y deg, i2c errors N, reinits N`
   (or `no attitude yet`). One-off lines: `BMI160 at 0x68 configured (+-4 g,
@@ -345,11 +353,40 @@ problem is visible in the console):
 ## GPS (GY-NEO6MV2)
 
 UART2, 9600 8N1, module TX -> GPIO5, module RX -> GPIO4 (wiring above). The
-module is used in its **factory configuration**: the firmware sends nothing (no
-UBX configuration) and reads the default NMEA output. The `gps` task (core 1,
-priority 4, below the LD2410C task) feeds `components/core/nmea.[ch]`, which
-decodes **RMC** and **GGA** sentences of talker IDs `GP` and `GN` (a checksum is
-required; other sentences are ignored).
+module keeps its factory configuration, **no UBX configuration: the firmware only
+polls** (u-blox 6 Receiver Description, `hardware/datasheets/u-blox6_ReceiverDescrProtSpec_(GPS.G6-SW-10018)_Public.pdf`)
+and reads the default NMEA output. The `gps` task (core 1,
+priority 4, below the LD2410C task) feeds `components/core/gps_rx.[ch]`, a byte
+router that sends NMEA text to `components/core/nmea.[ch]` (decodes **RMC** and
+**GGA** sentences of talker IDs `GP` and `GN`; a checksum is required; other
+sentences are ignored) and UBX binary frames to `components/core/ubx.[ch]`.
+
+- **UTC verification (UBX NAV-TIMEUTC).** Once per second the task sends the
+  8-byte poll `B5 62 01 21 00 00 22 67` (NAV-TIMEUTC, class 0x01 id 0x21, empty
+  payload; §27.2 p. 86) on UART2 TX (GPIO4; short write, never blocks the
+  reader). The answer (§35.13 p. 179-180, 20-byte payload) carries a `valid`
+  byte whose bit 2 is **validUTC**. Frame layout §23 p. 84, checksum (8-bit
+  Fletcher over class, id, length and payload) §26 p. 85-86. The framer keeps a
+  payload of at most `UBX_MAX_PAYLOAD` = 64 bytes; longer frames up to
+  `UBX_SKIP_MAX` = 512 bytes are skipped by their length, a length above that is a
+  false sync (e.g. a stray `B5 62` in NMEA text). A `$` inside a UBX frame never
+  reaches the NMEA parser. UTC state:
+  - `valid`: the latest NAV-TIMEUTC answer is under 3 s old and has validUTC = 1.
+    GPS `time_sync` records are written and `gps_fix.flags` bit 4 (UTC verified) is set.
+  - `not valid`: the latest answer under 3 s old has validUTC = 0 (the receiver
+    does not yet know the leap-second count), or no fresh answer yet while the
+    5 s limit below has not passed. **No GPS `time_sync` is written** and bit 4 is
+    clear; the `gps_fix` records keep coming.
+  - `no ubx`: no NAV-TIMEUTC answer for more than 5 s (counted from the last
+    answer, or from the first received byte if there was never one: the TX wire
+    is missing, or the module does not take UBX input). **Fallback:** GPS
+    `time_sync` records are written as before (time unverified), bit 4 stays
+    clear, the 10 s log line warns and the live page says `(not verified: no UBX
+    answer)`.
+
+  The wire GPIO4 -> module RX is therefore **required** for verification (it is
+  connected on the bench, owner 2026-10-03). Without a UBX answer the behaviour is
+  as before the change.
 
 - **One `gps_fix` record per NMEA epoch** (RMC and GGA with the same UTC time
   field; about 1 Hz), written **also without a fix**, with the validity flags
@@ -373,16 +410,18 @@ required; other sentences are ignored).
   not to be expected. Bench, 2026-10-02: first fix about 7 min after
   power-up (the module was moved from the desk to the balcony meanwhile), 4
   satellites, HDOP about 5 at first; position, altitude and UTC correct.
-- **UTC off by whole seconds right after the first fix.** On the bench the GPS
-  UTC was **3 s ahead** of SNTP for the first 5.6 min after the first fix
-  (335 consecutive syncs), then correct. Likely cause: until the receiver has
-  decoded the GPS-UTC leap-second count from the satellites (broadcast every
-  12.5 min) it uses a default built into its firmware (from memory, **VERIFY**
-  against the NEO-6M documentation); NMEA has no flag for this. The host
-  conversion therefore **rejects a GPS `time_sync` that differs from the
-  nearest SNTP sync of the same boot by more than 1 s** (owner decision
-  2026-10-02); `info` prints how many were rejected. Without SNTP (no Wi-Fi
-  STA) nothing can be checked and those first minutes stay about 3 s off.
+- **UTC off by whole seconds right after the first fix.** On the bench
+  (2026-10-02) the GPS UTC was **3 s ahead** of SNTP for the first 5.6 min after
+  the first fix (335 consecutive syncs), then correct. Likely cause: until the
+  receiver has decoded the GPS-UTC leap-second count from the satellites
+  (broadcast every 12.5 min) it uses a default built into its firmware (from
+  memory, **VERIFY**); NMEA has no flag for this. **Handled in the firmware
+  (owner decision 2026-10-03):** GPS time is used only while NAV-TIMEUTC reports
+  validUTC = 1 (see "UTC verification" above), also without Wi-Fi. The host
+  conversion still **rejects a GPS `time_sync` that differs from the nearest SNTP
+  sync of the same boot by more than 1 s** (owner decision 2026-10-02) as a second
+  line of defence (it also covers old recordings); `info` prints how many were
+  rejected.
 - A one-line GPS status is logged every 10 s (see "Live page").
 
 ## Time sources and accuracy
@@ -393,7 +432,7 @@ is the matching ESP32 time. There are two sources:
 
 | Source | Code | When a record is written | Accuracy |
 |---|---|---|---|
-| GPS | 1 | on every RMC with status `A` and valid time and date (about 1 Hz); stamped when the parser completes the RMC line | no PPS on the board: the UTC value belongs to the second boundary but the sentence arrives later (a 70-character RMC takes about 70 ms at 9600 Bd, plus the receiver's output delay). Measured on the bench (2026-10-02, 1413 syncs over 23 min, against SNTP): the GPS stamp is **128 ms late** (median), p1..p99 119..136 ms, no drift; not corrected in the recording. Plus the whole-second error after the first fix (see "GPS") |
+| GPS | 1 | on every RMC with status `A` and valid time and date (about 1 Hz), **only while the UTC state is `valid` or `no ubx`** (never while `not valid`, see "GPS"); stamped when the parser completes the RMC line | no PPS on the board: the UTC value belongs to the second boundary but the sentence arrives later (a 70-character RMC takes about 70 ms at 9600 Bd, plus the receiver's output delay). Measured on the bench (2026-10-02, 1413 syncs over 23 min, against SNTP): the GPS stamp is **128 ms late** (median), p1..p99 119..136 ms, no drift; not corrected in the recording. The whole-second error after the first fix is excluded by the UTC verification (see "GPS"); in the `no ubx` fallback it can still occur |
 | SNTP | 2 | on each synchronisation with `pool.ntp.org` (ESP-IDF `esp_netif_sntp`), started once the STA link has an IP address; needs the home Wi-Fi with internet access | typically tens of ms over the internet (not measured separately; the GPS figures above are relative to it); the time is the ESP32 system clock right after the SNTP callback |
 
 **Priority.** The live page shows GPS while the latest GPS `time_sync` is less
@@ -515,8 +554,8 @@ uv run python host/ld2410_rec.py info run.ldrec
   `host/ld2410_rec.py`; a damaged payload gives a row with `error` set).
 - `info` prints the frame count, sequence range, PC and ESP durations, reboots,
   gaps, the number of gps/imu/time_sync records, the GPS fix ratio (fixes with a
-  valid position and fix quality > 0, over all gps records) and the time-sync
-  sources.
+  valid position and fix quality > 0, over all gps records), `gps utc verified: N`
+  (fixes with flags bit 4 set) and the time-sync sources.
 
 One recording client at a time: a new connection replaces the old one. The
 ring buffer holds 4 MiB in PSRAM (if that allocation fails the firmware falls
@@ -556,7 +595,7 @@ count` of the last batch of the current boot. Sequence numbers wrap at 2^32.
 | Type | Payload |
 |---|---|
 | 0 `ld2410_frame` | the raw LD2410C frame byte for byte, header to footer |
-| 1 `gps_fix` (32 B) | `utc_unix_ms i64` (0 if time/date invalid), `lat_e7 i32`, `lon_e7 i32`, `alt_cm i32`, `speed_cmps u16` (saturating), `course_cdeg u16`, `hdop_x100 u16`, `sats u8`, `fix_quality u8` (GGA value), `flags u8` (bit0 time valid, bit1 date valid, bit2 position valid, bit3 altitude valid), `reserved u8[3] = 0` |
+| 1 `gps_fix` (32 B) | `utc_unix_ms i64` (0 if time/date invalid), `lat_e7 i32`, `lon_e7 i32`, `alt_cm i32`, `speed_cmps u16` (saturating), `course_cdeg u16`, `hdop_x100 u16`, `sats u8`, `fix_quality u8` (GGA value), `flags u8` (bit0 time valid, bit1 date valid, bit2 position valid, bit3 altitude valid, bit4 UTC verified by UBX NAV-TIMEUTC validUTC; older recorders ignore it), `reserved u8[3] = 0` |
 | 2 `imu` (18 B) | `acc_mg i16[3]`, `gyr_ddps i16[3]` (0.1 deg/s), `pitch_cdeg i16`, `roll_cdeg i16`, `n_samples u8`, `status u8` (bit0 data valid) |
 | 3 `time_sync` (9 B) | `utc_unix_us i64`, `source u8` (1 GPS, 2 SNTP); the record's `esp_time_us` is the matching ESP32 time |
 
@@ -627,7 +666,7 @@ make -C esp32/tests test
 
 Plain C11 modules in `esp32/components/core/` (parser, frame decoder, command
 codec and ACK decoders, LD2410C settings form parser, BOOT button zone tracker,
-status LED colour logic, ring buffer, recording protocol, snapshot JSON, Wi-Fi
+status LED colour logic, UBX framer and NAV-TIMEUTC decoder (`ubx`), NMEA/UBX byte router (`gps_rx`), ring buffer, recording protocol, snapshot JSON, Wi-Fi
 form and password helpers, WebSocket slot table), built with `-Wall -Wextra -Werror` and
 AddressSanitizer/UBSan. The Python side:
 `uv run pytest host/test_ld2410_rec.py -v`.
@@ -690,6 +729,12 @@ verified by CI (no Docker/ESP-IDF in the development environment).
 - GPS time accuracy without PPS: measured on the bench 2026-10-02 (128 ms
   late against SNTP, see "Time sources and accuracy"); the cause of the 3 s
   error after the first fix (default leap-second count) is still VERIFY.
+- UBX UTC verification on the bench: after a cold start (module without backup
+  power, or a long power-off) the log shows `utc not valid` for some minutes and
+  no GPS `time_sync`, then `utc valid` (validUTC 0, then 1); with the GPIO4 wire
+  unplugged `utc no ubx` and GPS time as before. That the NEO-6M accepts UBX input
+  on UART1 in its default configuration (and answers the poll at 9600 Bd) is not
+  stated in the u-blox 6 document checked here: **VERIFY**.
 - SNTP: sync cadence (the ESP-IDF default interval is assumed; a 36 min
   recording showed one real sync and the 60 s re-emits), and its own accuracy
   on the home network.
