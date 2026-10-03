@@ -45,6 +45,10 @@ item stays in BACKLOG until the rotating radar.
 - While the AP client count is > 0: no new `esp_wifi_connect()` from the retry path or the
   disconnect handler; a connect already in flight is left to finish. Pausing and resuming are
   logged once each (`STA retries paused (AP client connected)` / `... resumed`).
+- Owner decision 2026-10-03 after the final review (M1): even while paused, one STA attempt is
+  made every 10 min (`STA_PAUSE_FORCE_MS`), so a device that stays on the AP forever cannot keep
+  the board off the home network; the pause itself continues and the attempt is logged
+  (`STA retry while paused (every 10 min)`).
 - When the count drops to 0 and a retry was suppressed, a retry is scheduled after the minimum
   backoff (2 s); the backoff state is otherwise unchanged.
 - `STA_START` with an AP client already connected cannot happen at boot (no AP yet); no

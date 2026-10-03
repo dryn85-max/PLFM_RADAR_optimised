@@ -28,7 +28,8 @@
  *    (s_retry_suppressed) and armed for BACKOFF_MIN_MS when the last client leaves, when an
  *    on-demand AP is started or switched off; while suppressed a recheck is armed every
  *    BACKOFF_MAX_MS, so a lost AP event only delays a retry. The backoff is otherwise unchanged.
- *    Scans stay allowed.
+ *    Scans stay allowed. Even while paused, one STA attempt is made every STA_PAUSE_FORCE_MS (10 min),
+ *    so a client that stays on the AP forever cannot keep the board off the home network.
  *  - BOOT (GPIO0), action on release, held-zone colour on the RGB LED (core boot_btn): 2-5 s = AP on
  *    demand, 5-10 s = erase the STA credentials and restart (the AP password is kept), > 10 s or
  *    < 2 s = nothing. A button already down when the task starts is ignored until released once.
@@ -73,6 +74,8 @@
 #define BACKOFF_MIN_MS 2000
 #define BACKOFF_MAX_MS 30000
 
+#define STA_PAUSE_FORCE_MS 600000u /* while STA retries are paused, still try once this often (10 min) */
+
 #define BOOT_GPIO GPIO_NUM_0
 #define BOOT_POLL_MS 50
 #define RESET_FLASH_WAIT_MS (SL_FLASH_TOTAL_MS + 100u) /* let the red flashes finish before the restart */
@@ -93,6 +96,7 @@ static esp_timer_handle_t s_retry_timer;
 static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 static volatile bool s_sta_wanted;
 static volatile bool s_retry_suppressed; /* a STA retry was skipped while an AP client was connected */
+static volatile int64_t s_pause_ts_us; /* esp_timer time: pause start or last forced attempt */
 static volatile bool s_sta_connecting; /* esp_wifi_connect() issued, no CONNECTED/DISCONNECTED yet */
 static SemaphoreHandle_t s_scan_lock;  /* held during a scan and while issuing a connect */
 
@@ -170,7 +174,11 @@ static void load_or_create_ap_pass(char *out /* WF_AP_PASS_LEN + 1 */)
  * task. The decision uses the real station count of the AP driver. The flag is set BEFORE the count is
  * read and the AP_STADISCONNECTED handler reads the flag AFTER the station is gone: either this caller
  * sees 0 and proceeds, or the handler sees the flag and arms the retry (and if neither, the recheck
- * does). */
+ * does). While paused, every STA_PAUSE_FORCE_MS this returns false once (the pause itself continues:
+ * the flag stays set, the timestamp restarts), so the caller makes one attempt; if it fails, the
+ * DISCONNECTED event calls this again and the pause is re-armed. s_pause_ts_us is written only here
+ * (two tasks); a torn 64-bit access at worst makes one forced attempt early or one cycle late, and
+ * concurrent forced attempts are serialised by s_sta_connecting in retry_cb. */
 static bool retry_suppress(void)
 {
     bool was = s_retry_suppressed;
@@ -183,7 +191,15 @@ static bool retry_suppress(void)
         if (was) ESP_LOGI(TAG, "STA retries resumed");
         return false;
     }
-    if (!was) ESP_LOGI(TAG, "STA retries paused (AP client connected)");
+    int64_t now = esp_timer_get_time();
+    if (!was) {
+        ESP_LOGI(TAG, "STA retries paused (AP client connected)");
+        s_pause_ts_us = now;
+    } else if (now - s_pause_ts_us >= (int64_t)STA_PAUSE_FORCE_MS * 1000) {
+        ESP_LOGI(TAG, "STA retry while paused (every %u min)", (unsigned)(STA_PAUSE_FORCE_MS / 60000u));
+        s_pause_ts_us = now;
+        return false; /* flag stays true: retry_resume() still works */
+    }
     esp_timer_stop(s_retry_timer); /* error if not running: ignored */
     esp_timer_start_once(s_retry_timer, (uint64_t)BACKOFF_MAX_MS * 1000u);
     return true;

@@ -281,8 +281,10 @@ page; only the AP password line is printed.
 - STA reconnect attempts pause while a client is connected to the ESP32 AP (fallback
   or on demand), so the scans do not disturb the AP link (for example a phone fixing
   wrong credentials), and resume 2 s after the last client leaves. While paused the firmware rechecks every
-  30 s against the real number of AP stations, so a lost AP event only delays a retry. The console logs
-  `STA retries paused (AP client connected)` / `STA retries resumed`.
+  30 s against the real number of AP stations, so a lost AP event only delays a retry. Even while paused, one STA attempt is made every
+  10 min (the AP client may lose its link for a second or two), so a device that stays on the AP cannot
+  keep the board off the home network. The console logs
+  `STA retries paused (AP client connected)` / `STA retries resumed` / `STA retry while paused (every 10 min)`.
 - On the STA network the board is reachable as `http://aeris-mvp.local`
   (mDNS, VERIFY) or by the STA IP from the console.
 - **BOOT released after 5 to 10 s while the firmware is running** erases the
