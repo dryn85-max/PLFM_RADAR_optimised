@@ -1,5 +1,6 @@
 #include "live.h"
 
+#include <errno.h>
 #include <string.h>
 
 #include "esp_idf_version.h"
@@ -9,6 +10,7 @@
 #include "freertos/task.h"
 
 #include "esp_timer.h"
+#include "lwip/sockets.h"
 
 #include "gps_task.h"
 #include "http_srv.h"
@@ -24,6 +26,9 @@
 #define LIVE_IMU_STALE_US 1000000 /* no IMU record for this long: report "error" */
 #define LIVE_RX_MAX 128 /* client frames are ignored; bigger ones close the socket */
 #define LIVE_STATS_TICKS 100 /* one stats line every 100 ticks = 10 s */
+/* A stalled browser blocks the httpd task for the send timeout on every frame; the
+ * httpd default is 5 s, so cap it at 1 s on WebSocket fds (the send-failure path closes). */
+#define LIVE_WS_SEND_TIMEOUT_S 1
 
 /* ESP-IDF v5.5.5 (and master) no longer call the URI handler for the WebSocket
  * handshake GET ("If the request is websocket handshake, then do not call the
@@ -90,7 +95,13 @@ static esp_err_t ws_register(httpd_req_t *req)
         ESP_LOGW(TAG, "no free WebSocket slot (fd %d)", fd);
         return ESP_FAIL;
     }
-    if (added) ESP_LOGI(TAG, "ws client added fd=%d slot=%d", fd, rc);
+    if (added) {
+        struct timeval tv = {.tv_sec = LIVE_WS_SEND_TIMEOUT_S, .tv_usec = 0};
+        if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0) {
+            ESP_LOGW(TAG, "SO_SNDTIMEO on fd %d failed (errno %d), keeping the client", fd, errno);
+        }
+        ESP_LOGI(TAG, "ws client added fd=%d slot=%d", fd, rc);
+    }
     return ESP_OK;
 }
 
