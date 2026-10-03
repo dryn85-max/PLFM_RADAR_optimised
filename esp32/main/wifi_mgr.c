@@ -23,9 +23,12 @@
  *    the idle timer of an on-demand AP.
  *  - STA retries are paused while an AP client is connected (fallback or on-demand AP, STA wanted):
  *    neither the retry timer nor the disconnect handler issues esp_wifi_connect(); a connect already
- *    in flight finishes. The suppressed retry is remembered (s_retry_suppressed) and armed for
- *    BACKOFF_MIN_MS when the client count drops to 0; the backoff is otherwise unchanged. Scans stay
- *    allowed.
+ *    in flight finishes. The decision uses the real station count of the AP driver
+ *    (esp_wifi_ap_get_sta_list), not the event counter. The suppressed retry is remembered
+ *    (s_retry_suppressed) and armed for BACKOFF_MIN_MS when the last client leaves, when an
+ *    on-demand AP is started or switched off; while suppressed a recheck is armed every
+ *    BACKOFF_MAX_MS, so a lost AP event only delays a retry. The backoff is otherwise unchanged.
+ *    Scans stay allowed.
  *  - BOOT (GPIO0), action on release, held-zone colour on the RGB LED (core boot_btn): 2-5 s = AP on
  *    demand, 5-10 s = erase the STA credentials and restart (the AP password is kept), > 10 s or
  *    < 2 s = nothing. A button already down when the task starts is ignored until released once.
@@ -162,30 +165,52 @@ static void load_or_create_ap_pass(char *out /* WF_AP_PASS_LEN + 1 */)
 }
 
 /* True when a new STA connect must not be issued now (an AP client is connected); the skipped retry
- * is remembered in s_retry_suppressed. Runs in the esp_timer task and the event loop task. The flag is
- * set BEFORE the client count is re-read, and the AP_STADISCONNECTED handler decrements the count
- * BEFORE it reads the flag: whichever order they interleave in, either this caller sees 0 and
- * proceeds, or the handler sees the flag and arms the retry. */
+ * is remembered in s_retry_suppressed and a recheck is armed for BACKOFF_MAX_MS, so a lost AP event
+ * (or a stale s_ap_clients) can only delay the retry. Runs in the esp_timer task and the event loop
+ * task. The decision uses the real station count of the AP driver. The flag is set BEFORE the count is
+ * read and the AP_STADISCONNECTED handler reads the flag AFTER the station is gone: either this caller
+ * sees 0 and proceeds, or the handler sees the flag and arms the retry (and if neither, the recheck
+ * does). */
 static bool retry_suppress(void)
 {
-    if (s_ap_clients == 0) return false;
     bool was = s_retry_suppressed;
     s_retry_suppressed = true;
-    if (s_ap_clients == 0) { /* the last client left meanwhile: go on */
+    wifi_sta_list_t list;
+    memset(&list, 0, sizeof list);
+    if (esp_wifi_ap_get_sta_list(&list) != ESP_OK) list.num = 0; /* no AP running: no clients */
+    if (list.num == 0) {
         s_retry_suppressed = false;
+        if (was) ESP_LOGI(TAG, "STA retries resumed");
         return false;
     }
     if (!was) ESP_LOGI(TAG, "STA retries paused (AP client connected)");
+    esp_timer_stop(s_retry_timer); /* error if not running: ignored */
+    esp_timer_start_once(s_retry_timer, (uint64_t)BACKOFF_MAX_MS * 1000u);
     return true;
+}
+
+/* A suppressed retry is released: arm it for BACKOFF_MIN_MS (the last AP client left or the AP was
+ * switched off / restarted, so the client count is known to be 0). */
+static void retry_resume(void)
+{
+    if (!s_sta_wanted || !s_retry_suppressed) return;
+    s_retry_suppressed = false;
+    ESP_LOGI(TAG, "STA retries resumed");
+    esp_timer_stop(s_retry_timer); /* error if not running: ignored */
+    esp_timer_start_once(s_retry_timer, (uint64_t)BACKOFF_MIN_MS * 1000u);
 }
 
 static void retry_cb(void *arg)
 {
     (void)arg;
     if (!s_sta_wanted) return;
-    if (retry_suppress()) return; /* resumed by AP_STADISCONNECTED */
+    if (retry_suppress()) return; /* rechecked every BACKOFF_MAX_MS, or resumed by the AP events */
     if (xSemaphoreTake(s_scan_lock, 0) != pdTRUE) { /* a scan is running: try again shortly */
         esp_timer_start_once(s_retry_timer, (uint64_t)RETRY_DEFER_MS * 1000u);
+        return;
+    }
+    if (s_sta_connecting) { /* a connect is in flight: its DISCONNECTED event re-arms the retry */
+        xSemaphoreGive(s_scan_lock);
         return;
     }
     s_sta_connecting = true;
@@ -221,6 +246,7 @@ static void idle_cb(void *arg)
             s_ap_kind = AP_KIND_NONE;
             status_led_set_ap(SL_AP_OFF);
             ESP_LOGI(TAG, "on-demand AP off (no client for %u min)", (unsigned)(AP_DEMAND_IDLE_MS / 60000u));
+            retry_resume(); /* no AP, so no client can hold the STA back */
         } else {
             ESP_LOGE(TAG, "AP off failed: %s", esp_err_to_name(err));
             esp_timer_start_once(s_idle_timer, (uint64_t)AP_IDLE_RETRY_MS * 1000u);
@@ -254,12 +280,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
         if (s_ap_clients > 0) s_ap_clients--;
         if (s_ap_clients == 0 && s_ap_kind == AP_KIND_DEMAND) idle_timer_restart();
-        if (s_ap_clients == 0 && s_sta_wanted && s_retry_suppressed) {
-            s_retry_suppressed = false;
-            ESP_LOGI(TAG, "STA retries resumed");
-            esp_timer_stop(s_retry_timer); /* error if not running: ignored */
-            esp_timer_start_once(s_retry_timer, (uint64_t)BACKOFF_MIN_MS * 1000u);
-        }
+        if (s_ap_clients == 0) retry_resume();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *ev = (const ip_event_got_ip_t *)data;
         s_backoff_ms = BACKOFF_MIN_MS;
@@ -459,6 +480,7 @@ esp_err_t wifi_mgr_ap_on_demand(void)
         wifi_config_t ap_cfg;
         fill_ap_config(&ap_cfg, ap_pass, ap_ssid, sizeof ap_ssid);
         s_ap_clients = 0; /* before the AP can start: its events must count from zero */
+        retry_resume();   /* the counter is reset, so a pause tied to the old count ends */
         err = esp_wifi_set_mode(WIFI_MODE_APSTA);
         if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
         if (err == ESP_OK) {

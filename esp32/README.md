@@ -280,7 +280,8 @@ page; only the AP password line is printed.
   (backoff 2 s doubling to 30 s). A dropped STA link is also retried.
 - STA reconnect attempts pause while a client is connected to the ESP32 AP (fallback
   or on demand), so the scans do not disturb the AP link (for example a phone fixing
-  wrong credentials), and resume 2 s after the last client leaves. The console logs
+  wrong credentials), and resume 2 s after the last client leaves. While paused the firmware rechecks every
+  30 s against the real number of AP stations, so a lost AP event only delays a retry. The console logs
   `STA retries paused (AP client connected)` / `STA retries resumed`.
 - On the STA network the board is reachable as `http://aeris-mvp.local`
   (mDNS, VERIFY) or by the STA IP from the console.
@@ -721,7 +722,10 @@ uv run python host/ld2410_rec.py info run.ldrec
   `gps_alt_m` without an altitude, `gps_utc` without valid time and date. GPS fixes,
   IMU samples and time syncs have no rows in the main CSV; `--gps` / `--imu` write
   them to their own CSV files (`GPS_CSV_COLUMNS` / `IMU_CSV_COLUMNS` in
-  `host/ld2410_rec.py`; a damaged payload gives a row with `error` set).
+  `host/ld2410_rec.py`; a damaged payload gives a row with `error` set). In the
+  `--gps` CSV, `esp_utc` (the record's `esp_time_us` mapped through the corrected
+  `time_sync`) and `fix_utc` (the raw RMC time) now differ by about 128 ms on the
+  same row; that is expected (the RMC sentence arrives that late).
 - `info` prints the frame count, sequence range, PC and ESP durations, reboots,
   gaps, the number of gps/imu/time_sync records, the GPS fix ratio (fixes with a
   valid position and fix quality > 0, over all gps records), `gps utc verified: N`

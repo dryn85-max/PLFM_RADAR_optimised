@@ -83,4 +83,4 @@ CI green (the lock file check included); host tests pass; owner bench check: a p
 the live page and put to sleep no longer slows other page loads for more than about 1 s; a
 phone connected to the fallback AP keeps its link while fixing credentials; killing the
 recorder's network (Wi-Fi off on the Mac) frees the recording port within about 15 s
-(`rec:` log line); the GPS-vs-SNTP difference in a recording is near 0 instead of +128 ms.
+(`rec_srv` log line `client closed` / `send failed`); the GPS-vs-SNTP difference in a recording is near 0 instead of +128 ms.

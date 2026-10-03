@@ -108,8 +108,10 @@ Follow-ups of `esp32/` (ESP32-S3 + HLK-LD2410C, spec
   `imu` records; a raw 100 Hz option (larger records or a new type, more ring
   buffer traffic) was left out. The rate is one constant in the firmware.
 - [ ] **GPS PPS wiring for precise time.** Without PPS the GPS time stamp is
-  taken at reception of the RMC sentence (measured 2026-10-02: 128 ms late,
-  p1..p99 119..136 ms, against SNTP). Wire
+  taken at reception of the RMC sentence (measured 2026-10-02: 128 ms late
+  against SNTP). The 128 ms is now corrected by a constant in the `time_sync`
+  value; PPS would remove the remaining spread (p1..p99 119..136 ms, about
+  +-10 ms). Wire
   the module's PPS output to a free GPIO, stamp the edge in an interrupt and
   correct the `time_sync` record.
 - [ ] **LD2410C settings: gate 0/1 write not bench-tested.** The settings cycle
