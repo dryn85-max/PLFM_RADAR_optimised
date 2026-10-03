@@ -111,6 +111,7 @@ a{color:var(--bar)}
   $("sa").onclick = selectAll;
 
   var timer = null;
+  var skip = true; /* drop the partial first line of the first response and of each gap */
   function later(ms) { timer = setTimeout(poll, ms); }
 
   function poll() {
@@ -126,7 +127,7 @@ a{color:var(--bar)}
       if (to) clearTimeout(to);
       if (!isFinite(d.n)) throw new Error("bad header");
       if (d.gap) {
-        lost = true; newDecoder();
+        lost = true; skip = true; newDecoder();
         append("\n--- older lines lost ---\n");
       }
       var bytes = new Uint8Array(d.buf);
@@ -134,8 +135,13 @@ a{color:var(--bar)}
       var s;
       if (dec) s = dec.decode(bytes, { stream: true });
       else { s = ""; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); }
+      if (skip) {
+        var k = s.indexOf("\n");
+        if (k >= 0) { s = s.slice(k + 1); skip = false; } else s = "";
+      }
       append(s);
       next = d.n; err = false; status();
+      /* 4096 = DATA_MAX_BYTES in web_log.c: a full response means more may be waiting. */
       later(bytes.length >= 4096 ? 50 : 1000);
     }).catch(function () {
       if (to) clearTimeout(to);

@@ -115,6 +115,17 @@ static void test_offset_wrap(void)
     TT_ASSERT(!gap); TT_ASSERT(memcmp(o, "mn", 2) == 0); TT_ASSERT_EQ(6, nx);
 }
 
+static void test_reboot_random_start(void)
+{
+    log_ring_t r; char o[32]; uint32_t nx; bool gap;
+    /* Old boot: the page holds offset 700 from a ring that started at 0. */
+    log_ring_init_at(&r, mem, 16, 0x9E3779B9u); /* new boot, other start offset */
+    log_ring_write(&r, "0123456789", 10);
+    TT_ASSERT_EQ(10, log_ring_read(&r, 700, o, sizeof o, &nx, &gap));
+    TT_ASSERT(gap); TT_ASSERT_EQ(r.head, nx);
+    TT_ASSERT(memcmp(o, "0123456789", 10) == 0);
+}
+
 static void test_max_small(void)
 {
     log_ring_t r; char o[32]; uint32_t nx; bool gap;
@@ -190,13 +201,17 @@ static void test_clean(void)
 static void test_secret(void)
 {
     TT_ASSERT(log_line_is_secret("I (5) wifi: AP password: hunter2\n", 33));
-    TT_ASSERT(log_line_is_secret("AP password", 11));
+    TT_ASSERT(log_line_is_secret("AP password:", 12));
+    TT_ASSERT(log_line_is_secret("AP password: XXXX", 17));
+    TT_ASSERT(!log_line_is_secret("AP password", 11)); /* no colon */
+    TT_ASSERT(!log_line_is_secret("cannot store the AP password; x\n", 32));
+    TT_ASSERT(!log_line_is_secret("Wi-Fi credentials erased (AP password kept)\n", 44));
     TT_ASSERT(!log_line_is_secret("AP passwor", 10));
     TT_ASSERT(!log_line_is_secret("ap password", 11)); /* case-sensitive */
     TT_ASSERT(!log_line_is_secret("AP  password", 12));
     TT_ASSERT(!log_line_is_secret("", 0));
-    TT_ASSERT(!log_line_is_secret("AP password", 5)); /* len limits the scan */
-    TT_ASSERT(log_line_is_secret("xxAP passwordyy", 15));
+    TT_ASSERT(!log_line_is_secret("AP password: x", 5)); /* len limits the scan */
+    TT_ASSERT(log_line_is_secret("xxAP password:yy", 16));
 }
 
 int main(void)
@@ -207,6 +222,7 @@ int main(void)
     TT_RUN(test_len_gt_cap);
     TT_RUN(test_gap_and_future);
     TT_RUN(test_offset_wrap);
+    TT_RUN(test_reboot_random_start);
     TT_RUN(test_max_small);
     TT_RUN(test_cap1_and_model);
     TT_RUN(test_clean);

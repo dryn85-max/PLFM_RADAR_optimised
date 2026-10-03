@@ -373,10 +373,13 @@ watched away from the USB cable (for example on a power bank on the balcony).
   16 KB ring in internal RAM, with ANSI colour sequences removed. Output written
   with `printf` is **not** captured: the boot banner and the
   `AP password: ...` line appear on the USB console only. As defence in depth, a
-  line containing `AP password` would also be dropped by the hook.
+  line containing `AP password:` would also be dropped by the hook.
 - **Limits.** The ring keeps the newest 16 KB (older lines are overwritten).
-  Lines longer than 256 bytes are cut and end with `...`. The log is not
-  persistent: a reboot clears it. No authentication, no log level control.
+  A formatted line of 256 bytes or more (colour codes and newline included) is
+  cut to 251 bytes plus `...\n`. The log is not persistent: a reboot clears it.
+  The stream offset starts at a random value on every boot, so a page left open
+  across an ESP32 reboot gets the gap marker ("older lines lost") instead of
+  splicing two boots. No authentication, no log level control.
 - **Polling.** The page requests `GET /log/data?from=N` once per second (at once
   again while a response is full, and after 2 s on an error). The reply is
   `text/plain`, at most 4096 bytes, with headers `X-Log-Next: <offset>` (the

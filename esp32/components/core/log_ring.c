@@ -85,7 +85,7 @@ size_t log_line_clean(const char *in, size_t len, char *out, size_t cap)
 
 bool log_line_is_secret(const char *line, size_t len)
 {
-    static const char key[] = "AP password";
+    static const char key[] = "AP password:";
     const size_t kl = sizeof key - 1;
     if (len < kl) return false;
     for (size_t i = 0; i + kl <= len; i++)

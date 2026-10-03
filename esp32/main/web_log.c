@@ -8,6 +8,7 @@
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -18,7 +19,8 @@
  * the buffer stays small: ESP_LOG lines are normally < 120 bytes, and the extra frame (256 B +
  * va_list copy) is small next to the vprintf call it wraps. Longer lines are cut and end "...\n". */
 #define LINE_MAX_BYTES 256u
-/* Body size per /log/data response; the client polls again at once when it gets a full one. */
+/* Body size per /log/data response; the client polls again at once when it gets a full one.
+ * Keep in step with the "full response" threshold (4096) in web_log.html. */
 #define DATA_MAX_BYTES 4096u
 
 /* Ring storage: a static array in internal RAM (BSS). No allocation is needed, the hook works from
@@ -66,7 +68,11 @@ esp_err_t web_log_init(void)
     if (s_installed) return ESP_OK;
     s_data_lock = xSemaphoreCreateMutex();
     if (s_data_lock == NULL) return ESP_ERR_NO_MEM;
-    log_ring_init(&s_ring, s_mem, sizeof s_mem);
+    /* Random start offset: the stream offset would otherwise restart at 0 every boot, and a page
+     * still polling with an old `from` <= the new head would silently splice two boots. With a
+     * random start an old offset almost surely falls outside the held window, so the reader gets
+     * X-Log-Gap: 1 after a reboot. */
+    log_ring_init_at(&s_ring, s_mem, sizeof s_mem, esp_random());
     s_prev = esp_log_set_vprintf(web_log_vprintf);
     s_installed = true;
     return ESP_OK;
@@ -132,6 +138,8 @@ esp_err_t web_log_register(void)
 {
     static const httpd_uri_t get_page = {.uri = "/log", .method = HTTP_GET, .handler = log_page_get};
     static const httpd_uri_t get_data = {.uri = "/log/data", .method = HTTP_GET, .handler = log_data_get};
+    /* /log/data needs the mutex created by web_log_init. */
+    if (!s_installed) return ESP_ERR_INVALID_STATE;
     esp_err_t err = http_srv_register(&get_page);
     if (err == ESP_OK) err = http_srv_register(&get_data);
     return err;
